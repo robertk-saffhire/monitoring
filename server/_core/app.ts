@@ -1,4 +1,4 @@
-import express, { type NextFunction, type Request, type Response } from "express";
+import express, { type Request, type Response } from "express";
 import cookieParser from "cookie-parser";
 import { createExpressMiddleware } from "@trpc/server/adapters/express";
 import { registerOAuthRoutes } from "./oauth";
@@ -15,17 +15,6 @@ import {
 } from "../db";
 import { getLocalUserFromCookie } from "../localSession";
 import { sendMonitorStatusEmail } from "../emailSender";
-
-const legacyGoogleProcedures = [
-  "data.applicants",
-  "data.medCerts",
-  "data.notes",
-  "data.medExpireDates",
-  "data.updateMonitor",
-  "data.updateNote",
-  "data.updateMedExpire",
-  "data.fetchNewSRReports",
-];
 
 function parseCompanyId(req: Request): number | null {
   const rawCompanyId = Array.isArray(req.query.companyId) ? req.query.companyId[0] : req.query.companyId;
@@ -76,16 +65,6 @@ function normalizeApplicantForApi(row: any, index = 0) {
   };
 }
 
-/**
- * Build the API-only Express app.
- *
- * This is shared by:
- * - local/dev Express server in server/_core/index.ts
- * - Vercel serverless function in api/[...path].ts
- *
- * Do not call app.listen() in this file. Vercel imports this module and invokes
- * the Express handler for each /api/* request.
- */
 export function createApiApp() {
   const app = express();
 
@@ -235,31 +214,9 @@ export function createApiApp() {
     }
   });
 
-  // Kept for compatibility while OAuth routes are still present in the legacy app.
-  // The migrated app continues to use custom local username/password login.
   registerOAuthRoutes(app);
-
-  // Public demo access — GET /api/demo
   registerDemoRoute(app);
 
-  app.use("/api/trpc", (req: Request, res: Response, next: NextFunction) => {
-    if (process.env.ALLOW_LEGACY_GOOGLE_SHEETS === "true") {
-      next();
-      return;
-    }
-
-    const requestedPath = req.path || "";
-    if (legacyGoogleProcedures.some((procedureName) => requestedPath.includes(procedureName))) {
-      res.status(410).json({
-        error: "Legacy Google Sheets access is disabled for this app. Use Supabase applicants data instead.",
-      });
-      return;
-    }
-
-    next();
-  });
-
-  // tRPC API — /api/trpc/*
   app.use(
     "/api/trpc",
     createExpressMiddleware({
