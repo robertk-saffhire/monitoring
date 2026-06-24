@@ -1,6 +1,5 @@
-import { useState } from "react";
+import { FormEvent, useEffect, useState } from "react";
 import { useLocation } from "wouter";
-import { trpc } from "@/lib/trpc";
 import { useLocalAuth } from "@/contexts/LocalAuthContext";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -10,69 +9,145 @@ import { Checkbox } from "@/components/ui/checkbox";
 import { Loader2, Eye, EyeOff, ShieldCheck } from "lucide-react";
 import { toast } from "sonner";
 
+type ApiResponse<T = Record<string, unknown>> = T & {
+  status?: string;
+  message?: string;
+  success?: boolean;
+  hasAdmin?: boolean;
+  mustChangePassword?: boolean;
+};
+
+async function apiPost<T>(url: string, body: Record<string, unknown>): Promise<ApiResponse<T>> {
+  const response = await fetch(url, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    credentials: "include",
+    body: JSON.stringify(body),
+  });
+
+  const text = await response.text();
+  let data: ApiResponse<T>;
+
+  try {
+    data = text ? JSON.parse(text) : {};
+  } catch {
+    throw new Error(`Server returned a non-JSON response: ${text.slice(0, 180)}`);
+  }
+
+  if (!response.ok) {
+    throw new Error(data.message || `Request failed with status ${response.status}`);
+  }
+
+  return data;
+}
+
+async function apiGet<T>(url: string): Promise<ApiResponse<T>> {
+  const response = await fetch(url, { credentials: "include" });
+  const text = await response.text();
+  let data: ApiResponse<T>;
+
+  try {
+    data = text ? JSON.parse(text) : {};
+  } catch {
+    throw new Error(`Server returned a non-JSON response: ${text.slice(0, 180)}`);
+  }
+
+  if (!response.ok) {
+    throw new Error(data.message || `Request failed with status ${response.status}`);
+  }
+
+  return data;
+}
+
 export default function Login() {
   const [, navigate] = useLocation();
   const { refetch } = useLocalAuth();
 
+  const [isCheckingSetup, setIsCheckingSetup] = useState(true);
+  const [hasAdmin, setHasAdmin] = useState<boolean | null>(null);
+  const [isSubmitting, setIsSubmitting] = useState(false);
+
   const [username, setUsername] = useState("");
   const [password, setPassword] = useState("");
-  const [showPassword, setShowPassword] = useState(false);
+  const [confirmPassword, setConfirmPassword] = useState("");
   const [rememberMe, setRememberMe] = useState(false);
+  const [showPassword, setShowPassword] = useState(false);
 
-  // First-run setup state
-  const [setupUsername, setSetupUsername] = useState("");
-  const [setupPassword, setSetupPassword] = useState("");
-  const [setupConfirm, setSetupConfirm] = useState("");
-  const [showSetupPassword, setShowSetupPassword] = useState(false);
+  useEffect(() => {
+    let cancelled = false;
 
-  const { data: hasUsersData, isLoading: checkingUsers } = trpc.localAuth.hasUsers.useQuery();
-
-  const loginMutation = trpc.localAuth.login.useMutation({
-    onSuccess: (data) => {
-      refetch();
-      if (data.mustChangePassword) {
-        navigate("/change-password");
-      } else {
-        navigate("/select-company");
+    async function checkSetup() {
+      try {
+        const data = await apiGet<{ hasAdmin: boolean }>("/api/auth/setup-status");
+        if (!cancelled) setHasAdmin(Boolean(data.hasAdmin));
+      } catch (error) {
+        const message = error instanceof Error ? error.message : "Could not check setup status";
+        toast.error(message);
+        if (!cancelled) setHasAdmin(true);
+      } finally {
+        if (!cancelled) setIsCheckingSetup(false);
       }
-    },
-    onError: (err) => {
-      toast.error(err.message || "Login failed");
-    },
-  });
+    }
 
-  const setupMutation = trpc.localAuth.setupAdmin.useMutation({
-    onSuccess: () => {
-      toast.success("Admin account created! Please log in.");
-      setSetupUsername("");
-      setSetupPassword("");
-      setSetupConfirm("");
-    },
-    onError: (err) => {
-      toast.error(err.message || "Setup failed");
-    },
-  });
+    checkSetup();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
-  const handleLogin = (e: React.FormEvent) => {
-    e.preventDefault();
+  const isFirstRun = hasAdmin === false;
+
+  const handleLogin = async (event: FormEvent) => {
+    event.preventDefault();
     if (!username.trim() || !password) return;
-    loginMutation.mutate({ username: username.trim(), password, rememberMe });
+
+    setIsSubmitting(true);
+    try {
+      const data = await apiPost("/api/auth/login", {
+        username: username.trim(),
+        password,
+        rememberMe,
+      });
+      refetch();
+      toast.success("Signed in");
+      navigate(data.mustChangePassword ? "/change-password" : "/select-company");
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "Login failed");
+    } finally {
+      setIsSubmitting(false);
+    }
   };
 
-  const handleSetup = (e: React.FormEvent) => {
-    e.preventDefault();
-    if (setupPassword !== setupConfirm) {
+  const handleSetup = async (event: FormEvent) => {
+    event.preventDefault();
+
+    if (password !== confirmPassword) {
       toast.error("Passwords do not match");
       return;
     }
-    if (setupPassword.length < 6) {
+
+    if (password.length < 6) {
       toast.error("Password must be at least 6 characters");
       return;
     }
-    setupMutation.mutate({ username: setupUsername.trim(), password: setupPassword });
+
+    setIsSubmitting(true);
+    try {
+      await apiPost("/api/auth/setup-admin", {
+        username: username.trim(),
+        password,
+      });
+      refetch();
+      toast.success("Admin account created");
+      navigate("/select-company");
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "Setup failed");
+    } finally {
+      setIsSubmitting(false);
+    }
   };
 
-  if (checkingUsers) {
+  if (isCheckingSetup) {
     return (
       <div className="min-h-screen flex items-center justify-center bg-gray-50">
         <Loader2 className="w-8 h-8 animate-spin text-gray-400" />
@@ -80,12 +155,9 @@ export default function Login() {
     );
   }
 
-  const isFirstRun = !hasUsersData?.hasUsers;
-
   return (
     <div className="min-h-screen flex items-center justify-center bg-gray-50 px-4">
       <div className="w-full max-w-md">
-        {/* Logo */}
         <div className="flex justify-center mb-8">
           <img
             src="https://d2xsxph8kpxj0f.cloudfront.net/310519663368468239/3wvjutsFdcEUnRywyqJHNV/SaffhireLogoShirtStyle_0449b2e9.webp"
@@ -107,149 +179,97 @@ export default function Login() {
             ) : (
               <>
                 <h1 className="text-xl font-bold text-gray-900">Sign In</h1>
-                <p className="text-sm text-gray-500 mt-1">Enter your credentials to access the dashboard </p>
+                <p className="text-sm text-gray-500 mt-1">Enter your username and password</p>
               </>
             )}
           </CardHeader>
 
           <CardContent>
-            {isFirstRun ? (
-              <form onSubmit={handleSetup} className="space-y-4">
-                <div className="space-y-1.5">
-                  <Label htmlFor="setup-username">Username</Label>
+            <form onSubmit={isFirstRun ? handleSetup : handleLogin} className="space-y-4">
+              <div className="space-y-1.5">
+                <Label htmlFor="username">Username</Label>
+                <Input
+                  id="username"
+                  type="text"
+                  placeholder={isFirstRun ? "Choose a username" : "Enter your username"}
+                  value={username}
+                  onChange={(event) => setUsername(event.target.value)}
+                  required
+                  minLength={3}
+                  autoComplete="username"
+                  autoFocus
+                />
+              </div>
+
+              <div className="space-y-1.5">
+                <Label htmlFor="password">Password</Label>
+                <div className="relative">
                   <Input
-                    id="setup-username"
-                    type="text"
-                    placeholder="Choose a username"
-                    value={setupUsername}
-                    onChange={(e) => setSetupUsername(e.target.value)}
+                    id="password"
+                    type={showPassword ? "text" : "password"}
+                    placeholder={isFirstRun ? "Min. 6 characters" : "Enter your password"}
+                    value={password}
+                    onChange={(event) => setPassword(event.target.value)}
                     required
-                    minLength={3}
-                    autoComplete="username"
+                    minLength={isFirstRun ? 6 : undefined}
+                    autoComplete={isFirstRun ? "new-password" : "current-password"}
+                    className="pr-10"
                   />
+                  <button
+                    type="button"
+                    className="absolute right-3 top-1/2 -translate-y-1/2 text-gray-400 hover:text-gray-600"
+                    onClick={() => setShowPassword((value) => !value)}
+                    aria-label={showPassword ? "Hide password" : "Show password"}
+                  >
+                    {showPassword ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
+                  </button>
                 </div>
+              </div>
+
+              {isFirstRun ? (
                 <div className="space-y-1.5">
-                  <Label htmlFor="setup-password">Password</Label>
-                  <div className="relative">
-                    <Input
-                      id="setup-password"
-                      type={showSetupPassword ? "text" : "password"}
-                      placeholder="Min. 6 characters"
-                      value={setupPassword}
-                      onChange={(e) => setSetupPassword(e.target.value)}
-                      required
-                      minLength={6}
-                      autoComplete="new-password"
-                      className="pr-10"
-                    />
-                    <button
-                      type="button"
-                      className="absolute right-3 top-1/2 -translate-y-1/2 text-gray-400 hover:text-gray-600"
-                      onClick={() => setShowSetupPassword((v) => !v)}
-                    >
-                      {showSetupPassword ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
-                    </button>
-                  </div>
-                </div>
-                <div className="space-y-1.5">
-                  <Label htmlFor="setup-confirm">Confirm Password</Label>
+                  <Label htmlFor="confirm-password">Confirm Password</Label>
                   <Input
-                    id="setup-confirm"
-                    type={showSetupPassword ? "text" : "password"}
+                    id="confirm-password"
+                    type={showPassword ? "text" : "password"}
                     placeholder="Re-enter password"
-                    value={setupConfirm}
-                    onChange={(e) => setSetupConfirm(e.target.value)}
+                    value={confirmPassword}
+                    onChange={(event) => setConfirmPassword(event.target.value)}
                     required
                     autoComplete="new-password"
                   />
                 </div>
-                <Button
-                  type="submit"
-                  className="w-full font-semibold mt-2"
-                  style={{ backgroundColor: "#1FFF00", color: "#0F172A" }}
-                  disabled={setupMutation.isPending}
-                >
-                  {setupMutation.isPending ? (
-                    <><Loader2 className="w-4 h-4 mr-2 animate-spin" /> Creating Account...</>
-                  ) : "Create Admin Account"}
-                </Button>
-              </form>
-            ) : (
-              <form onSubmit={handleLogin} className="space-y-4">
-                <div className="space-y-1.5">
-                  <Label htmlFor="username">Username</Label>
-                  <Input
-                    id="username"
-                    type="text"
-                    placeholder="Enter your username"
-                    value={username}
-                    onChange={(e) => setUsername(e.target.value)}
-                    required
-                    autoComplete="username"
-                    autoFocus
-                  />
-                </div>
-                <div className="space-y-1.5">
-                  <Label htmlFor="password">Password</Label>
-                  <div className="relative">
-                    <Input
-                      id="password"
-                      type={showPassword ? "text" : "password"}
-                      placeholder="Enter your password"
-                      value={password}
-                      onChange={(e) => setPassword(e.target.value)}
-                      required
-                      autoComplete="current-password"
-                      className="pr-10"
-                    />
-                    <button
-                      type="button"
-                      className="absolute right-3 top-1/2 -translate-y-1/2 text-gray-400 hover:text-gray-600"
-                      onClick={() => setShowPassword((v) => !v)}
-                    >
-                      {showPassword ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
-                    </button>
-                  </div>
-                </div>
-                {/* Remember Me */}
+              ) : (
                 <div className="flex items-center gap-2">
                   <Checkbox
                     id="remember-me"
                     checked={rememberMe}
                     onCheckedChange={(checked) => setRememberMe(checked === true)}
                   />
-                  <label
-                    htmlFor="remember-me"
-                    className="text-sm text-gray-600 cursor-pointer select-none"
-                  >
+                  <label htmlFor="remember-me" className="text-sm text-gray-600 cursor-pointer select-none">
                     Remember me for 30 days
                   </label>
                 </div>
+              )}
 
-                <Button
-                  type="submit"
-                  className="w-full font-semibold mt-2"
-                  style={{ backgroundColor: "#1FFF00", color: "#0F172A" }}
-                  disabled={loginMutation.isPending}
-                >
-                  {loginMutation.isPending ? (
-                    <><Loader2 className="w-4 h-4 mr-2 animate-spin" /> Signing In...</>
-                  ) : "Sign In"}
-                </Button>
-
-                {/* Try Demo link */}
-                <div className="text-center pt-1">
-                  <span className="text-sm text-gray-500">Want to explore first?{" "}</span>
-                  <a
-                    href="/api/demo"
-                    className="text-sm font-medium hover:underline"
-                    style={{ color: "#1FFF00", filter: "brightness(0.75)" }}
-                  >
-                    Try the demo →
-                  </a>
-                </div>
-              </form>
-            )}
+              <Button
+                type="submit"
+                className="w-full font-semibold mt-2"
+                style={{ backgroundColor: "#1FFF00", color: "#0F172A" }}
+                disabled={isSubmitting}
+              >
+                {isSubmitting ? (
+                  <>
+                    <Loader2 className="w-4 h-4 mr-2 animate-spin" />
+                    {isFirstRun ? "Creating Account..." : "Signing In..."}
+                  </>
+                ) : isFirstRun ? (
+                  "Create Admin Account"
+                ) : (
+                  "Sign In"
+                )}
+              </Button>
+            </form>
           </CardContent>
         </Card>
 
