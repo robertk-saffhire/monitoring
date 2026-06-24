@@ -1,5 +1,37 @@
-import { parse, serialize } from "cookie";
 import { LOCAL_SESSION_COOKIE } from "./localSession";
+
+function parseCookieHeader(header: string | undefined) {
+  const cookies: Record<string, string> = {};
+  if (!header) return cookies;
+
+  for (const part of header.split(";")) {
+    const index = part.indexOf("=");
+    if (index === -1) continue;
+    const key = part.slice(0, index).trim();
+    const value = part.slice(index + 1).trim();
+    if (!key) continue;
+    try {
+      cookies[key] = decodeURIComponent(value);
+    } catch {
+      cookies[key] = value;
+    }
+  }
+
+  return cookies;
+}
+
+function serializeCookie(name: string, value: string, maxAgeSeconds: number) {
+  const encodedName = encodeURIComponent(name);
+  const encodedValue = encodeURIComponent(value);
+  return [
+    `${encodedName}=${encodedValue}`,
+    "Path=/",
+    "HttpOnly",
+    "SameSite=None",
+    "Secure",
+    `Max-Age=${maxAgeSeconds}`,
+  ].join("; ");
+}
 
 export async function readJsonBody(req: any) {
   if (req.body && typeof req.body === "object") return req.body;
@@ -37,8 +69,7 @@ export function methodNotAllowed(res: any) {
 }
 
 export function attachCookies(req: any) {
-  const header = req.headers?.cookie;
-  req.cookies = typeof header === "string" ? parse(header) : {};
+  req.cookies = parseCookieHeader(req.headers?.cookie);
 }
 
 export function publicUser(user: any) {
@@ -54,27 +85,9 @@ export function publicUser(user: any) {
 }
 
 export function setSessionCookie(res: any, token: string, maxAgeSeconds: number) {
-  res.setHeader(
-    "Set-Cookie",
-    serialize(LOCAL_SESSION_COOKIE, token, {
-      httpOnly: true,
-      path: "/",
-      sameSite: "none",
-      secure: true,
-      maxAge: maxAgeSeconds,
-    })
-  );
+  res.setHeader("Set-Cookie", serializeCookie(LOCAL_SESSION_COOKIE, token, maxAgeSeconds));
 }
 
 export function clearSessionCookie(res: any) {
-  res.setHeader(
-    "Set-Cookie",
-    serialize(LOCAL_SESSION_COOKIE, "", {
-      httpOnly: true,
-      path: "/",
-      sameSite: "none",
-      secure: true,
-      maxAge: 0,
-    })
-  );
+  res.setHeader("Set-Cookie", serializeCookie(LOCAL_SESSION_COOKIE, "", 0));
 }
