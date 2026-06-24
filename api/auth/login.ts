@@ -2,9 +2,9 @@ import "dotenv/config";
 import pg from "pg";
 import bcrypt from "bcryptjs";
 import { SignJWT } from "jose";
-import { methodNotAllowed, publicUser, readJsonBody, sendJson, setSessionCookie } from "../../server/authApiHelpers";
 
 const { Pool } = pg;
+const SESSION_COOKIE = "saffhire_session";
 const COOKIE_SECRET = new TextEncoder().encode(process.env.JWT_SECRET || "saffhire-dev-secret");
 
 type LocalUserRow = {
@@ -17,6 +17,46 @@ type LocalUserRow = {
   isActive: boolean;
   mustChangePassword: boolean;
 };
+
+function sendJson(res: any, statusCode: number, payload: unknown) {
+  res.statusCode = statusCode;
+  res.setHeader("Content-Type", "application/json; charset=utf-8");
+  res.end(JSON.stringify(payload));
+}
+
+async function readBody(req: any) {
+  if (req.body && typeof req.body === "object") return req.body;
+  if (typeof req.body === "string" && req.body.trim()) {
+    try { return JSON.parse(req.body); } catch { return {}; }
+  }
+  const chunks: Buffer[] = [];
+  for await (const chunk of req) chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
+  if (chunks.length === 0) return {};
+  try { return JSON.parse(Buffer.concat(chunks).toString("utf8")); } catch { return {}; }
+}
+
+function setCookie(res: any, token: string, maxAgeSeconds: number) {
+  res.setHeader("Set-Cookie", [
+    `${SESSION_COOKIE}=${encodeURIComponent(token)}`,
+    "Path=/",
+    "HttpOnly",
+    "SameSite=None",
+    "Secure",
+    `Max-Age=${maxAgeSeconds}`,
+  ].join("; "));
+}
+
+function publicUser(user: LocalUserRow) {
+  return {
+    id: user.id,
+    username: user.username,
+    displayName: user.displayName ?? user.username,
+    role: user.role,
+    companyId: user.companyId ?? null,
+    mustChangePassword: user.mustChangePassword,
+    isDemo: user.username === "demo",
+  };
+}
 
 async function getUserByUsername(username: string): Promise<LocalUserRow | null> {
   const pool = new Pool({ connectionString: process.env.DATABASE_URL, ssl: { rejectUnauthorized: false } });
@@ -52,33 +92,28 @@ async function signSession(user: LocalUserRow, expiresIn: string) {
 }
 
 export default async function handler(req: any, res: any) {
-  if (req.method !== "POST") return methodNotAllowed(res);
+  if (req.method !== "POST") return sendJson(res, 405, { status: "error", message: "Method not allowed" });
 
   try {
-    if (!process.env.DATABASE_URL) {
-      return sendJson(res, 500, { status: "error", message: "DATABASE_URL is missing in Vercel" });
-    }
+    if (!process.env.DATABASE_URL) return sendJson(res, 500, { status: "error", message: "DATABASE_URL is missing in Vercel" });
+    if (!process.env.JWT_SECRET) return sendJson(res, 500, { status: "error", message: "JWT_SECRET is missing in Vercel" });
 
-    const body = await readJsonBody(req);
+    const body = await readBody(req);
     const username = String(body.username ?? "").trim().toLowerCase();
     const password = String(body.password ?? "");
     const rememberMe = Boolean(body.rememberMe);
 
     const user = await getUserByUsername(username);
-    if (!user || !user.isActive) {
-      return sendJson(res, 401, { status: "error", message: "Invalid username or password" });
-    }
+    if (!user || !user.isActive) return sendJson(res, 401, { status: "error", message: "Invalid username or password" });
 
     const valid = await bcrypt.compare(password, user.passwordHash);
-    if (!valid) {
-      return sendJson(res, 401, { status: "error", message: "Invalid username or password" });
-    }
+    if (!valid) return sendJson(res, 401, { status: "error", message: "Invalid username or password" });
 
     await updateLastSignedIn(user.id);
 
     const maxAgeSeconds = rememberMe ? 30 * 24 * 60 * 60 : 24 * 60 * 60;
     const token = await signSession(user, rememberMe ? "30d" : "1d");
-    setSessionCookie(res, token, maxAgeSeconds);
+    setCookie(res, token, maxAgeSeconds);
 
     return sendJson(res, 200, {
       status: "ok",
