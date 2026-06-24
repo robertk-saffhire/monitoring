@@ -107,6 +107,10 @@ async function fetchSupabaseApplicants(companyId: number): Promise<MonitoringApp
   return res.json();
 }
 
+function showReadOnlyMigrationMessage() {
+  toast.info("Editing is temporarily disabled in this migration build so the old Google Sheets data cannot be overwritten.");
+}
+
 interface AppContextValue {
   applicants: Applicant[];
   setApplicants: React.Dispatch<React.SetStateAction<Applicant[]>>;
@@ -261,22 +265,22 @@ export function AppProvider({ children }: { children: ReactNode }) {
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [fetchTick, isAuthenticated, authLoading, selectedCompanyId, skipAutoRefetch]);
 
-  const updateMonitorMutation = trpc.data.updateMonitor.useMutation();
-  const updateNoteMutation = trpc.data.updateNote.useMutation();
-  const updateMedExpireMutation = trpc.data.updateMedExpire.useMutation();
+  const upsertReadOnlyToast = useCallback(async () => {
+    showReadOnlyMigrationMessage();
+  }, []);
 
-  const writeMonitorStatus = useCallback(async (fileNumber: string, status: "On" | "Off", applicantName?: string) => {
-    // Phase 2A only changes reads. Writes still go to the legacy Google Sheet endpoint until Phase 2B.
-    await updateMonitorMutation.mutateAsync({ fileNumber, value: status, applicantName, companyId: selectedCompanyId ?? undefined });
-  }, [updateMonitorMutation, selectedCompanyId]);
+  const writeMonitorStatus = useCallback(async (_fileNumber: string, _status: "On" | "Off", _applicantName?: string) => {
+    // Phase 2A changes reads only. This migration build intentionally does not write to old Google Sheets.
+    await upsertReadOnlyToast();
+  }, [upsertReadOnlyToast]);
 
-  const writeNote = useCallback(async (fileNumber: string, notes: string) => {
-    await updateNoteMutation.mutateAsync({ fileNumber, notes, companyId: selectedCompanyId ?? undefined });
-  }, [updateNoteMutation, selectedCompanyId]);
+  const writeNote = useCallback(async (_fileNumber: string, _notes: string) => {
+    await upsertReadOnlyToast();
+  }, [upsertReadOnlyToast]);
 
-  const writeMedExpire = useCallback(async (fileNumber: string, medExpire: string) => {
-    await updateMedExpireMutation.mutateAsync({ fileNumber, medExpire, companyId: selectedCompanyId ?? undefined });
-  }, [updateMedExpireMutation, selectedCompanyId]);
+  const writeMedExpire = useCallback(async (_fileNumber: string, _medExpire: string) => {
+    await upsertReadOnlyToast();
+  }, [upsertReadOnlyToast]);
 
   const saveSafetyReport = useCallback(async (data: Partial<SafetyReport>): Promise<SafetyReport> => {
     // Always inject the current companyId so the report is scoped to the right company
