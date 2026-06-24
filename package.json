@@ -14,7 +14,10 @@
     "db:push": "drizzle-kit push",
     "db:generate": "drizzle-kit generate",
     "db:migrate": "drizzle-kit migrate",
-    "db:studio": "drizzle-kit studio"
+    "db:studio": "drizzle-kit studio",
+    "migrate:export-google": "node scripts/export-google-monitoring-data.mjs",
+    "migrate:monitoring": "node scripts/import-monitoring-data-to-supabase.mjs",
+    "migrate:safety": "node scripts/import-safety-reports-to-supabase.mjs"
   },
   "dependencies": {
     "@hookform/resolvers": "^5.2.2",
