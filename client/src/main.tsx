@@ -17,7 +17,6 @@ const redirectToLocalLoginIfUnauthorized = (error: unknown) => {
 
   if (!isUnauthorized) return;
 
-  // Redirect to local login page, NOT Manus OAuth portal
   if (!window.location.pathname.startsWith("/login")) {
     window.location.href = "/login";
   }
@@ -42,7 +41,7 @@ queryClient.getMutationCache().subscribe(event => {
 const trpcClient = trpc.createClient({
   links: [
     httpBatchLink({
-      url: "/api/trpc",
+      url: "/api/trpc/",
       transformer: superjson,
       fetch(input, init) {
         return globalThis.fetch(input, {
