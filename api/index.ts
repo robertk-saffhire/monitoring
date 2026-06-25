@@ -12,8 +12,15 @@ function json(res: any, statusCode: number, payload: any) {
   res.end(JSON.stringify(payload));
 }
 
+function errorMessage(error: any) {
+  if (!error) return 'Unknown server error';
+  if (typeof error === 'string') return error;
+  if (error.message) return error.message;
+  try { return JSON.stringify(error); } catch { return String(error); }
+}
+
 function getPool() {
-  if (!process.env.DATABASE_URL) throw new Error('DATABASE_URL is missing');
+  if (!process.env.DATABASE_URL) throw new Error('DATABASE_URL is missing in Vercel Environment Variables');
   if (!pool) pool = new Pool({ connectionString: process.env.DATABASE_URL, ssl: { rejectUnauthorized: false } });
   return pool;
 }
@@ -34,7 +41,7 @@ async function readBody(req: any) {
 }
 
 function secret() {
-  if (!process.env.JWT_SECRET) throw new Error('JWT_SECRET is missing');
+  if (!process.env.JWT_SECRET) throw new Error('JWT_SECRET is missing in Vercel Environment Variables');
   return new TextEncoder().encode(process.env.JWT_SECRET);
 }
 
@@ -109,6 +116,10 @@ function getRoute(req: any) {
 }
 
 async function auth(req: any, res: any, route: string) {
+  if (route === 'debug' && req.method === 'GET') {
+    return json(res, 200, { status: 'ok', route, hasDatabaseUrl: Boolean(process.env.DATABASE_URL), hasJwtSecret: Boolean(process.env.JWT_SECRET) });
+  }
+
   if (route === 'auth/setup-status' && req.method === 'GET') {
     const result = await query("select count(*)::int as count from local_users where role='admin'");
     return json(res, 200, { status: 'ok', hasAdmin: Number(result.rows[0]?.count || 0) > 0 });
@@ -158,8 +169,8 @@ async function auth(req: any, res: any, route: string) {
 }
 
 export default async function handler(req: any, res: any) {
+  const route = getRoute(req);
   try {
-    const route = getRoute(req);
     const authResult = await auth(req, res, route);
     if (authResult !== false) return;
 
@@ -171,8 +182,8 @@ export default async function handler(req: any, res: any) {
       return json(res, 200, { status: 'ok', companies: result.rows });
     }
 
-    return json(res, 404, { status: 'error', message: 'Route not found' });
+    return json(res, 404, { status: 'error', message: `Route not found: ${route}` });
   } catch (error: any) {
-    return json(res, 500, { status: 'error', message: error?.message || 'Server error' });
+    return json(res, 500, { status: 'error', message: `API ${route} failed: ${errorMessage(error)}` });
   }
 }
