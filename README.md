@@ -1,13 +1,31 @@
-# SaffHire Monitoring Dashboard
+# SaffHire Monitoring - Clean Supabase Rebuild
 
-This repository will hold the separate SaffHire Monitoring Dashboard migration from Google Sheets + Manus/MySQL to Supabase + GitHub + Vercel.
+This is a clean rebuild of the Manus monitoring app flow. Google Sheets and Manus/tRPC auth were removed.
 
-Current planned build sequence:
+## Required Vercel ENV
 
-1. Phase 1A — Supabase/Postgres foundation
-2. Phase 1B — Vercel-compatible API/tRPC server conversion
-3. Phase 1C — Current-data migration scripts
-4. Phase 2A — Monitoring reads from Supabase applicants table
-5. Phase 2B — Monitoring writes, audit logs, notes, and med expire overrides
+- `DATABASE_URL`
+- `JWT_SECRET`
 
-Do not commit private Manus runtime folders or local environment files.
+## First setup
+
+1. Run `supabase/schema.sql` in Supabase SQL Editor.
+2. Deploy to Vercel.
+3. Open `/login`.
+4. Create the first admin username and password.
+
+## Current Phase 1 Features
+
+- Clean username/password login
+- First admin setup
+- Company selector
+- Dashboard cards
+- Monitoring table from Supabase
+- Update monitor status, med expiration, and notes
+- Audit log on applicant updates
+- Safety Performance page shell
+- Settings page shell
+
+## No Google Sheets
+
+This app does not read from or write to Google Sheets.
