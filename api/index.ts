@@ -71,7 +71,7 @@ async function users(req: any, res: any, user: any) {
   if (req.method === 'GET') { const r = await query('select id, username, "displayName", role, "companyId", "isActive", "mustChangePassword", "lastSignedIn" from local_users order by id asc'); return json(res, 200, { status: 'ok', users: r.rows.map(publicUser) }); }
   const body = await readBody(req);
   if (req.method === 'POST') { const username = String(body.username || '').trim().toLowerCase(); const rawPassword = String(body.password || ''); if (username.length < 3 || rawPassword.length < 6) return json(res, 400, { status: 'error', message: 'Username and password are required' }); const role = USER_ROLES.has(body.role) ? body.role : 'user'; const passwordHash = await bcrypt.hash(rawPassword, 12); const r = await query('insert into local_users (username,"passwordHash","displayName",role,"companyId","isActive","mustChangePassword") values ($1,$2,$3,$4,$5,true,false) returning id, username, "displayName", role, "companyId", "isActive", "mustChangePassword", "lastSignedIn"', [username, passwordHash, String(body.displayName || username), role, body.companyId ? Number(body.companyId) : null]); return json(res, 200, { status: 'ok', user: publicUser(r.rows[0]) }); }
-  if (req.method === 'PATCH') { const id = Number(body.id); const role = USER_ROLES.has(body.role) ? body.role : 'user'; const r = await query('update local_users set "displayName"=$1, role=$2, "companyId"=$3, "isActive"=$4, "updatedAt"=now() where id=$5 returning id, username, "displayName", role, "companyId", "isActive", "mustChangePassword", "lastSignedIn"', [String(body.displayName || ''), role, body.companyId ? Number(body.companyId) : null, body.isActive !== false, id]); return json(res, 200, { status: 'ok', user: publicUser(r.rows[0]) }); }
+  if (req.method === 'PATCH') { const id = Number(body.id); const role = USER_ROLES.has(body.role) ? body.role : 'user'; const baseParams: any[] = [String(body.displayName || ''), role, body.companyId ? Number(body.companyId) : null, body.isActive !== false]; let sql = 'update local_users set "displayName"=$1, role=$2, "companyId"=$3, "isActive"=$4, "updatedAt"=now()'; if (body.password) { baseParams.push(await bcrypt.hash(String(body.password), 12)); sql += `, "passwordHash"=$${baseParams.length}, "mustChangePassword"=false`; } baseParams.push(id); sql += ` where id=$${baseParams.length} returning id, username, "displayName", role, "companyId", "isActive", "mustChangePassword", "lastSignedIn"`; const r = await query(sql, baseParams); return json(res, 200, { status: 'ok', user: publicUser(r.rows[0]) }); }
   if (req.method === 'DELETE') { const url = new URL(req.url || '/', 'https://local.test'); const id = Number(url.searchParams.get('id')); if (id === user.id) return json(res, 400, { status: 'error', message: 'You cannot delete your own account' }); await query('delete from local_users where id=$1', [id]); return json(res, 200, { status: 'ok', success: true }); }
   return json(res, 405, { status: 'error', message: 'Method not allowed' });
 }
@@ -90,6 +90,34 @@ async function importApplicants(req: any, res: any, user: any) {
   if (!requireAdmin(user, res)) return; if (req.method !== 'POST') return json(res, 405, { status: 'error', message: 'Method not allowed' }); const body = await readBody(req); const companyId = Number(body.companyId || user.companyId || 1); const rows = Array.isArray(body.rows) ? body.rows : []; let imported = 0, skipped = 0; for (const row of rows) { const fileNumber = String(pick(row, ['fileNumber','File Number','File #','FileNumber','file_number'])).trim(); if (!fileNumber) { skipped++; continue; } const medExpire = String(pick(row, ['medExpire','Med Expire','Medical Expiration','medicalExpiration'])).trim(); await query('insert into applicants ("companyId","fileNumber","applicantName","orderDate","monitorStatus","mvrStatus","medExpire","medExpireOverridden",notes) values ($1,$2,$3,$4,$5,$6,$7,$8,$9) on conflict ("fileNumber","companyId") do update set "applicantName"=excluded."applicantName","orderDate"=excluded."orderDate","monitorStatus"=excluded."monitorStatus","mvrStatus"=excluded."mvrStatus","medExpire"=excluded."medExpire","medExpireOverridden"=excluded."medExpireOverridden",notes=excluded.notes,"updatedAt"=now()', [companyId, fileNumber, String(pick(row, ['name','Name','Applicant Name','applicantName'])).trim(), String(pick(row, ['orderDate','Order Date','Created','created'])).trim(), normalizeMonitorStatus(pick(row, ['monitorStatus','Monitor Status','Monitoring','monitoring'])), String(pick(row, ['mvrStatus','MVR Status','Status'])).trim(), medExpire || null, Boolean(medExpire), String(pick(row, ['notes','Notes'])).trim()]); imported++; } return json(res, 200, { status: 'ok', imported, skipped });
 }
 
+async function changePassword(req: any, res: any, user: any) {
+  if (req.method !== 'POST') return json(res, 405, { status: 'error', message: 'Method not allowed' });
+  const body = await readBody(req);
+  const currentPassword = String(body.currentPassword || '');
+  const newPassword = String(body.newPassword || '');
+  if (newPassword.length < 8) return json(res, 400, { status: 'error', message: 'New password must be at least 8 characters' });
+  const result = await query('select id, "passwordHash" from local_users where id=$1 limit 1', [user.id]);
+  const row = result.rows[0];
+  if (!row || !(await bcrypt.compare(currentPassword, row.passwordHash))) return json(res, 400, { status: 'error', message: 'Current password is incorrect' });
+  const nextHash = await bcrypt.hash(newPassword, 12);
+  await query('update local_users set "passwordHash"=$1, "mustChangePassword"=false, "updatedAt"=now() where id=$2', [nextHash, user.id]);
+  return json(res, 200, { status: 'ok', success: true });
+}
+
+async function systemCheck(req: any, res: any, user: any) {
+  if (req.method !== 'GET') return json(res, 405, { status: 'error', message: 'Method not allowed' });
+  if (!requireAdmin(user, res)) return;
+  const checks: any[] = [];
+  async function check(name: string, sql: string) { try { const r = await query(sql); checks.push({ name, ok: true, detail: String(r.rows[0]?.count ?? r.rows[0]?.exists ?? 'ok') }); } catch (error: any) { checks.push({ name, ok: false, detail: errorMessage(error) }); } }
+  await check('Database connected', 'select 1 as count');
+  await check('Admin user exists', "select count(*)::int as count from local_users where role='admin'");
+  await check('Companies table exists', "select exists (select 1 from information_schema.tables where table_name='companies') as exists");
+  await check('Applicants table exists', "select exists (select 1 from information_schema.tables where table_name='applicants') as exists");
+  await check('Safety reports table exists', "select exists (select 1 from information_schema.tables where table_name='safety_reports') as exists");
+  await check('Notification emails table exists', "select exists (select 1 from information_schema.tables where table_name='notification_emails') as exists");
+  return json(res, 200, { status: 'ok', checks });
+}
+
 export default async function handler(req: any, res: any) {
   const route = getRoute(req);
   try {
@@ -103,6 +131,8 @@ export default async function handler(req: any, res: any) {
     if (route === 'users') return users(req, res, user);
     if (route === 'notification-emails') return notificationEmails(req, res, user);
     if (route === 'import-applicants') return importApplicants(req, res, user);
+    if (route === 'change-password') return changePassword(req, res, user);
+    if (route === 'system-check') return systemCheck(req, res, user);
     return json(res, 404, { status: 'error', message: `Route not found: ${route}` });
   } catch (error: any) {
     return json(res, 500, { status: 'error', message: `API ${route} failed: ${errorMessage(error)}` });
