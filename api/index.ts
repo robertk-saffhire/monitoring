@@ -7,10 +7,29 @@ let pool: any;
 const SESSION_COOKIE = 'saffhire_session';
 const SAFETY_STATUSES = new Set(['S1 Complete', 'Emp Sent', 'Emp Complete', 'Completed']);
 const USER_ROLES = new Set(['admin', 'user', 'viewer']);
-const BOOL_REPORT_FIELDS = new Set(['vehicleStraightTruck','vehicleTractorSemitrailer','vehicleBus','vehicleCargoTank','vehicleDoublesTriples','vehicleOther','dotAlcoholTestPositive','dotDrugTestPositive','dotRefusedTest','dotOtherViolations']);
-const REPORT_FIELDS = ['applicantName','fileNumber','created','status','followUpDate','notes','prevEmployerName','prevEmployerEmail','prevEmployerStreet','prevEmployerPhone','prevEmployerFax','prevEmployerCityStateZip','employerName','employerAttention','employerStreet','employerCityStateZip','employerPhone','employerFax','employerEmail','confFax','confEmail','employedByCompany','jobTitle','fromDate','toDate','droveMotorVehicle','vehicleStraightTruck','vehicleTractorSemitrailer','vehicleBus','vehicleCargoTank','vehicleDoublesTriples','vehicleOther','accidentHistory','accidentDate1','accidentLocation1','accidentInjuries1','accidentFatalities1','accidentHazmat1','accidentDate2','accidentLocation2','accidentInjuries2','accidentFatalities2','accidentHazmat2','accidentDate3','accidentLocation3','accidentInjuries3','accidentFatalities3','accidentHazmat3','otherAccidents','dotCompany','dotEmployee','dotAlcoholTestPositive','dotDrugTestPositive','dotRefusedTest','dotOtherViolations','infoReceivedFrom','infoReceivedDate'];
+const BOOL_REPORT_FIELDS = new Set([
+  'vehicleStraightTruck', 'vehicleTractorSemitrailer', 'vehicleBus', 'vehicleCargoTank', 'vehicleDoublesTriples', 'vehicleOther',
+  'dotAlcoholTestPositive', 'dotDrugTestPositive', 'dotRefusedTest', 'dotOtherViolations',
+]);
+const REPORT_FIELDS = [
+  'applicantName', 'fileNumber', 'created', 'status', 'followUpDate', 'notes',
+  'prevEmployerName', 'prevEmployerEmail', 'prevEmployerStreet', 'prevEmployerPhone', 'prevEmployerFax', 'prevEmployerCityStateZip',
+  'employerName', 'employerAttention', 'employerStreet', 'employerCityStateZip', 'employerPhone', 'employerFax', 'employerEmail', 'confFax', 'confEmail',
+  'employedByCompany', 'jobTitle', 'fromDate', 'toDate', 'droveMotorVehicle',
+  'vehicleStraightTruck', 'vehicleTractorSemitrailer', 'vehicleBus', 'vehicleCargoTank', 'vehicleDoublesTriples', 'vehicleOther',
+  'accidentHistory', 'accidentDate1', 'accidentLocation1', 'accidentInjuries1', 'accidentFatalities1', 'accidentHazmat1',
+  'accidentDate2', 'accidentLocation2', 'accidentInjuries2', 'accidentFatalities2', 'accidentHazmat2',
+  'accidentDate3', 'accidentLocation3', 'accidentInjuries3', 'accidentFatalities3', 'accidentHazmat3', 'otherAccidents',
+  'dotCompany', 'dotEmployee', 'dotAlcoholTestPositive', 'dotDrugTestPositive', 'dotRefusedTest', 'dotOtherViolations',
+  'infoReceivedFrom', 'infoReceivedDate',
+];
+const reportCols = ['"companyId"', ...REPORT_FIELDS.map((field) => `"${field}"`).map((col) => col === '"created"' || col === '"status"' || col === '"notes"' ? col.replaceAll('"', '') : col)];
 
-function json(res: any, statusCode: number, payload: any) { res.statusCode = statusCode; res.setHeader('Content-Type', 'application/json; charset=utf-8'); res.end(JSON.stringify(payload)); }
+function json(res: any, statusCode: number, payload: any) {
+  res.statusCode = statusCode;
+  res.setHeader('Content-Type', 'application/json; charset=utf-8');
+  res.end(JSON.stringify(payload));
+}
 function errorMessage(error: any) { if (!error) return 'Unknown server error'; if (typeof error === 'string') return error; if (error.message) return error.message; try { return JSON.stringify(error); } catch { return String(error); } }
 function getPool() { if (!process.env.DATABASE_URL) throw new Error('DATABASE_URL is missing in Vercel Environment Variables'); if (!pool) pool = new Pool({ connectionString: process.env.DATABASE_URL, ssl: { rejectUnauthorized: false } }); return pool; }
 async function query(text: string, params: any[] = []) { return getPool().query(text, params); }
@@ -26,6 +45,7 @@ function requireAdmin(user: any, res: any) { if (user.role !== 'admin') { json(r
 function getRoute(req: any) { const url = new URL(req.url || '/', 'https://local.test'); return url.searchParams.get('path') || url.pathname.replace(/^\/api\/?/, '').replace(/^\//, ''); }
 function slugify(value: string) { return String(value || '').trim().toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '') || 'company'; }
 function normalizeMonitorStatus(value: any) { return String(value || '').trim().toLowerCase() === 'on' ? 'On' : 'Off'; }
+function asBool(value: any) { const raw = String(value ?? '').trim().toLowerCase(); return value === true || raw === 'true' || raw === 'yes' || raw === 'y' || raw === '1' || raw === 'on' || raw === 'x'; }
 function pick(row: any, keys: string[]) { for (const key of keys) if (row[key] !== undefined && row[key] !== null && String(row[key]).trim() !== '') return row[key]; return ''; }
 
 async function auth(req: any, res: any, route: string) {
@@ -54,16 +74,92 @@ async function applicants(req: any, res: any, user: any) {
   return json(res, 405, { status: 'error', message: 'Method not allowed' });
 }
 
-function cleanReport(body: any, companyId: number) { const out: any = { companyId }; for (const field of REPORT_FIELDS) { if (field === 'status') out[field] = SAFETY_STATUSES.has(body[field]) ? body[field] : 'S1 Complete'; else if (field === 'created') out[field] = String(body[field] || new Date().toISOString().slice(0, 10)).trim(); else if (BOOL_REPORT_FIELDS.has(field)) out[field] = Boolean(body[field]); else out[field] = String(body[field] ?? '').trim(); } if (!out.employerName) out.employerName = 'Driver Pipeline'; if (!out.employerStreet) out.employerStreet = '1200 N. Union Bower Road'; if (!out.employerCityStateZip) out.employerCityStateZip = 'Irving, TX 75061'; if (!out.employerPhone) out.employerPhone = '972-573-2301'; if (!out.employerEmail) out.employerEmail = 'lmercado@driverpipeline.com'; return out; }
+function cleanReport(body: any, companyId: number) {
+  const out: any = { companyId };
+  for (const field of REPORT_FIELDS) {
+    if (field === 'status') out[field] = SAFETY_STATUSES.has(body[field]) ? body[field] : 'S1 Complete';
+    else if (field === 'created') out[field] = String(body[field] || new Date().toISOString().slice(0, 10)).trim();
+    else if (BOOL_REPORT_FIELDS.has(field)) out[field] = asBool(body[field]);
+    else out[field] = String(body[field] ?? '').trim();
+  }
+  if (!out.employerName) out.employerName = 'Driver Pipeline';
+  if (!out.employerStreet) out.employerStreet = '1200 N. Union Bower Road';
+  if (!out.employerCityStateZip) out.employerCityStateZip = 'Irving, TX 75061';
+  if (!out.employerPhone) out.employerPhone = '972-573-2301';
+  if (!out.employerEmail) out.employerEmail = 'lmercado@driverpipeline.com';
+  return out;
+}
 function reportValues(v: any) { return ['companyId', ...REPORT_FIELDS].map((field) => v[field]); }
-const reportCols = ['"companyId"','"applicantName"','"fileNumber"','created','status','"followUpDate"','notes','"prevEmployerName"','"prevEmployerEmail"','"prevEmployerStreet"','"prevEmployerPhone"','"prevEmployerFax"','"prevEmployerCityStateZip"','"employerName"','"employerAttention"','"employerStreet"','"employerCityStateZip"','"employerPhone"','"employerFax"','"employerEmail"','"confFax"','"confEmail"','"employedByCompany"','"jobTitle"','"fromDate"','"toDate"','"droveMotorVehicle"','"vehicleStraightTruck"','"vehicleTractorSemitrailer"','"vehicleBus"','"vehicleCargoTank"','"vehicleDoublesTriples"','"vehicleOther"','"accidentHistory"','"accidentDate1"','"accidentLocation1"','"accidentInjuries1"','"accidentFatalities1"','"accidentHazmat1"','"accidentDate2"','"accidentLocation2"','"accidentInjuries2"','"accidentFatalities2"','"accidentHazmat2"','"accidentDate3"','"accidentLocation3"','"accidentInjuries3"','"accidentFatalities3"','"accidentHazmat3"','"otherAccidents"','"dotCompany"','"dotEmployee"','"dotAlcoholTestPositive"','"dotDrugTestPositive"','"dotRefusedTest"','"dotOtherViolations"','"infoReceivedFrom"','"infoReceivedDate"'];
+
+function safetyCsvToReport(row: any) {
+  const out: any = {};
+  const aliases: Record<string, string[]> = {
+    applicantName: ['applicantName', 'Applicant Name', 'Applicant', 'Name', 'Driver Name'],
+    fileNumber: ['fileNumber', 'File Number', 'File #', 'FileNumber', 'file_number'],
+    created: ['created', 'Created', 'Create Date', 'Date Created'],
+    status: ['status', 'Status'],
+    followUpDate: ['followUpDate', 'Follow Up Date', 'Follow-Up Date', 'Follow Up'],
+    notes: ['notes', 'Notes'],
+    prevEmployerName: ['prevEmployerName', 'Previous Employer', 'Prev Employer Name', 'Previous Employer Name', 'Employer Name'],
+    prevEmployerEmail: ['prevEmployerEmail', 'Previous Employer Email', 'Prev Employer Email', 'Employer Email'],
+    prevEmployerStreet: ['prevEmployerStreet', 'Previous Employer Street', 'Prev Employer Street', 'Employer Street'],
+    prevEmployerPhone: ['prevEmployerPhone', 'Previous Employer Phone', 'Prev Employer Phone', 'Employer Phone'],
+    prevEmployerFax: ['prevEmployerFax', 'Previous Employer Fax', 'Prev Employer Fax', 'Employer Fax'],
+    prevEmployerCityStateZip: ['prevEmployerCityStateZip', 'Previous Employer City State Zip', 'Previous Employer City/State/Zip', 'City State Zip'],
+    employerName: ['employerName', 'Prospective Employer', 'Prospective Employer Name', 'Current Employer'],
+    employerAttention: ['employerAttention', 'Attention', 'Employer Attention'],
+    employerStreet: ['employerStreet', 'Prospective Employer Street'],
+    employerCityStateZip: ['employerCityStateZip', 'Prospective Employer City State Zip', 'Prospective Employer City/State/Zip'],
+    employerPhone: ['employerPhone', 'Prospective Employer Phone'],
+    employerFax: ['employerFax', 'Prospective Employer Fax'],
+    employerEmail: ['employerEmail', 'Prospective Employer Email'],
+    confFax: ['confFax', 'Confidential Fax'],
+    confEmail: ['confEmail', 'Confidential Email'],
+  };
+  for (const field of REPORT_FIELDS) out[field] = pick(row, aliases[field] || [field, field.replace(/[A-Z]/g, (m) => ` ${m}`).trim()]);
+  return out;
+}
+
 async function safetyReports(req: any, res: any, user: any) {
   const url = new URL(req.url || '/', 'https://local.test'); const companyId = Number(url.searchParams.get('companyId') || user.companyId || 1);
-  if (req.method === 'GET') { const r = await query('select * from safety_reports where "companyId"=$1 order by id desc limit 500', [companyId]); return json(res, 200, { status: 'ok', reports: r.rows }); }
+  if (req.method === 'GET') {
+    let r = await query('select * from safety_reports where "companyId"=$1 order by id desc limit 500', [companyId]);
+    let source = 'selected_company';
+    if (r.rows.length === 0 && user.role === 'admin') {
+      const fallback = await query('select * from safety_reports order by id desc limit 500');
+      if (fallback.rows.length > 0) { r = fallback; source = 'all_companies_fallback'; }
+    }
+    return json(res, 200, { status: 'ok', reports: r.rows, source, requestedCompanyId: companyId });
+  }
   if (req.method === 'POST') { const v = cleanReport(await readBody(req), companyId); if (!v.fileNumber && !v.applicantName) return json(res, 400, { status: 'error', message: 'File number or applicant name is required' }); const placeholders = reportCols.map((_, i) => `$${i + 1}`).join(','); const r = await query(`insert into safety_reports (${reportCols.join(',')}) values (${placeholders}) returning *`, reportValues(v)); return json(res, 200, { status: 'ok', report: r.rows[0] }); }
   if (req.method === 'PATCH') { const body = await readBody(req); const id = Number(body.id); if (!id) return json(res, 400, { status: 'error', message: 'Report id is required' }); const v = cleanReport(body, companyId); const assignments = reportCols.slice(1).map((col, i) => `${col}=$${i + 1}`).join(','); const params = reportValues(v).slice(1); params.push(id, companyId); const r = await query(`update safety_reports set ${assignments}, "updatedAt"=now() where id=$${params.length - 1} and "companyId"=$${params.length} returning *`, params); return json(res, 200, { status: 'ok', report: r.rows[0] }); }
   if (req.method === 'DELETE') { const id = Number(url.searchParams.get('id')); await query('delete from safety_reports where id=$1 and "companyId"=$2', [id, companyId]); return json(res, 200, { status: 'ok', success: true }); }
   return json(res, 405, { status: 'error', message: 'Method not allowed' });
+}
+
+async function importSafetyReports(req: any, res: any, user: any) {
+  if (!requireAdmin(user, res)) return;
+  if (req.method !== 'POST') return json(res, 405, { status: 'error', message: 'Method not allowed' });
+  const body = await readBody(req);
+  const companyId = Number(body.companyId || user.companyId || 1);
+  const rows = Array.isArray(body.rows) ? body.rows : [];
+  let imported = 0, updated = 0, skipped = 0;
+  for (const row of rows) {
+    const v = cleanReport(safetyCsvToReport(row), companyId);
+    if (!v.fileNumber && !v.applicantName) { skipped++; continue; }
+    const existing = v.fileNumber ? await query('select id from safety_reports where "companyId"=$1 and "fileNumber"=$2 order by id asc limit 1', [companyId, v.fileNumber]) : { rows: [] };
+    if (existing.rows[0]?.id) {
+      const assignments = reportCols.slice(1).map((col, i) => `${col}=$${i + 1}`).join(',');
+      const params = reportValues(v).slice(1); params.push(existing.rows[0].id, companyId);
+      await query(`update safety_reports set ${assignments}, "updatedAt"=now() where id=$${params.length - 1} and "companyId"=$${params.length}`, params);
+      updated++;
+    } else {
+      const placeholders = reportCols.map((_, i) => `$${i + 1}`).join(',');
+      await query(`insert into safety_reports (${reportCols.join(',')}) values (${placeholders})`, reportValues(v));
+      imported++;
+    }
+  }
+  return json(res, 200, { status: 'ok', imported, updated, skipped });
 }
 
 async function users(req: any, res: any, user: any) {
@@ -92,15 +188,11 @@ async function importApplicants(req: any, res: any, user: any) {
 
 async function changePassword(req: any, res: any, user: any) {
   if (req.method !== 'POST') return json(res, 405, { status: 'error', message: 'Method not allowed' });
-  const body = await readBody(req);
-  const currentPassword = String(body.currentPassword || '');
-  const newPassword = String(body.newPassword || '');
+  const body = await readBody(req); const currentPassword = String(body.currentPassword || ''); const newPassword = String(body.newPassword || '');
   if (newPassword.length < 8) return json(res, 400, { status: 'error', message: 'New password must be at least 8 characters' });
-  const result = await query('select id, "passwordHash" from local_users where id=$1 limit 1', [user.id]);
-  const row = result.rows[0];
+  const result = await query('select id, "passwordHash" from local_users where id=$1 limit 1', [user.id]); const row = result.rows[0];
   if (!row || !(await bcrypt.compare(currentPassword, row.passwordHash))) return json(res, 400, { status: 'error', message: 'Current password is incorrect' });
-  const nextHash = await bcrypt.hash(newPassword, 12);
-  await query('update local_users set "passwordHash"=$1, "mustChangePassword"=false, "updatedAt"=now() where id=$2', [nextHash, user.id]);
+  await query('update local_users set "passwordHash"=$1, "mustChangePassword"=false, "updatedAt"=now() where id=$2', [await bcrypt.hash(newPassword, 12), user.id]);
   return json(res, 200, { status: 'ok', success: true });
 }
 
@@ -114,6 +206,7 @@ async function systemCheck(req: any, res: any, user: any) {
   await check('Companies table exists', "select exists (select 1 from information_schema.tables where table_name='companies') as exists");
   await check('Applicants table exists', "select exists (select 1 from information_schema.tables where table_name='applicants') as exists");
   await check('Safety reports table exists', "select exists (select 1 from information_schema.tables where table_name='safety_reports') as exists");
+  await check('Safety reports count', 'select count(*)::int as count from safety_reports');
   await check('Notification emails table exists', "select exists (select 1 from information_schema.tables where table_name='notification_emails') as exists");
   return json(res, 200, { status: 'ok', checks });
 }
@@ -128,6 +221,7 @@ export default async function handler(req: any, res: any) {
     if (route === 'companies') return companies(req, res, user);
     if (route === 'applicants') return applicants(req, res, user);
     if (route === 'safety-reports') return safetyReports(req, res, user);
+    if (route === 'import-safety-reports') return importSafetyReports(req, res, user);
     if (route === 'users') return users(req, res, user);
     if (route === 'notification-emails') return notificationEmails(req, res, user);
     if (route === 'import-applicants') return importApplicants(req, res, user);
