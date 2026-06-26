@@ -1,6 +1,6 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import { createRoot } from 'react-dom/client';
-import { Activity, ArrowLeft, ClipboardCheck, Database, LogOut, Pencil, Plus, RefreshCw, Save, Search, Settings, ShieldCheck, Trash2, Truck, UserCog, X } from 'lucide-react';
+import { Activity, ArrowLeft, ClipboardCheck, Copy, Database, LogOut, Mail, Pencil, Plus, Printer, RefreshCw, Save, Search, Settings, ShieldCheck, Trash2, Truck, UserCog, X } from 'lucide-react';
 import SettingsManager from './SettingsPage.jsx';
 import './styles.css';
 
@@ -45,6 +45,239 @@ function defaultReport(company) {
     dotCompany: '', dotEmployee: '', dotAlcoholTestPositive: false, dotDrugTestPositive: false, dotRefusedTest: false, dotOtherViolations: false,
     infoReceivedFrom: '', infoReceivedDate: '',
   };
+}
+
+function clean(value) {
+  return String(value ?? '').trim();
+}
+
+function escapeHtml(value) {
+  return clean(value)
+    .replaceAll('&', '&amp;')
+    .replaceAll('<', '&lt;')
+    .replaceAll('>', '&gt;')
+    .replaceAll('"', '&quot;')
+    .replaceAll("'", '&#039;');
+}
+
+function display(value, fallback = '—') {
+  const text = clean(value);
+  return text || fallback;
+}
+
+function yesNo(value) {
+  return value ? 'Yes' : 'No';
+}
+
+function vehicleSummary(report) {
+  const selected = VEHICLES.filter(([key]) => Boolean(report[key])).map(([, label]) => label);
+  return selected.length ? selected.join(', ') : 'None listed';
+}
+
+function accidentRows(report) {
+  return [1, 2, 3].map((n) => ({
+    number: n,
+    date: report[`accidentDate${n}`],
+    location: report[`accidentLocation${n}`],
+    injuries: report[`accidentInjuries${n}`],
+    fatalities: report[`accidentFatalities${n}`],
+    hazmat: report[`accidentHazmat${n}`],
+  }));
+}
+
+function buildSafetyPrintHtml(report, company) {
+  const safe = (value, fallback = '') => escapeHtml(display(value, fallback));
+  const accidents = accidentRows(report);
+  const title = `Safety Performance Report - ${display(report.fileNumber, report.applicantName)}`;
+  return `<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8" />
+  <title>${escapeHtml(title)}</title>
+  <style>
+    * { box-sizing: border-box; }
+    body { font-family: Arial, Helvetica, sans-serif; color: #111827; margin: 0; background: #f3f4f6; }
+    .page { width: 8.5in; min-height: 11in; margin: 20px auto; background: #fff; padding: .45in; border: 1px solid #d1d5db; }
+    .top { display: flex; align-items: center; justify-content: space-between; border-bottom: 3px solid #111827; padding-bottom: 12px; margin-bottom: 16px; }
+    .logo { max-height: 48px; max-width: 190px; object-fit: contain; }
+    h1 { font-size: 22px; margin: 0; }
+    h2 { font-size: 15px; background: #f3f4f6; border: 1px solid #d1d5db; padding: 8px 10px; margin: 18px 0 10px; }
+    h3 { font-size: 13px; margin: 12px 0 6px; }
+    .meta { color: #4b5563; font-size: 12px; margin-top: 5px; }
+    .grid { display: grid; grid-template-columns: 1fr 1fr; gap: 8px 16px; }
+    .field { border-bottom: 1px solid #d1d5db; min-height: 26px; padding: 3px 0; font-size: 12px; }
+    .field b { display: inline-block; min-width: 155px; color: #374151; }
+    table { width: 100%; border-collapse: collapse; font-size: 12px; margin-top: 6px; }
+    th, td { border: 1px solid #d1d5db; padding: 6px; text-align: left; vertical-align: top; }
+    th { background: #f9fafb; color: #374151; }
+    .notes { white-space: pre-wrap; border: 1px solid #d1d5db; padding: 8px; min-height: 46px; font-size: 12px; }
+    .signature { display: grid; grid-template-columns: 1.5fr 1fr; gap: 20px; margin-top: 24px; font-size: 12px; }
+    .line { border-bottom: 1px solid #111827; height: 30px; }
+    .print-note { color: #6b7280; font-size: 11px; margin-top: 14px; }
+    @media print {
+      body { background: #fff; }
+      .page { margin: 0; width: auto; min-height: auto; border: 0; padding: .35in; }
+      .no-print { display: none; }
+    }
+  </style>
+</head>
+<body>
+  <div class="page">
+    <div class="top">
+      <div>
+        <h1>Safety Performance History Request</h1>
+        <div class="meta">Printable PDF-style report generated from the SaffHire Monitoring database.</div>
+      </div>
+      <img class="logo" src="${LOGO}" alt="SaffHire" />
+    </div>
+
+    <div class="grid">
+      <div class="field"><b>File Number:</b> ${safe(report.fileNumber)}</div>
+      <div class="field"><b>Status:</b> ${safe(report.status)}</div>
+      <div class="field"><b>Applicant Name:</b> ${safe(report.applicantName)}</div>
+      <div class="field"><b>Created:</b> ${safe(report.created)}</div>
+      <div class="field"><b>Current Company:</b> ${safe(company?.name || report.employerName)}</div>
+      <div class="field"><b>Follow Up Date:</b> ${safe(report.followUpDate)}</div>
+    </div>
+
+    <h2>Section 1: Previous Employer</h2>
+    <div class="grid">
+      <div class="field"><b>Employer Name:</b> ${safe(report.prevEmployerName)}</div>
+      <div class="field"><b>Email:</b> ${safe(report.prevEmployerEmail)}</div>
+      <div class="field"><b>Street:</b> ${safe(report.prevEmployerStreet)}</div>
+      <div class="field"><b>Phone:</b> ${safe(report.prevEmployerPhone)}</div>
+      <div class="field"><b>City/State/Zip:</b> ${safe(report.prevEmployerCityStateZip)}</div>
+      <div class="field"><b>Fax:</b> ${safe(report.prevEmployerFax)}</div>
+    </div>
+
+    <h2>Prospective Employer</h2>
+    <div class="grid">
+      <div class="field"><b>Employer Name:</b> ${safe(report.employerName)}</div>
+      <div class="field"><b>Attention:</b> ${safe(report.employerAttention)}</div>
+      <div class="field"><b>Street:</b> ${safe(report.employerStreet)}</div>
+      <div class="field"><b>Phone:</b> ${safe(report.employerPhone)}</div>
+      <div class="field"><b>City/State/Zip:</b> ${safe(report.employerCityStateZip)}</div>
+      <div class="field"><b>Email:</b> ${safe(report.employerEmail)}</div>
+      <div class="field"><b>Confidential Fax:</b> ${safe(report.confFax)}</div>
+      <div class="field"><b>Confidential Email:</b> ${safe(report.confEmail)}</div>
+    </div>
+
+    <h2>Section 2: Employment Verification</h2>
+    <div class="grid">
+      <div class="field"><b>Employed by Company:</b> ${safe(report.employedByCompany)}</div>
+      <div class="field"><b>Job Title:</b> ${safe(report.jobTitle)}</div>
+      <div class="field"><b>From Date:</b> ${safe(report.fromDate)}</div>
+      <div class="field"><b>To Date:</b> ${safe(report.toDate)}</div>
+      <div class="field"><b>Drove Motor Vehicle:</b> ${safe(report.droveMotorVehicle)}</div>
+      <div class="field"><b>Vehicles:</b> ${escapeHtml(vehicleSummary(report))}</div>
+    </div>
+
+    <h2>Section 3: Accident History</h2>
+    <div class="field"><b>Accident History:</b> ${safe(report.accidentHistory)}</div>
+    <table>
+      <thead><tr><th>#</th><th>Date</th><th>Location</th><th>Injuries</th><th>Fatalities</th><th>Hazmat</th></tr></thead>
+      <tbody>
+        ${accidents.map((row) => `<tr><td>${row.number}</td><td>${safe(row.date)}</td><td>${safe(row.location)}</td><td>${safe(row.injuries)}</td><td>${safe(row.fatalities)}</td><td>${safe(row.hazmat)}</td></tr>`).join('')}
+      </tbody>
+    </table>
+    <h3>Other Accidents</h3>
+    <div class="notes">${safe(report.otherAccidents)}</div>
+
+    <h2>Section 4: DOT Drug and Alcohol Questions</h2>
+    <div class="grid">
+      <div class="field"><b>Company Representative:</b> ${safe(report.dotCompany)}</div>
+      <div class="field"><b>Employee:</b> ${safe(report.dotEmployee)}</div>
+      <div class="field"><b>Alcohol Test Positive:</b> ${yesNo(report.dotAlcoholTestPositive)}</div>
+      <div class="field"><b>Drug Test Positive:</b> ${yesNo(report.dotDrugTestPositive)}</div>
+      <div class="field"><b>Refused Test:</b> ${yesNo(report.dotRefusedTest)}</div>
+      <div class="field"><b>Other DOT Violations:</b> ${yesNo(report.dotOtherViolations)}</div>
+    </div>
+
+    <h2>Section 5: Information Received</h2>
+    <div class="grid">
+      <div class="field"><b>Received From:</b> ${safe(report.infoReceivedFrom)}</div>
+      <div class="field"><b>Date Received:</b> ${safe(report.infoReceivedDate)}</div>
+    </div>
+
+    <h2>Internal Notes</h2>
+    <div class="notes">${safe(report.notes)}</div>
+
+    <div class="signature">
+      <div><div class="line"></div> Completed By / Signature</div>
+      <div><div class="line"></div> Date</div>
+    </div>
+
+    <p class="print-note no-print">Use your browser print window and choose “Save as PDF” to save this report.</p>
+  </div>
+</body>
+</html>`;
+}
+
+function printSafetyReport(report, company) {
+  const printWindow = window.open('', '_blank');
+  if (!printWindow) {
+    alert('Popup blocked. Please allow popups for this site and try again.');
+    return;
+  }
+  printWindow.document.open();
+  printWindow.document.write(buildSafetyPrintHtml(report, company));
+  printWindow.document.close();
+  printWindow.focus();
+  setTimeout(() => printWindow.print(), 350);
+}
+
+function buildEmployerEmailDraft(report, company) {
+  const applicant = display(report.applicantName, 'the applicant');
+  const fileNumber = display(report.fileNumber, '');
+  const to = clean(report.prevEmployerEmail);
+  const subject = `Safety Performance Information Request${fileNumber ? ` - File #${fileNumber}` : ''}`;
+  const body = [
+    'Hello,',
+    '',
+    `SaffHire is completing a Safety Performance report for ${display(company?.name || report.employerName, 'our client')}.`,
+    '',
+    `Applicant: ${applicant}`,
+    fileNumber ? `File Number: ${fileNumber}` : '',
+    report.prevEmployerName ? `Previous Employer Listed: ${report.prevEmployerName}` : '',
+    '',
+    'Please reply with the employment verification and safety performance information you are able to provide, including:',
+    '- Employment dates and job title',
+    '- Whether the applicant drove a motor vehicle',
+    '- Vehicle type(s), if applicable',
+    '- Accident history, if applicable',
+    '- DOT drug/alcohol testing information, if applicable',
+    '- Name of the person providing the information and the date completed',
+    '',
+    'Thank you,',
+    'SaffHire Background Screening',
+  ].filter(Boolean).join('\n');
+  return { to, subject, body };
+}
+
+function draftText({ to, subject, body }) {
+  return `To: ${to || '[enter previous employer email]'}\nSubject: ${subject}\n\n${body}`;
+}
+
+async function copyDraftToClipboard(draft) {
+  const text = draftText(draft);
+  try {
+    await navigator.clipboard.writeText(text);
+    alert('Email draft copied to clipboard.');
+  } catch {
+    window.prompt('Copy this email draft:', text);
+  }
+}
+
+async function openEmployerEmail(report, company) {
+  const draft = buildEmployerEmailDraft(report, company);
+  await copyDraftToClipboard(draft);
+  if (!draft.to) {
+    alert('No previous employer email is saved on this report. The draft was copied so you can paste it into an email manually.');
+    return;
+  }
+  const mailto = `mailto:${encodeURIComponent(draft.to)}?subject=${encodeURIComponent(draft.subject)}&body=${encodeURIComponent(draft.body)}`;
+  const mailWindow = window.open(mailto, '_blank', 'noopener,noreferrer');
+  if (!mailWindow) window.location.href = mailto;
 }
 
 function Login({ onAuth }) {
@@ -141,8 +374,8 @@ function Dashboard({ company, applicants, reports, refresh }) {
         <Metric title="Follow Ups" value={reports.filter((r) => r.followUpDate).length} icon={Activity} />
       </div>
       <section className="card wide-card">
-        <h2>Phase 3 Clean Build</h2>
-        <p>This build adds admin settings, users, notification emails, companies, and CSV import.</p>
+        <h2>Phase 4 Build</h2>
+        <p>This build adds Safety Performance print/PDF output and an employer email draft workflow while keeping data in Supabase only.</p>
         <div className="status-list">{statusCounts.map(([label, count]) => <React.Fragment key={label}><span>{label}</span><b>{count}</b></React.Fragment>)}</div>
       </section>
     </>
@@ -221,7 +454,39 @@ function Safety({ reports, setReports, company, refresh, companyId }) {
     <>
       <Header title="Safety Performance Reports" subtitle={`${company?.name || 'Driver Pipeline'} · ${filtered.length} reports`} action={refresh} actions={<button className="primary-inline" onClick={() => { setEditing(defaultReport(company)); setMode('edit'); }}><Plus size={16} /> New Report</button>} />
       <section className="card toolbar"><div className="search-box"><Search size={17} /><input placeholder="Search file #, applicant, employer, notes..." value={query} onChange={(e) => setQuery(e.target.value)} /></div><select value={status} onChange={(e) => setStatus(e.target.value)}><option>All</option>{STATUSES.map((s) => <option key={s}>{s}</option>)}</select></section>
-      <section className="card table-card"><table><thead><tr><th>File #</th><th>Applicant</th><th>Created</th><th>Status</th><th>Follow Up</th><th>Previous Employer</th><th>Notes</th><th></th></tr></thead><tbody>{filtered.map((r) => <tr key={r.id}><td><b>{r.fileNumber}</b></td><td>{r.applicantName}</td><td>{r.created}</td><td><span className={`status-chip ${r.status?.replaceAll(' ', '-').toLowerCase()}`}>{r.status}</span></td><td>{r.followUpDate}</td><td>{r.prevEmployerName}</td><td className="notes-cell">{r.notes}</td><td><div className="row-actions"><button className="icon-btn" onClick={() => { setEditing(r); setMode('edit'); }}><Pencil size={15} /></button><button className="icon-btn danger" onClick={() => deleteReport(r)}><Trash2 size={15} /></button></div></td></tr>)}</tbody></table>{!filtered.length ? <div className="empty">No Safety Performance reports found.</div> : null}</section>
+      <section className="card table-card">
+        <table>
+          <thead><tr><th>File #</th><th>Applicant</th><th>Created</th><th>Status</th><th>Follow Up</th><th>Previous Employer</th><th>Notes</th><th>Phase 4 Actions</th><th></th></tr></thead>
+          <tbody>{filtered.map((r) => {
+            const draft = buildEmployerEmailDraft(r, company);
+            return (
+              <tr key={r.id}>
+                <td><b>{r.fileNumber}</b></td>
+                <td>{r.applicantName}</td>
+                <td>{r.created}</td>
+                <td><span className={`status-chip ${r.status?.replaceAll(' ', '-').toLowerCase()}`}>{r.status}</span></td>
+                <td>{r.followUpDate}</td>
+                <td>{r.prevEmployerName}<small>{r.prevEmployerEmail || 'No email saved'}</small></td>
+                <td className="notes-cell">{r.notes}</td>
+                <td>
+                  <div className="row-actions action-stack">
+                    <button className="mini-action" onClick={() => printSafetyReport(r, company)} title="Open printable report and save as PDF"><Printer size={14} /> PDF</button>
+                    <button className="mini-action" onClick={() => openEmployerEmail(r, company)} title="Copy draft and open email client"><Mail size={14} /> Email</button>
+                    <button className="mini-action" onClick={() => copyDraftToClipboard(draft)} title="Copy employer email draft"><Copy size={14} /> Copy</button>
+                  </div>
+                </td>
+                <td><div className="row-actions"><button className="icon-btn" onClick={() => { setEditing(r); setMode('edit'); }}><Pencil size={15} /></button><button className="icon-btn danger" onClick={() => deleteReport(r)}><Trash2 size={15} /></button></div></td>
+              </tr>
+            );
+          })}</tbody>
+        </table>
+        {!filtered.length ? <div className="empty">No Safety Performance reports found.</div> : null}
+      </section>
+      <section className="card wide-card helper-card">
+        <h2><Printer size={18} /> Phase 4 Safety Performance Workflow</h2>
+        <p><b>PDF</b> opens a printable report from the Supabase record. Choose “Save as PDF” in the browser print window.</p>
+        <p><b>Email</b> copies a draft, then opens your email client when the previous employer email is saved. Nothing is sent automatically.</p>
+      </section>
     </>
   );
 }
