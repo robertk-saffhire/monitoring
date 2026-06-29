@@ -135,6 +135,28 @@ function parseDateCandidate(raw: string) {
   return '';
 }
 
+function findTazWorksMedicalCertificateExpiration(text: string) {
+  const raw = String(text || '');
+  const normalized = raw.replace(/\r/g, '\n');
+
+  const sectionMatch =
+    normalized.match(/medical\s+certificate[\s\S]{0,1800}?(?:self\s+certification|restrictions|examiner|$)/i) ||
+    normalized.match(/medical\s+certificate[\s\S]{0,1800}/i);
+
+  const section = sectionMatch ? sectionMatch[0] : normalized;
+
+  const exact =
+    section.match(/expiration\s+date\s*[:\-]?\s*(\d{4}[\/\-]\d{1,2}[\/\-]\d{1,2}|\d{1,2}[\/\-]\d{1,2}[\/\-]\d{2,4})/i) ||
+    section.match(/expires?\s*[:\-]?\s*(\d{4}[\/\-]\d{1,2}[\/\-]\d{1,2}|\d{1,2}[\/\-]\d{1,2}[\/\-]\d{2,4})/i);
+
+  if (exact) {
+    const iso = parseDateCandidate(exact[1]);
+    if (iso) return { date: iso, rawMatch: exact[1], reason: `TazWorks Medical Certificate Expiration Date matched ${exact[1]}` };
+  }
+
+  return null;
+}
+
 function dateScore(iso: string) {
   if (!iso) return -999;
   const d = new Date(`${iso}T00:00:00`);
@@ -158,11 +180,9 @@ function findDateNear(text: string, keywords: RegExp, negative?: RegExp) {
     const rawDate = match[1];
     const iso = parseDateCandidate(rawDate);
     if (!iso) continue;
-
     const start = Math.max(0, match.index - 180);
     const end = Math.min(clean.length, match.index + rawDate.length + 180);
     const context = clean.slice(start, end).toLowerCase();
-
     let score = dateScore(iso);
     if (keywords.test(context)) score += 8;
     if (/medical/.test(context)) score += 5;
@@ -170,49 +190,12 @@ function findDateNear(text: string, keywords: RegExp, negative?: RegExp) {
     if (/expir|expires|expiration|valid through|valid until|qualified until|certificate expiration|card expiration/.test(context)) score += 8;
     if (negative && negative.test(context)) score -= 6;
     if (/date of birth|birth|dob|ssn|social|issued|order date|report date|request date|signature|certified by|completed/.test(context)) score -= 5;
-
     candidates.push({ iso, rawDate, score, context: clean.slice(start, end) });
   }
 
   candidates.sort((a, b) => b.score - a.score);
   return candidates[0]?.score >= 8 ? candidates[0] : null;
 }
-
-
-function findTazWorksMedicalCertificateExpiration(text: string) {
-  const raw = String(text || '');
-  const normalized = raw.replace(/\r/g, '\n');
-
-  // TazWorks section example:
-  // Medical Certificate
-  // Description: ...
-  // Status: CERTIFIED
-  // Issue Date: 2026/03/26
-  // Expiration Date: 2028/03/26
-  const sectionMatch =
-    normalized.match(/medical\s+certificate[\s\S]{0,1800}?(?:self\s+certification|restrictions|examiner|$)/i) ||
-    normalized.match(/medical\s+certificate[\s\S]{0,1800}/i);
-
-  const section = sectionMatch ? sectionMatch[0] : normalized;
-
-  const exact =
-    section.match(/expiration\s+date\s*[:\-]?\s*(\d{4}[\/\-]\d{1,2}[\/\-]\d{1,2}|\d{1,2}[\/\-]\d{1,2}[\/\-]\d{2,4})/i) ||
-    section.match(/expires?\s*[:\-]?\s*(\d{4}[\/\-]\d{1,2}[\/\-]\d{1,2}|\d{1,2}[\/\-]\d{1,2}[\/\-]\d{2,4})/i);
-
-  if (exact) {
-    const iso = parseDateCandidate(exact[1]);
-    if (iso) {
-      return {
-        date: iso,
-        rawMatch: exact[1],
-        reason: `TazWorks Medical Certificate Expiration Date matched ${exact[1]}`
-      };
-    }
-  }
-
-  return null;
-}
-
 
 function findMedicalExpiration(text: string) {
   const tazWorksExact = findTazWorksMedicalCertificateExpiration(text);
@@ -239,8 +222,6 @@ function findOrderDate(text: string, fallbackIso: string) {
 
 function findFileNumber(text: string, fileName: string) {
   const name = String(fileName || '');
-
-  // TazWorks example: report_6340.pdf
   const taz = name.match(/report[_\-\s]*(\d{3,10})\.pdf$/i);
   if (taz) return taz[1];
 
@@ -340,15 +321,16 @@ async function findApplicant(companyId: number, fileNumber: string, applicantNam
 
 async function createApplicant(companyId: number, data: any) {
   const fileNumber = String(data.fileNumber || '').trim();
-  const applicantName = String(data.applicantName || '').trim();
+  let applicantName = String(data.applicantName || '').trim();
+
   if (!fileNumber) throw new Error('Cannot create Monitoring record without a file number');
-  if (!applicantName) throw new Error('Cannot create Monitoring record without an applicant name');
+  if (!applicantName) applicantName = 'REVIEW NAME NEEDED';
 
   const r = await query(
     `insert into applicants ("companyId","fileNumber","applicantName","orderDate","monitorStatus","mvrStatus","medExpire","medExpireOverridden",notes)
      values ($1,$2,$3,$4,'On','',$5,true,$6)
      on conflict ("fileNumber","companyId") do update set
-       "applicantName"=excluded."applicantName",
+       "applicantName"=case when applicants."applicantName" is null or applicants."applicantName"='' then excluded."applicantName" else applicants."applicantName" end,
        "orderDate"=coalesce(nullif(applicants."orderDate",''), excluded."orderDate"),
        "medExpire"=excluded."medExpire",
        "medExpireOverridden"=true,
@@ -361,7 +343,9 @@ async function createApplicant(companyId: number, data: any) {
       applicantName,
       data.orderDate || new Date().toISOString().slice(0, 10),
       data.medExpire || null,
-      `Monitoring record created/updated from uploaded PDF ${data.fileName} on ${new Date().toISOString().slice(0, 10)}.`
+      applicantName === 'REVIEW NAME NEEDED'
+        ? `Monitoring record created from uploaded PDF ${data.fileName} on ${new Date().toISOString().slice(0, 10)}. Applicant name was not found in PDF text and needs review.`
+        : `Monitoring record created/updated from uploaded PDF ${data.fileName} on ${new Date().toISOString().slice(0, 10)}.`
     ]
   );
   return r.rows[0];
@@ -469,10 +453,10 @@ async function handleScan(req: any, res: any, user: any) {
       let applicant = await findApplicant(companyId, extractedFileNumber, extractedApplicantName);
       let wasCreated = false;
 
-      if (!applicant && createMissing && extractedFileNumber && extractedApplicantName) {
+      if (!applicant && createMissing && extractedFileNumber) {
         applicant = await createApplicant(companyId, {
           fileNumber: extractedFileNumber,
-          applicantName: extractedApplicantName,
+          applicantName: extractedApplicantName || '',
           orderDate,
           medExpire: exp.date,
           fileName: upload.fileName
@@ -483,7 +467,7 @@ async function handleScan(req: any, res: any, user: any) {
       if (!applicant) {
         summary.noMatch++;
         const reason = createMissing
-          ? 'Expiration found but no Monitoring match and could not create because applicant name was not found in PDF text'
+          ? 'Expiration found but no Monitoring match and file number was not found, so a review record could not be created'
           : `Expiration found for file #${extractedFileNumber || 'unknown'} but no matching Monitoring record was found`;
         await query(
           `update medical_pdf_uploads
