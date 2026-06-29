@@ -17,7 +17,8 @@
           url.startsWith('/api/') &&
           !url.startsWith('/api/index') &&
           !url.startsWith('/api/safety-response-link') &&
-          !url.startsWith('/api/safety-response')
+          !url.startsWith('/api/safety-response') &&
+          !url.startsWith('/api/fmcsa-packet')
         ) {
           const parts = url.split('?');
           const routePath = parts[0].replace(/^\/api\/?/, '');
@@ -36,5 +37,6 @@
     <script src="/phase5a.js"></script>
     <script src="/phase6.js"></script>
     <script src="/phase7.js"></script>
+    <script src="/phase7a-fmcsa.js"></script>
   </body>
 </html>
