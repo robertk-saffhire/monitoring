@@ -98,8 +98,6 @@ async function ensureTable() {
       "scannedAt" timestamptz
     )
   `);
-  await query('create index if not exists medical_pdf_uploads_company_idx on medical_pdf_uploads ("companyId")');
-  await query('create index if not exists medical_pdf_uploads_status_idx on medical_pdf_uploads ("scanStatus")');
 }
 
 function normalizeName(value: string) {
@@ -107,7 +105,7 @@ function normalizeName(value: string) {
 }
 
 function parseDateCandidate(raw: string) {
-  const value = String(raw || '').trim();
+  const value = String(raw || '').trim().replace(',', '');
   let m = value.match(/^(\d{1,2})[\/\-](\d{1,2})[\/\-](\d{2,4})$/);
   if (m) {
     const year = m[3].length === 2 ? Number(`20${m[3]}`) : Number(m[3]);
@@ -117,15 +115,12 @@ function parseDateCandidate(raw: string) {
       return `${year}-${String(month).padStart(2, '0')}-${String(day).padStart(2, '0')}`;
     }
   }
-
   m = value.match(/^(\d{4})-(\d{1,2})-(\d{1,2})$/);
   if (m) return `${m[1]}-${String(Number(m[2])).padStart(2, '0')}-${String(Number(m[3])).padStart(2, '0')}`;
-
   const d = new Date(value);
   if (!Number.isNaN(d.getTime()) && d.getFullYear() >= 2000 && d.getFullYear() <= 2100) {
     return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
   }
-
   return '';
 }
 
@@ -134,7 +129,7 @@ function dateScore(iso: string) {
   const d = new Date(`${iso}T00:00:00`);
   if (Number.isNaN(d.getTime())) return -999;
   const now = new Date();
-  const days = Math.round((d.getTime() - now.getTime()) / (24 * 60 * 60 * 1000));
+  const days = Math.round((d.getTime() - now.getTime()) / 86400000);
   if (days < -365) return -20;
   if (days < 0) return 1;
   if (days <= 365 * 3) return 4;
@@ -142,34 +137,44 @@ function dateScore(iso: string) {
   return -2;
 }
 
-function findMedicalExpiration(text: string) {
+function findDateNear(text: string, keywords: RegExp, negative?: RegExp) {
   const clean = String(text || '').replace(/\s+/g, ' ');
   const dateRegex = /(\d{1,2}[\/\-]\d{1,2}[\/\-]\d{2,4}|\d{4}-\d{1,2}-\d{1,2}|(?:Jan|January|Feb|February|Mar|March|Apr|April|May|Jun|June|Jul|July|Aug|August|Sep|Sept|September|Oct|October|Nov|November|Dec|December)\s+\d{1,2},?\s+\d{4})/gi;
   const candidates: any[] = [];
   let match: RegExpExecArray | null;
-
   while ((match = dateRegex.exec(clean))) {
     const rawDate = match[1];
-    const iso = parseDateCandidate(rawDate.replace(',', ''));
+    const iso = parseDateCandidate(rawDate);
     if (!iso) continue;
-
     const start = Math.max(0, match.index - 140);
     const end = Math.min(clean.length, match.index + rawDate.length + 140);
     const context = clean.slice(start, end).toLowerCase();
-
     let score = dateScore(iso);
-    if (/medical/.test(context)) score += 3;
-    if (/certificate|certification|examiner|dot|card/.test(context)) score += 2;
-    if (/expir|expires|valid through|valid until|qualified until/.test(context)) score += 5;
-    if (/birth|dob|date of birth|issued|exam date|examination date|signature|certified by/.test(context)) score -= 4;
-
-    candidates.push({ iso, rawDate, score, context: clean.slice(start, end) });
+    if (keywords.test(context)) score += 6;
+    if (negative && negative.test(context)) score -= 5;
+    candidates.push({ iso, rawDate, score, context });
   }
-
   candidates.sort((a, b) => b.score - a.score);
-  const best = candidates[0];
-  if (!best || best.score < 5) return { date: '', rawMatch: '', reason: 'No high-confidence medical expiration date found' };
+  return candidates[0]?.score >= 5 ? candidates[0] : null;
+}
+
+function findMedicalExpiration(text: string) {
+  const best = findDateNear(
+    text,
+    /medical|certificate|certification|examiner|dot|card|expir|expires|valid through|valid until|qualified until/i,
+    /birth|dob|date of birth|issued|signature|certified by/i
+  );
+  if (!best) return { date: '', rawMatch: '', reason: 'No high-confidence medical expiration date found' };
   return { date: best.iso, rawMatch: best.rawDate, reason: `Matched ${best.rawDate}` };
+}
+
+function findOrderDate(text: string, fallbackIso: string) {
+  const best = findDateNear(
+    text,
+    /order date|ordered|request date|created|application date|date ordered|report date/i,
+    /expiration|expires|valid until|valid through|medical|date of birth|dob/i
+  );
+  return best?.iso || fallbackIso || new Date().toISOString().slice(0, 10);
 }
 
 function findFileNumber(text: string, fileName: string) {
@@ -177,29 +182,47 @@ function findFileNumber(text: string, fileName: string) {
   const patterns = [
     /file\s*(?:number|#|no\.?)\s*[:#]?\s*([A-Z0-9\-_.]{3,20})/i,
     /order\s*(?:number|#|no\.?)\s*[:#]?\s*([A-Z0-9\-_.]{3,20})/i,
+    /candidate\s*(?:id|#)\s*[:#]?\s*([A-Z0-9\-_.]{3,20})/i
   ];
   for (const p of patterns) {
     const m = combined.match(p);
     if (m) return m[1];
   }
-
   const filenameMatch = String(fileName || '').match(/(?:^|[^0-9])(\d{4,8})(?:[^0-9]|$)/);
   if (filenameMatch) return filenameMatch[1];
-
   return '';
 }
 
-function findApplicantName(text: string) {
+function cleanupName(name: string) {
+  return String(name || '')
+    .replace(/\s{2,}/g, ' ')
+    .replace(/\b(DOB|Date|SSN|Social|Phone|File|Order)\b.*$/i, '')
+    .trim()
+    .toUpperCase();
+}
+
+function findApplicantName(text: string, fileName?: string) {
   const clean = String(text || '').replace(/\s+/g, ' ');
   const patterns = [
-    /driver\s+name\s*[:\-]?\s*([A-Z][A-Za-z' .,\-]{3,80})/i,
     /applicant\s+name\s*[:\-]?\s*([A-Z][A-Za-z' .,\-]{3,80})/i,
+    /candidate\s+name\s*[:\-]?\s*([A-Z][A-Za-z' .,\-]{3,80})/i,
+    /driver\s+name\s*[:\-]?\s*([A-Z][A-Za-z' .,\-]{3,80})/i,
     /name\s+of\s+driver\s*[:\-]?\s*([A-Z][A-Za-z' .,\-]{3,80})/i,
+    /employee\s+name\s*[:\-]?\s*([A-Z][A-Za-z' .,\-]{3,80})/i
   ];
   for (const p of patterns) {
     const m = clean.match(p);
-    if (m) return m[1].trim().replace(/\s{2,}/g, ' ');
+    if (m) return cleanupName(m[1]);
   }
+
+  const fromFile = String(fileName || '')
+    .replace(/\.pdf$/i, '')
+    .replace(/\d+/g, ' ')
+    .replace(/medical|med|card|certificate|dot|mvr|report/gi, ' ')
+    .replace(/[_\-]+/g, ' ')
+    .replace(/\s{2,}/g, ' ')
+    .trim();
+  if (fromFile && /[a-z]/i.test(fromFile) && fromFile.length >= 5) return cleanupName(fromFile);
   return '';
 }
 
@@ -215,9 +238,8 @@ async function findApplicant(companyId: number, fileNumber: string, applicantNam
     const byFile = await query('select id, "fileNumber", "applicantName" from applicants where "companyId"=$1 and "fileNumber"=$2 limit 1', [companyId, fileNumber]);
     if (byFile.rows[0]) return byFile.rows[0];
   }
-
   if (applicantName) {
-    const rows = await query('select id, "fileNumber", "applicantName" from applicants where "companyId"=$1 limit 2000', [companyId]);
+    const rows = await query('select id, "fileNumber", "applicantName" from applicants where "companyId"=$1 limit 3000', [companyId]);
     const target = normalizeName(applicantName);
     const match = rows.rows.find((row: any) => {
       const existing = normalizeName(row.applicantName || '');
@@ -225,8 +247,36 @@ async function findApplicant(companyId: number, fileNumber: string, applicantNam
     });
     if (match) return match;
   }
-
   return null;
+}
+
+async function createApplicant(companyId: number, data: any) {
+  const fileNumber = String(data.fileNumber || '').trim();
+  const applicantName = String(data.applicantName || '').trim();
+  if (!fileNumber) throw new Error('Cannot create Monitoring record without a file number');
+  if (!applicantName) throw new Error('Cannot create Monitoring record without an applicant name');
+
+  const r = await query(
+    `insert into applicants ("companyId","fileNumber","applicantName","orderDate","monitorStatus","mvrStatus","medExpire","medExpireOverridden",notes)
+     values ($1,$2,$3,$4,'On','',$5,true,$6)
+     on conflict ("fileNumber","companyId") do update set
+       "applicantName"=excluded."applicantName",
+       "orderDate"=coalesce(nullif(applicants."orderDate",''), excluded."orderDate"),
+       "medExpire"=excluded."medExpire",
+       "medExpireOverridden"=true,
+       notes=trim(both E'\n' from concat(coalesce(applicants.notes,''), E'\n', excluded.notes)),
+       "updatedAt"=now()
+     returning id, "fileNumber", "applicantName"`,
+    [
+      companyId,
+      fileNumber,
+      applicantName,
+      data.orderDate || new Date().toISOString().slice(0, 10),
+      data.medExpire || null,
+      `Monitoring record created/updated from uploaded PDF ${data.fileName} on ${new Date().toISOString().slice(0, 10)}.`
+    ]
+  );
+  return r.rows[0];
 }
 
 async function listUploads(companyId: number) {
@@ -247,7 +297,6 @@ async function handleUpload(req: any, res: any, user: any) {
   const companyId = Number(body.companyId || user.companyId || 1);
   const files = Array.isArray(body.files) ? body.files : [];
   if (!files.length) return json(res, 400, { status: 'error', message: 'No PDF files were received' });
-
   let uploaded = 0;
   const rows: any[] = [];
   for (const file of files) {
@@ -255,13 +304,11 @@ async function handleUpload(req: any, res: any, user: any) {
     const mimeType = String(file.mimeType || 'application/pdf').trim();
     const base64 = String(file.base64 || '').split(',').pop() || '';
     const buffer = Buffer.from(base64, 'base64');
-
     if (!buffer.length) continue;
     if (buffer.length > 6 * 1024 * 1024) {
       rows.push({ fileName, status: 'skipped', message: 'File is larger than 6MB' });
       continue;
     }
-
     const r = await query(
       `insert into medical_pdf_uploads ("companyId","fileName","mimeType","fileSize","pdfData","uploadedBy","scanStatus")
        values ($1,$2,$3,$4,$5,$6,'uploaded')
@@ -271,7 +318,6 @@ async function handleUpload(req: any, res: any, user: any) {
     uploaded += 1;
     rows.push(r.rows[0]);
   }
-
   return json(res, 200, { status: 'ok', uploaded, rows, uploads: await listUploads(companyId) });
 }
 
@@ -279,18 +325,13 @@ async function handleScan(req: any, res: any, user: any) {
   const body = await readBody(req);
   const companyId = Number(body.companyId || user.companyId || 1);
   const scanAll = Boolean(body.scanAll);
+  const createMissing = Boolean(body.createMissing);
   const filter = scanAll ? '' : `and "scanStatus" in ('uploaded','no_match','no_date','error')`;
 
-  const uploads = await query(
-    `select id, "fileName", "pdfData" from medical_pdf_uploads where "companyId"=$1 ${filter} order by id asc limit 100`,
-    [companyId]
-  );
+  const uploads = await query(`select id, "fileName", "pdfData", "uploadedAt" from medical_pdf_uploads where "companyId"=$1 ${filter} order by id asc limit 100`, [companyId]);
 
+  const summary = { scanned: uploads.rows.length, updated: 0, created: 0, noMatch: 0, noDate: 0, errors: 0 };
   const results: any[] = [];
-  let updated = 0;
-  let noMatch = 0;
-  let noDate = 0;
-  let errors = 0;
 
   for (const upload of uploads.rows) {
     try {
@@ -298,73 +339,73 @@ async function handleScan(req: any, res: any, user: any) {
       const text = await extractPdfText(buffer);
       const exp = findMedicalExpiration(text);
       const extractedFileNumber = findFileNumber(text, upload.fileName);
-      const extractedApplicantName = findApplicantName(text);
+      const extractedApplicantName = findApplicantName(text, upload.fileName);
+      const orderDate = findOrderDate(text, new Date(upload.uploadedAt || Date.now()).toISOString().slice(0, 10));
 
       if (!exp.date) {
-        noDate += 1;
+        summary.noDate++;
         await query(
-          `update medical_pdf_uploads
-           set "extractedFileNumber"=$1, "extractedApplicantName"=$2, "scanStatus"='no_date',
-               "scanMessage"=$3, "scannedAt"=now()
-           where id=$4`,
+          `update medical_pdf_uploads set "extractedFileNumber"=$1, "extractedApplicantName"=$2, "scanStatus"='no_date',
+           "scanMessage"=$3, "scannedAt"=now() where id=$4`,
           [extractedFileNumber || null, extractedApplicantName || null, exp.reason, upload.id]
         );
-        results.push({ id: upload.id, fileName: upload.fileName, status: 'no_date', message: exp.reason });
+        results.push({ id: upload.id, fileName: upload.fileName, status: 'no_date', message: exp.reason, fileNumber: extractedFileNumber, applicantName: extractedApplicantName, orderDate });
         continue;
       }
 
-      const applicant = await findApplicant(companyId, extractedFileNumber, extractedApplicantName);
+      let applicant = await findApplicant(companyId, extractedFileNumber, extractedApplicantName);
+      let wasCreated = false;
+
+      if (!applicant && createMissing && extractedFileNumber && extractedApplicantName) {
+        applicant = await createApplicant(companyId, {
+          fileNumber: extractedFileNumber,
+          applicantName: extractedApplicantName,
+          orderDate,
+          medExpire: exp.date,
+          fileName: upload.fileName
+        });
+        wasCreated = true;
+      }
+
       if (!applicant) {
-        noMatch += 1;
+        summary.noMatch++;
         await query(
-          `update medical_pdf_uploads
-           set "extractedExpirationDate"=$1, "extractedFileNumber"=$2, "extractedApplicantName"=$3, "scanStatus"='no_match',
-               "scanMessage"=$4, "scannedAt"=now()
-           where id=$5`,
-          [exp.date, extractedFileNumber || null, extractedApplicantName || null, 'Expiration found but no matching applicant/file number was found', upload.id]
+          `update medical_pdf_uploads set "extractedExpirationDate"=$1, "extractedFileNumber"=$2, "extractedApplicantName"=$3,
+           "scanStatus"='no_match', "scanMessage"=$4, "scannedAt"=now() where id=$5`,
+          [exp.date, extractedFileNumber || null, extractedApplicantName || null, createMissing ? 'Expiration found but could not create: file number or name missing' : 'Expiration found but no matching applicant was found', upload.id]
         );
-        results.push({ id: upload.id, fileName: upload.fileName, status: 'no_match', expirationDate: exp.date, fileNumber: extractedFileNumber, applicantName: extractedApplicantName, message: 'No matching applicant' });
+        results.push({ id: upload.id, fileName: upload.fileName, status: 'no_match', expirationDate: exp.date, fileNumber: extractedFileNumber, applicantName: extractedApplicantName, orderDate, message: 'No matching applicant' });
         continue;
       }
 
-      const noteLine = `Medical expiration updated from uploaded PDF ${upload.fileName} on ${new Date().toISOString().slice(0, 10)}.`;
+      if (!wasCreated) {
+        const noteLine = `Medical expiration updated from uploaded PDF ${upload.fileName} on ${new Date().toISOString().slice(0, 10)}.`;
+        await query(
+          `update applicants set "medExpire"=$1, "medExpireOverridden"=true, notes=trim(both E'\n' from concat(coalesce(notes,''), E'\n', $2)), "updatedAt"=now()
+           where id=$3 and "companyId"=$4`,
+          [exp.date, noteLine, applicant.id, companyId]
+        );
+        summary.updated++;
+      } else {
+        summary.created++;
+      }
+
+      const scanStatus = wasCreated ? 'created' : 'updated';
       await query(
-        `update applicants
-         set "medExpire"=$1,
-             "medExpireOverridden"=true,
-             notes=trim(both E'\n' from concat(coalesce(notes,''), E'\n', $2)),
-             "updatedAt"=now()
-         where id=$3 and "companyId"=$4`,
-        [exp.date, noteLine, applicant.id, companyId]
+        `update medical_pdf_uploads set "extractedExpirationDate"=$1, "extractedFileNumber"=$2, "extractedApplicantName"=$3,
+         "matchedApplicantId"=$4, "scanStatus"=$5, "scanMessage"=$6, "scannedAt"=now() where id=$7`,
+        [exp.date, extractedFileNumber || applicant.fileNumber, extractedApplicantName || applicant.applicantName, applicant.id, scanStatus, `${wasCreated ? 'Created' : 'Updated'} ${applicant.applicantName} (${applicant.fileNumber}) to ${exp.date}`, upload.id]
       );
 
-      await query(
-        `update medical_pdf_uploads
-         set "extractedExpirationDate"=$1, "extractedFileNumber"=$2, "extractedApplicantName"=$3,
-             "matchedApplicantId"=$4, "scanStatus"='updated',
-             "scanMessage"=$5, "scannedAt"=now()
-         where id=$6`,
-        [exp.date, extractedFileNumber || applicant.fileNumber, extractedApplicantName || applicant.applicantName, applicant.id, `Updated ${applicant.applicantName} (${applicant.fileNumber}) to ${exp.date}`, upload.id]
-      );
-
-      updated += 1;
-      results.push({ id: upload.id, fileName: upload.fileName, status: 'updated', expirationDate: exp.date, fileNumber: applicant.fileNumber, applicantName: applicant.applicantName });
+      results.push({ id: upload.id, fileName: upload.fileName, status: scanStatus, expirationDate: exp.date, fileNumber: applicant.fileNumber, applicantName: applicant.applicantName, orderDate });
     } catch (error: any) {
-      errors += 1;
-      await query(
-        `update medical_pdf_uploads set "scanStatus"='error', "scanMessage"=$1, "scannedAt"=now() where id=$2`,
-        [error?.message || 'PDF scan failed', upload.id]
-      );
+      summary.errors++;
+      await query(`update medical_pdf_uploads set "scanStatus"='error', "scanMessage"=$1, "scannedAt"=now() where id=$2`, [error?.message || 'PDF scan failed', upload.id]);
       results.push({ id: upload.id, fileName: upload.fileName, status: 'error', message: error?.message || 'PDF scan failed' });
     }
   }
 
-  return json(res, 200, {
-    status: 'ok',
-    summary: { scanned: uploads.rows.length, updated, noMatch, noDate, errors },
-    results,
-    uploads: await listUploads(companyId)
-  });
+  return json(res, 200, { status: 'ok', summary, results, uploads: await listUploads(companyId) });
 }
 
 export default async function handler(req: any, res: any) {
