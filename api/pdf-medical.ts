@@ -207,7 +207,7 @@ function findMedicalExpiration(text: string) {
     /birth|dob|date of birth|ssn|social|issued|order date|report date|request date|signature|certified by/i
   );
 
-  if (!best) return { date: '', rawMatch: '', reason: 'No high-confidence medical expiration date found. Looked for Medical Certificate > Expiration Date. If the PDF is image-only, OCR will be needed.' };
+  if (!best) return { date: '', rawMatch: '', reason: 'No Medical Certificate Expiration Date found. Med Expire will be left blank.' };
   return { date: best.iso, rawMatch: best.rawDate, reason: `Matched ${best.rawDate}` };
 }
 
@@ -247,13 +247,37 @@ function findFileNumber(text: string, fileName: string) {
 function cleanupName(name: string) {
   return String(name || '')
     .replace(/\s{2,}/g, ' ')
-    .replace(/\b(DOB|Date|SSN|Social|Phone|File|Order|Report)\b.*$/i, '')
+    .replace(/\b(SSN|DOB|Date|DRIVERS LICENSE|DRIVER LICENSE|PHONE NUMBER|E-MAIL|EMAIL|ADDRESS|CITY|STATE|ZIP|File|Order|Report)\b.*$/i, '')
     .trim()
     .toUpperCase();
 }
 
 function findApplicantName(text: string, fileName?: string) {
-  const clean = String(text || '').replace(/\s+/g, ' ');
+  const raw = String(text || '').replace(/\r/g, '\n');
+  const clean = raw.replace(/\s+/g, ' ');
+
+  // TazWorks Application Information example:
+  // APPLICANT HARRISON JR, DOY ALPHONZO   SSN XXX-XX-4182   DOB ...
+  const applicantLine = clean.match(/\bAPPLICANT\s+(.+?)(?:\s+SSN\b|\s+DOB\b|\s+DRIVERS?\s+LICENSE\b|\s+PHONE\s+NUMBER\b|\s+E-?MAIL\b|\s+ADDRESS\b|$)/i);
+  if (applicantLine && applicantLine[1]) {
+    const name = cleanupName(applicantLine[1]);
+    if (name && name.length >= 3) return name;
+  }
+
+  // If APPLICANT is on one line and value is on the next line.
+  const lines = raw.split(/\n+/).map((line) => line.trim()).filter(Boolean);
+  for (let i = 0; i < lines.length; i++) {
+    if (/^APPLICANT$/i.test(lines[i]) && lines[i + 1]) {
+      const name = cleanupName(lines[i + 1]);
+      if (name && name.length >= 3) return name;
+    }
+    const sameLine = lines[i].match(/^APPLICANT\s+(.+)$/i);
+    if (sameLine) {
+      const name = cleanupName(sameLine[1]);
+      if (name && name.length >= 3) return name;
+    }
+  }
+
   const patterns = [
     /applicant\s+name\s*[:\-]?\s*([A-Z][A-Za-z' .,\-]{3,80})/i,
     /candidate\s+name\s*[:\-]?\s*([A-Z][A-Za-z' .,\-]{3,80})/i,
@@ -328,13 +352,16 @@ async function createApplicant(companyId: number, data: any) {
 
   const r = await query(
     `insert into applicants ("companyId","fileNumber","applicantName","orderDate","monitorStatus","mvrStatus","medExpire","medExpireOverridden",notes)
-     values ($1,$2,$3,$4,'On','',$5,true,$6)
+     values ($1,$2,$3,$4,'On','',$5,$6,'')
      on conflict ("fileNumber","companyId") do update set
-       "applicantName"=case when applicants."applicantName" is null or applicants."applicantName"='' then excluded."applicantName" else applicants."applicantName" end,
+       "applicantName"=case
+          when applicants."applicantName" is null or applicants."applicantName"='' or applicants."applicantName"='REVIEW NAME NEEDED'
+          then excluded."applicantName"
+          else applicants."applicantName"
+        end,
        "orderDate"=coalesce(nullif(applicants."orderDate",''), excluded."orderDate"),
-       "medExpire"=excluded."medExpire",
-       "medExpireOverridden"=true,
-       notes=trim(both E'\n' from concat(coalesce(applicants.notes,''), E'\n', excluded.notes)),
+       "medExpire"=coalesce(excluded."medExpire", applicants."medExpire"),
+       "medExpireOverridden"=case when excluded."medExpire" is not null then true else applicants."medExpireOverridden" end,
        "updatedAt"=now()
      returning id, "fileNumber", "applicantName"`,
     [
@@ -343,9 +370,7 @@ async function createApplicant(companyId: number, data: any) {
       applicantName,
       data.orderDate || new Date().toISOString().slice(0, 10),
       data.medExpire || null,
-      applicantName === 'REVIEW NAME NEEDED'
-        ? `Monitoring record created from uploaded PDF ${data.fileName} on ${new Date().toISOString().slice(0, 10)}. Applicant name was not found in PDF text and needs review.`
-        : `Monitoring record created/updated from uploaded PDF ${data.fileName} on ${new Date().toISOString().slice(0, 10)}.`
+      Boolean(data.medExpire)
     ]
   );
   return r.rows[0];
@@ -405,7 +430,7 @@ async function handleScan(req: any, res: any, user: any) {
   const companyId = Number(body.companyId || user.companyId || 1);
   const scanAll = Boolean(body.scanAll);
   const createMissing = Boolean(body.createMissing);
-  const filter = scanAll ? '' : `and "scanStatus" in ('uploaded','no_match','no_date','error')`;
+  const filter = scanAll ? '' : `and "scanStatus" in ('uploaded','no_match','no_date','error','no_text')`;
 
   const uploads = await query(
     `select id, "fileName", "pdfData", "uploadedAt" from medical_pdf_uploads where "companyId"=$1 ${filter} order by id asc limit 100`,
@@ -425,7 +450,7 @@ async function handleScan(req: any, res: any, user: any) {
       const exp = findMedicalExpiration(pdfText);
 
       if (!pdfText || pdfText.trim().length < 20) {
-        summary.noDate++;
+        summary.noMatch++;
         await query(
           `update medical_pdf_uploads
            set "extractedFileNumber"=$1, "extractedApplicantName"=$2, "scanStatus"='no_text',
@@ -437,19 +462,6 @@ async function handleScan(req: any, res: any, user: any) {
         continue;
       }
 
-      if (!exp.date) {
-        summary.noDate++;
-        await query(
-          `update medical_pdf_uploads
-           set "extractedFileNumber"=$1, "extractedApplicantName"=$2, "scanStatus"='no_date',
-               "scanMessage"=$3, "scannedAt"=now()
-           where id=$4`,
-          [extractedFileNumber || null, extractedApplicantName || null, exp.reason, upload.id]
-        );
-        results.push({ id: upload.id, fileName: upload.fileName, status: 'no_date', message: exp.reason, fileNumber: extractedFileNumber, applicantName: extractedApplicantName, orderDate });
-        continue;
-      }
-
       let applicant = await findApplicant(companyId, extractedFileNumber, extractedApplicantName);
       let wasCreated = false;
 
@@ -458,7 +470,7 @@ async function handleScan(req: any, res: any, user: any) {
           fileNumber: extractedFileNumber,
           applicantName: extractedApplicantName || '',
           orderDate,
-          medExpire: exp.date,
+          medExpire: exp.date || '',
           fileName: upload.fileName
         });
         wasCreated = true;
@@ -466,49 +478,51 @@ async function handleScan(req: any, res: any, user: any) {
 
       if (!applicant) {
         summary.noMatch++;
-        const reason = createMissing
-          ? 'Expiration found but no Monitoring match and file number was not found, so a review record could not be created'
-          : `Expiration found for file #${extractedFileNumber || 'unknown'} but no matching Monitoring record was found`;
+        const reason = `No matching Monitoring record found for file #${extractedFileNumber || 'unknown'}. ${createMissing ? 'Could not create because file number was missing.' : 'Use Create/Update Monitoring from PDFs to create missing records.'}`;
         await query(
           `update medical_pdf_uploads
            set "extractedExpirationDate"=$1, "extractedFileNumber"=$2, "extractedApplicantName"=$3,
                "scanStatus"='no_match', "scanMessage"=$4, "scannedAt"=now()
            where id=$5`,
-          [exp.date, extractedFileNumber || null, extractedApplicantName || null, reason, upload.id]
+          [exp.date || null, extractedFileNumber || null, extractedApplicantName || null, reason, upload.id]
         );
         results.push({ id: upload.id, fileName: upload.fileName, status: 'no_match', expirationDate: exp.date, fileNumber: extractedFileNumber, applicantName: extractedApplicantName, orderDate, message: reason });
         continue;
       }
 
       if (!wasCreated) {
-        const noteLine = `Medical expiration updated from uploaded PDF ${upload.fileName} on ${new Date().toISOString().slice(0, 10)}.`;
-        await query(
-          `update applicants
-           set "medExpire"=$1,
-               "medExpireOverridden"=true,
-               notes=trim(both E'\n' from concat(coalesce(notes,''), E'\n', $2)),
-               "updatedAt"=now()
-           where id=$3 and "companyId"=$4`,
-          [exp.date, noteLine, applicant.id, companyId]
-        );
+        if (exp.date) {
+          await query(
+            `update applicants
+             set "medExpire"=$1,
+                 "medExpireOverridden"=true,
+                 "updatedAt"=now()
+             where id=$2 and "companyId"=$3`,
+            [exp.date, applicant.id, companyId]
+          );
+        }
         summary.updated++;
       } else {
         summary.created++;
       }
 
       const scanStatus = wasCreated ? 'created' : 'updated';
+      const scanMessage = exp.date
+        ? `${wasCreated ? 'Created' : 'Updated'} ${applicant.applicantName} (${applicant.fileNumber}) with medical expiration ${exp.date}`
+        : `${wasCreated ? 'Created' : 'Found'} ${applicant.applicantName} (${applicant.fileNumber}); no Medical Certificate Expiration Date found, Med Expire left blank`;
+
       await query(
         `update medical_pdf_uploads
          set "extractedExpirationDate"=$1, "extractedFileNumber"=$2, "extractedApplicantName"=$3,
              "matchedApplicantId"=$4, "scanStatus"=$5, "scanMessage"=$6, "scannedAt"=now()
          where id=$7`,
         [
-          exp.date,
+          exp.date || null,
           extractedFileNumber || applicant.fileNumber,
           extractedApplicantName || applicant.applicantName,
           applicant.id,
           scanStatus,
-          `${wasCreated ? 'Created' : 'Updated'} ${applicant.applicantName} (${applicant.fileNumber}) to ${exp.date}`,
+          scanMessage,
           upload.id
         ]
       );
