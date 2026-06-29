@@ -224,11 +224,8 @@
     if (s === 'expired-med') return '<span class="phase8-badge danger">Medical expired</span>';
     if (s === 'expiring-30') return `<span class="phase8-badge warn">Medical expires ${data.medDays} days</span>`;
     if (s === 'expiring-60') return `<span class="phase8-badge info">Medical expires ${data.medDays} days</span>`;
-    if (s === 'missing-med') return '<span class="phase8-badge danger">Missing medical date</span>';
-    if (s === 'mvr-attention') return '<span class="phase8-badge warn">MVR attention</span>';
-    if (s === 'ok') return '<span class="phase8-badge ok">OK</span>';
 
-    return '<span class="phase8-badge neutral">Off monitoring</span>';
+    return '';
   }
 
   function decorateRows() {
@@ -237,8 +234,11 @@
       const s = state(row);
 
       row.classList.toggle('phase8-row-expired', s === 'expired-med');
-      row.classList.toggle('phase8-row-warning', s === 'expiring-30' || s === 'missing-med' || s === 'mvr-attention');
+      row.classList.toggle('phase8-row-warning', s === 'expiring-30');
       row.classList.toggle('phase8-row-info', s === 'expiring-60');
+
+      // Do not visually flag blank Med Expire as Missing Medical Date.
+      row.classList.remove('phase8-row-missing-med');
 
       if (cells[5]) {
         let holder = cells[5].querySelector('.phase8-badges');
@@ -289,7 +289,7 @@
         <button type="button" data-phase8-filter="expired-med"><b>${counts.expiredMed}</b>Expired Medical</button>
         <button type="button" data-phase8-filter="expiring-30"><b>${counts.expiring30}</b>Expiring 30 Days</button>
         <button type="button" data-phase8-filter="expiring-60"><b>${counts.expiring60}</b>Expiring 60 Days</button>
-        <button type="button" data-phase8-filter="missing-med"><b>${counts.missingMed}</b>Missing Medical</button>
+        <button type="button" data-phase8-filter="missing-med"><b>${counts.missingMed}</b>Blank Med Expire</button>
         <button type="button" data-phase8-filter="mvr-attention"><b>${counts.mvrAttention}</b>MVR Attention</button>
       </div>
       <div class="phase8-actions">
@@ -297,7 +297,7 @@
         <button type="button" data-phase8-download-csv>Download Current View CSV</button>
         <button type="button" data-phase8-recalculate>Recalculate Alerts</button>
       </div>
-      <p class="phase8-note">Alerts now read the actual Monitoring select/input values, including Med Expire fields updated from PDFs.</p>
+      <p class="phase8-note">Med Expire cells now only show labels for expired or upcoming expiration dates. Blank Med Expire and OK records are not labeled in the row.</p>
     `;
   }
 
@@ -345,8 +345,6 @@
       .phase8-badge.danger { background: #fee2e2; color: #991b1b; }
       .phase8-badge.warn { background: #fef3c7; color: #92400e; }
       .phase8-badge.info { background: #dbeafe; color: #1d4ed8; }
-      .phase8-badge.ok { background: #dcfce7; color: #166534; }
-      .phase8-badge.neutral { background: #f1f5f9; color: #475569; }
       .phase8-row-tools { margin-top: 6px; }
       .phase8-row-expired td { box-shadow: inset 4px 0 0 #dc2626; }
       .phase8-row-warning td { box-shadow: inset 4px 0 0 #f59e0b; }
