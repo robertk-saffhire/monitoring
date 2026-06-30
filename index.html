@@ -19,8 +19,7 @@
           !url.startsWith('/api/safety-response-link') &&
           !url.startsWith('/api/safety-response') &&
           !url.startsWith('/api/fmcsa-packet') &&
-          !url.startsWith('/api/pdf-medical') &&
-          !url.startsWith('/api/orders')
+          !url.startsWith('/api/pdf-medical')
         ) {
           const parts = url.split('?');
           const routePath = parts[0].replace(/^\/api\/?/, '');
@@ -50,7 +49,7 @@
     <script src="/phase10-medical-pdfs.js"></script>
     <script src="/phase10r-safe-header-sort.js"></script>
 
-    <!-- TazWorks proxy connection test -->
+    <!-- TazWorks proxy connection test through existing api/index function -->
     <script src="/phase11-tazworks-connection.js"></script>
   </body>
 </html>

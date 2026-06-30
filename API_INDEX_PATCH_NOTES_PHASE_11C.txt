@@ -1,0 +1,150 @@
+ADD THIS LOGIC INTO api/index.ts
+
+Because this project already uses /api/index?path=..., do not add new /api/orders.ts function files on Hobby.
+
+Add these helper functions near the other helpers in api/index.ts:
+
+function tazEnv() {
+  const baseUrl = String(process.env.TAZWORKS_PROXY_BASE_URL || '').replace(/\/+$/, '');
+  const proxySecret = String(process.env.TAZWORKS_PROXY_SECRET || '');
+  const clientGuid = String(process.env.TAZWORKS_CLIENT_GUID || '');
+  if (!baseUrl) throw new Error('TAZWORKS_PROXY_BASE_URL is missing');
+  if (!proxySecret) throw new Error('TAZWORKS_PROXY_SECRET is missing');
+  if (!clientGuid) throw new Error('TAZWORKS_CLIENT_GUID is missing');
+  return { baseUrl, proxySecret, clientGuid };
+}
+
+function tazSafeMessage(errorText: string, statusCode?: number) {
+  const text = String(errorText || '');
+  if (statusCode === 401 || statusCode === 403 || /NOT_AUTHORIZED|NOT_AUTHENTICATED|not authorized|unauthorized/i.test(text)) {
+    return 'Order access could not be verified.';
+  }
+  return 'The order connection is currently unavailable.';
+}
+
+function tazArray(payload: any) {
+  if (Array.isArray(payload)) return payload;
+  if (Array.isArray(payload?.content)) return payload.content;
+  if (Array.isArray(payload?.orders)) return payload.orders;
+  if (Array.isArray(payload?.items)) return payload.items;
+  if (Array.isArray(payload?.data)) return payload.data;
+  if (Array.isArray(payload?.results)) return payload.results;
+  if (Array.isArray(payload?.searches)) return payload.searches;
+  return [];
+}
+
+function tazDate(value: any) {
+  if (!value) return '';
+  const d = new Date(value);
+  if (Number.isNaN(d.getTime())) return String(value);
+  return d.toISOString();
+}
+
+function tazOrder(row: any) {
+  return {
+    orderGuid: row.orderGuid || row.guid || row.id || '',
+    fileNumber: row.fileNumber || row.fileNo || row.orderNumber || '',
+    orderStatus: row.orderStatus || row.status || '',
+    orderType: row.orderType || row.type || '',
+    orderedDate: tazDate(row.orderedDate || row.orderDate),
+    completedDate: tazDate(row.completedDate),
+    applicantName: row.applicantName || row.subjectName || row.name || '',
+    clientName: row.clientName || '',
+    clientCode: row.clientCode || '',
+    productName: row.productName || row.packageName || '',
+    requestedBy: row.requestedBy || row.requestor || '',
+    searchFlagged: Boolean(row.searchFlagged || row.flagged),
+    createdDate: tazDate(row.createdDate || row.createdAt),
+    modifiedDate: tazDate(row.modifiedDate || row.updatedAt),
+  };
+}
+
+function tazSearch(row: any) {
+  return {
+    searchGuid: row.searchGuid || row.guid || row.id || '',
+    searchName: row.searchName || row.name || row.type || '',
+    searchType: row.searchType || row.type || '',
+    status: row.status || row.searchStatus || '',
+    resultType: row.resultType || '',
+    createdDate: tazDate(row.createdDate || row.createdAt),
+    modifiedDate: tazDate(row.modifiedDate || row.updatedAt),
+    flagged: Boolean(row.flagged || row.searchFlagged),
+  };
+}
+
+function tazStripSensitive(value: any): any {
+  if (Array.isArray(value)) return value.map(tazStripSensitive);
+  if (value && typeof value === 'object') {
+    const out: any = {};
+    for (const [key, val] of Object.entries(value)) {
+      if (/token|secret|authorization|password|bearer/i.test(key)) continue;
+      out[key] = tazStripSensitive(val);
+    }
+    return out;
+  }
+  return value;
+}
+
+async function tazProxyGet(path: string) {
+  const env = tazEnv();
+  const response = await fetch(`${env.baseUrl}${path}`, {
+    method: 'GET',
+    headers: {
+      Authorization: `Bearer ${env.proxySecret}`,
+      Accept: 'application/json',
+    },
+  });
+
+  const raw = await response.text();
+  let payload: any = {};
+  try { payload = raw ? JSON.parse(raw) : {}; } catch { payload = { raw }; }
+
+  if (!response.ok) {
+    const msg = payload?.message || payload?.error || raw || `Proxy returned ${response.status}`;
+    const safe = tazSafeMessage(msg, response.status);
+    const err: any = new Error(safe);
+    err.statusCode = safe === 'Order access could not be verified.' ? 403 : 503;
+    throw err;
+  }
+
+  return payload;
+}
+
+Then add this route handling inside your main handler after you resolve routePath/path:
+
+if (req.method === 'GET' && routePath === 'orders') {
+  const env = tazEnv();
+  const page = Math.max(0, Math.min(50, Number(searchParams.get('page') || '0') || 0));
+  const size = Math.max(1, Math.min(50, Number(searchParams.get('size') || '10') || 10));
+  const fileNumber = String(searchParams.get('fileNumber') || '').trim().toLowerCase();
+
+  const payload = await tazProxyGet(`/tazworks/orders?page=${page}&size=${size}&clientGuid=${encodeURIComponent(env.clientGuid)}`);
+  let orders = tazArray(payload).map(tazOrder);
+
+  if (fileNumber) {
+    orders = orders.filter((order: any) => String(order.fileNumber || '').toLowerCase().includes(fileNumber));
+  }
+
+  return sendJson(res, 200, { status: 'ok', page, size, filtered: Boolean(fileNumber), orders, count: orders.length });
+}
+
+const searchesMatch = routePath.match(/^orders\/([^/]+)\/searches$/);
+if (req.method === 'GET' && searchesMatch) {
+  const env = tazEnv();
+  const orderGuid = decodeURIComponent(searchesMatch[1]);
+  const payload = await tazProxyGet(`/tazworks/orders/${encodeURIComponent(orderGuid)}/searches?clientGuid=${encodeURIComponent(env.clientGuid)}`);
+  const searches = tazArray(payload).map(tazSearch);
+  return sendJson(res, 200, { status: 'ok', orderGuid, searches, count: searches.length });
+}
+
+const resultMatch = routePath.match(/^orders\/([^/]+)\/searches\/([^/]+)\/results$/);
+if (req.method === 'GET' && resultMatch) {
+  const env = tazEnv();
+  const orderGuid = decodeURIComponent(resultMatch[1]);
+  const searchGuid = decodeURIComponent(resultMatch[2]);
+  const resultType = String(searchParams.get('resultType') || 'EDITOR').trim() || 'EDITOR';
+  const payload = await tazProxyGet(`/tazworks/orders/${encodeURIComponent(orderGuid)}/searches/${encodeURIComponent(searchGuid)}/results?resultType=${encodeURIComponent(resultType)}&clientGuid=${encodeURIComponent(env.clientGuid)}`);
+  return sendJson(res, 200, { status: 'ok', orderGuid, searchGuid, resultType, result: tazStripSensitive(payload) });
+}
+
+Wrap those route blocks with your existing login/session check, the same way other protected routes in api/index.ts are handled.
