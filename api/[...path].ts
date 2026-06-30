@@ -1,90 +1,230 @@
 import pg from 'pg';
-import bcrypt from 'bcryptjs';
-import { jwtVerify, SignJWT } from 'jose';
+import { jwtVerify } from 'jose';
 
 const { Pool } = pg;
 let pool: any;
 const SESSION_COOKIE = 'saffhire_session';
-const SAFETY_STATUSES = new Set(['S1 Complete', 'Emp Sent', 'Emp Complete', 'Completed']);
-const USER_ROLES = new Set(['admin', 'user', 'viewer']);
+
+function json(res: any, statusCode: number, payload: any) {
+  res.statusCode = statusCode;
+  res.setHeader('Content-Type', 'application/json; charset=utf-8');
+  res.end(JSON.stringify(payload));
+}
 
 function getPool() {
   if (!process.env.DATABASE_URL) throw new Error('DATABASE_URL is missing');
   if (!pool) pool = new Pool({ connectionString: process.env.DATABASE_URL, ssl: { rejectUnauthorized: false } });
   return pool;
 }
-async function query(text: string, params: any[] = []) { return getPool().query(text, params); }
-function json(res: any, statusCode: number, payload: any) { res.statusCode = statusCode; res.setHeader('Content-Type', 'application/json; charset=utf-8'); res.end(JSON.stringify(payload)); }
-async function readBody(req: any) { if (req.body && typeof req.body === 'object') return req.body; if (typeof req.body === 'string' && req.body.trim()) { try { return JSON.parse(req.body); } catch { return {}; } } const chunks: any[] = []; for await (const chunk of req) chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk)); if (!chunks.length) return {}; try { return JSON.parse(Buffer.concat(chunks).toString('utf8')); } catch { return {}; } }
-function secret() { if (!process.env.JWT_SECRET) throw new Error('JWT_SECRET is missing'); return new TextEncoder().encode(process.env.JWT_SECRET); }
-function parseCookies(req: any) { const header = req.headers?.cookie || ''; const out: any = {}; for (const part of header.split(';')) { const idx = part.indexOf('='); if (idx === -1) continue; const key = part.slice(0, idx).trim(); const val = part.slice(idx + 1).trim(); if (!key) continue; try { out[key] = decodeURIComponent(val); } catch { out[key] = val; } } return out; }
-function setSessionCookie(res: any, token: string, maxAgeSeconds: number) { res.setHeader('Set-Cookie', [`${SESSION_COOKIE}=${encodeURIComponent(token)}`, 'Path=/', 'HttpOnly', 'SameSite=Lax', 'Secure', `Max-Age=${maxAgeSeconds}`].join('; ')); }
-function clearSessionCookie(res: any) { res.setHeader('Set-Cookie', `${SESSION_COOKIE}=; Path=/; HttpOnly; SameSite=Lax; Secure; Max-Age=0`); }
-function publicUser(user: any) { if (!user) return null; return { id: user.id, username: user.username, displayName: user.displayName || user.username, role: user.role, companyId: user.companyId ?? null, mustChangePassword: user.mustChangePassword || false }; }
-async function getUserFromRequest(req: any) { const token = parseCookies(req)[SESSION_COOKIE]; if (!token) return null; try { const { payload } = await jwtVerify(token, secret()); const id = Number(payload.sub); const result = await query('select id, username, "displayName", role, "companyId", "isActive", "mustChangePassword" from local_users where id=$1 limit 1', [id]); const user = result.rows[0] || null; if (!user || !user.isActive) return null; return user; } catch { return null; } }
-async function requireUser(req: any, res: any) { const user = await getUserFromRequest(req); if (!user) { json(res, 401, { status: 'error', message: 'Login required' }); return null; } return user; }
-function requireAdmin(user: any, res: any) { if (user.role !== 'admin') { json(res, 403, { status: 'error', message: 'Admin access required' }); return false; } return true; }
-function slugify(value: string) { return String(value || '').trim().toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '') || 'company'; }
-function normalizeMonitorStatus(value: any) { return String(value || '').trim().toLowerCase() === 'on' ? 'On' : 'Off'; }
-function pick(row: any, keys: string[]) { for (const key of keys) if (row[key] !== undefined && row[key] !== null && String(row[key]).trim() !== '') return row[key]; return ''; }
 
-function pathName(req: any) { const url = new URL(req.url || '/', 'https://local.test'); return url.pathname.replace(/^\/api\/?/, '').replace(/^\//, ''); }
-
-async function handleAuth(req: any, res: any, path: string) {
-  if (path === 'auth/setup-status' && req.method === 'GET') { const result = await query("select count(*)::int as count from local_users where role='admin'"); return json(res, 200, { status: 'ok', hasAdmin: Number(result.rows[0]?.count || 0) > 0 }); }
-  if (path === 'auth/setup-admin' && req.method === 'POST') { const count = await query("select count(*)::int as count from local_users where role='admin'"); if (Number(count.rows[0]?.count || 0) > 0) return json(res, 400, { status: 'error', message: 'Admin already exists' }); const body = await readBody(req); const username = String(body.username || '').trim().toLowerCase(); const password = String(body.password || ''); if (username.length < 3 || password.length < 6) return json(res, 400, { status: 'error', message: 'Username and password are required' }); const company = await query("select id from companies where slug='driver-pipeline' limit 1"); const companyId = company.rows[0]?.id || null; const passwordHash = await bcrypt.hash(password, 12); const result = await query('insert into local_users (username, "passwordHash", "displayName", role, "companyId", "isActive") values ($1,$2,$3,$4,$5,true) returning id, username, "displayName", role, "companyId", "mustChangePassword"', [username, passwordHash, username, 'admin', companyId]); const user = result.rows[0]; const token = await new SignJWT({ sub: String(user.id), role: user.role, name: user.displayName || user.username }).setProtectedHeader({ alg: 'HS256' }).setIssuedAt().setExpirationTime('30d').sign(secret()); setSessionCookie(res, token, 60 * 60 * 24 * 30); return json(res, 200, { status: 'ok', user: publicUser(user) }); }
-  if (path === 'auth/login' && req.method === 'POST') { const body = await readBody(req); const username = String(body.username || '').trim().toLowerCase(); const password = String(body.password || ''); const result = await query('select id, username, "passwordHash", "displayName", role, "companyId", "isActive", "mustChangePassword" from local_users where lower(username)=lower($1) limit 1', [username]); const user = result.rows[0]; if (!user || !user.isActive || !(await bcrypt.compare(password, user.passwordHash))) return json(res, 401, { status: 'error', message: 'Invalid username or password' }); await query('update local_users set "lastSignedIn"=now() where id=$1', [user.id]); const token = await new SignJWT({ sub: String(user.id), role: user.role, name: user.displayName || user.username }).setProtectedHeader({ alg: 'HS256' }).setIssuedAt().setExpirationTime(body.rememberMe ? '30d' : '1d').sign(secret()); setSessionCookie(res, token, body.rememberMe ? 60 * 60 * 24 * 30 : 60 * 60 * 24); return json(res, 200, { status: 'ok', user: publicUser(user) }); }
-  if (path === 'auth/me' && req.method === 'GET') { const user = await getUserFromRequest(req); return json(res, 200, { status: 'ok', user: publicUser(user) }); }
-  if (path === 'auth/logout' && req.method === 'POST') { clearSessionCookie(res); return json(res, 200, { status: 'ok' }); }
-  return false;
+async function query(text: string, params: any[] = []) {
+  return getPool().query(text, params);
 }
 
-async function handleCompanies(req: any, res: any, user: any) {
-  if (req.method === 'GET') { const result = await query('select id, name, slug, "isActive" from companies where "isActive"=true order by name'); return json(res, 200, { status: 'ok', companies: result.rows }); }
-  if (!requireAdmin(user, res)) return;
-  const body = await readBody(req);
-  if (req.method === 'POST') { const name = String(body.name || '').trim(); if (!name) return json(res, 400, { status: 'error', message: 'Company name is required' }); const result = await query('insert into companies (name, slug, "isActive") values ($1,$2,true) on conflict (slug) do update set name=excluded.name, "isActive"=true, "updatedAt"=now() returning id, name, slug, "isActive"', [name, slugify(body.slug || name)]); return json(res, 200, { status: 'ok', company: result.rows[0] }); }
-  if (req.method === 'PATCH') { const id = Number(body.id); const name = String(body.name || '').trim(); if (!id || !name) return json(res, 400, { status: 'error', message: 'Company id and name are required' }); const result = await query('update companies set name=$1, "isActive"=$2, "updatedAt"=now() where id=$3 returning id, name, slug, "isActive"', [name, body.isActive !== false, id]); return json(res, 200, { status: 'ok', company: result.rows[0] }); }
-  return json(res, 405, { status: 'error', message: 'Method not allowed' });
+function secret() {
+  if (!process.env.JWT_SECRET) throw new Error('JWT_SECRET is missing');
+  return new TextEncoder().encode(process.env.JWT_SECRET);
 }
 
-async function handleApplicants(req: any, res: any, user: any, url: URL) {
-  const companyId = Number(url.searchParams.get('companyId') || user.companyId || 1);
-  if (req.method === 'GET') { const result = await query('select id, "fileNumber", "applicantName" as name, "orderDate", "monitorStatus", "mvrStatus", "medExpire", notes from applicants where "companyId"=$1 order by id desc limit 1000', [companyId]); return json(res, 200, { status: 'ok', applicants: result.rows }); }
-  if (req.method === 'PATCH') { const body = await readBody(req); const id = Number(body.id); if (!id) return json(res, 400, { status: 'error', message: 'Applicant id is required' }); const current = await query('select * from applicants where id=$1 and "companyId"=$2 limit 1', [id, companyId]); if (!current.rows[0]) return json(res, 404, { status: 'error', message: 'Applicant not found' }); const monitorStatus = normalizeMonitorStatus(body.monitorStatus ?? current.rows[0].monitorStatus); const medExpire = body.medExpire ?? current.rows[0].medExpire; const notes = body.notes ?? current.rows[0].notes; const result = await query('update applicants set "monitorStatus"=$1, "medExpire"=$2, "medExpireOverridden"=$3, notes=$4, "updatedAt"=now() where id=$5 and "companyId"=$6 returning id, "fileNumber", "applicantName" as name, "orderDate", "monitorStatus", "mvrStatus", "medExpire", notes', [monitorStatus, medExpire || null, Boolean(medExpire), String(notes || ''), id, companyId]); return json(res, 200, { status: 'ok', applicant: result.rows[0] }); }
-  return json(res, 405, { status: 'error', message: 'Method not allowed' });
+function parseCookies(req: any) {
+  const header = req.headers?.cookie || '';
+  const out: any = {};
+  for (const part of header.split(';')) {
+    const idx = part.indexOf('=');
+    if (idx === -1) continue;
+    const key = part.slice(0, idx).trim();
+    const val = part.slice(idx + 1).trim();
+    if (!key) continue;
+    try { out[key] = decodeURIComponent(val); } catch { out[key] = val; }
+  }
+  return out;
 }
 
-function cleanReport(body: any, companyId: number) { return { companyId, applicantName: String(body.applicantName || '').trim(), fileNumber: String(body.fileNumber || '').trim(), created: String(body.created || new Date().toISOString().slice(0, 10)).trim(), status: SAFETY_STATUSES.has(body.status) ? body.status : 'S1 Complete', followUpDate: String(body.followUpDate || '').trim(), notes: String(body.notes || '').trim(), prevEmployerName: String(body.prevEmployerName || '').trim(), prevEmployerEmail: String(body.prevEmployerEmail || '').trim(), prevEmployerStreet: String(body.prevEmployerStreet || '').trim(), prevEmployerPhone: String(body.prevEmployerPhone || '').trim(), prevEmployerFax: String(body.prevEmployerFax || '').trim(), prevEmployerCityStateZip: String(body.prevEmployerCityStateZip || '').trim(), employerName: String(body.employerName || 'Driver Pipeline').trim(), employerAttention: String(body.employerAttention || '').trim(), employerStreet: String(body.employerStreet || '1200 N. Union Bower Road').trim(), employerCityStateZip: String(body.employerCityStateZip || 'Irving, TX 75061').trim(), employerPhone: String(body.employerPhone || '972-573-2301').trim(), employerFax: String(body.employerFax || '').trim(), employerEmail: String(body.employerEmail || 'lmercado@driverpipeline.com').trim(), confFax: String(body.confFax || '').trim(), confEmail: String(body.confEmail || '').trim(), employedByCompany: String(body.employedByCompany || '').trim(), jobTitle: String(body.jobTitle || '').trim(), fromDate: String(body.fromDate || '').trim(), toDate: String(body.toDate || '').trim(), droveMotorVehicle: String(body.droveMotorVehicle || '').trim(), vehicleStraightTruck: Boolean(body.vehicleStraightTruck), vehicleTractorSemitrailer: Boolean(body.vehicleTractorSemitrailer), vehicleBus: Boolean(body.vehicleBus), vehicleCargoTank: Boolean(body.vehicleCargoTank), vehicleDoublesTriples: Boolean(body.vehicleDoublesTriples), vehicleOther: Boolean(body.vehicleOther), accidentHistory: String(body.accidentHistory || '').trim(), accidentDate1: String(body.accidentDate1 || '').trim(), accidentLocation1: String(body.accidentLocation1 || '').trim(), accidentInjuries1: String(body.accidentInjuries1 || '').trim(), accidentFatalities1: String(body.accidentFatalities1 || '').trim(), accidentHazmat1: String(body.accidentHazmat1 || '').trim(), accidentDate2: String(body.accidentDate2 || '').trim(), accidentLocation2: String(body.accidentLocation2 || '').trim(), accidentInjuries2: String(body.accidentInjuries2 || '').trim(), accidentFatalities2: String(body.accidentFatalities2 || '').trim(), accidentHazmat2: String(body.accidentHazmat2 || '').trim(), accidentDate3: String(body.accidentDate3 || '').trim(), accidentLocation3: String(body.accidentLocation3 || '').trim(), accidentInjuries3: String(body.accidentInjuries3 || '').trim(), accidentFatalities3: String(body.accidentFatalities3 || '').trim(), accidentHazmat3: String(body.accidentHazmat3 || '').trim(), otherAccidents: String(body.otherAccidents || '').trim(), dotCompany: String(body.dotCompany || '').trim(), dotEmployee: String(body.dotEmployee || '').trim(), dotAlcoholTestPositive: Boolean(body.dotAlcoholTestPositive), dotDrugTestPositive: Boolean(body.dotDrugTestPositive), dotRefusedTest: Boolean(body.dotRefusedTest), dotOtherViolations: Boolean(body.dotOtherViolations), infoReceivedFrom: String(body.infoReceivedFrom || '').trim(), infoReceivedDate: String(body.infoReceivedDate || '').trim() }; }
-function reportValues(v: any) { return [v.companyId, v.applicantName, v.fileNumber, v.created, v.status, v.followUpDate, v.notes, v.prevEmployerName, v.prevEmployerEmail, v.prevEmployerStreet, v.prevEmployerPhone, v.prevEmployerFax, v.prevEmployerCityStateZip, v.employerName, v.employerAttention, v.employerStreet, v.employerCityStateZip, v.employerPhone, v.employerFax, v.employerEmail, v.confFax, v.confEmail, v.employedByCompany, v.jobTitle, v.fromDate, v.toDate, v.droveMotorVehicle, v.vehicleStraightTruck, v.vehicleTractorSemitrailer, v.vehicleBus, v.vehicleCargoTank, v.vehicleDoublesTriples, v.vehicleOther, v.accidentHistory, v.accidentDate1, v.accidentLocation1, v.accidentInjuries1, v.accidentFatalities1, v.accidentHazmat1, v.accidentDate2, v.accidentLocation2, v.accidentInjuries2, v.accidentFatalities2, v.accidentHazmat2, v.accidentDate3, v.accidentLocation3, v.accidentInjuries3, v.accidentFatalities3, v.accidentHazmat3, v.otherAccidents, v.dotCompany, v.dotEmployee, v.dotAlcoholTestPositive, v.dotDrugTestPositive, v.dotRefusedTest, v.dotOtherViolations, v.infoReceivedFrom, v.infoReceivedDate]; }
+async function getUser(req: any) {
+  const token = parseCookies(req)[SESSION_COOKIE];
+  if (!token) return null;
 
-const safetyInsert = 'insert into safety_reports ("companyId","applicantName","fileNumber",created,status,"followUpDate",notes,"prevEmployerName","prevEmployerEmail","prevEmployerStreet","prevEmployerPhone","prevEmployerFax","prevEmployerCityStateZip","employerName","employerAttention","employerStreet","employerCityStateZip","employerPhone","employerFax","employerEmail","confFax","confEmail","employedByCompany","jobTitle","fromDate","toDate","droveMotorVehicle","vehicleStraightTruck","vehicleTractorSemitrailer","vehicleBus","vehicleCargoTank","vehicleDoublesTriples","vehicleOther","accidentHistory","accidentDate1","accidentLocation1","accidentInjuries1","accidentFatalities1","accidentHazmat1","accidentDate2","accidentLocation2","accidentInjuries2","accidentFatalities2","accidentHazmat2","accidentDate3","accidentLocation3","accidentInjuries3","accidentFatalities3","accidentHazmat3","otherAccidents","dotCompany","dotEmployee","dotAlcoholTestPositive","dotDrugTestPositive","dotRefusedTest","dotOtherViolations","infoReceivedFrom","infoReceivedDate") values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24,$25,$26,$27,$28,$29,$30,$31,$32,$33,$34,$35,$36,$37,$38,$39,$40,$41,$42,$43,$44,$45,$46,$47,$48,$49,$50,$51,$52,$53,$54,$55,$56,$57,$58) returning *';
-const safetyUpdate = 'update safety_reports set "applicantName"=$1,"fileNumber"=$2,created=$3,status=$4,"followUpDate"=$5,notes=$6,"prevEmployerName"=$7,"prevEmployerEmail"=$8,"prevEmployerStreet"=$9,"prevEmployerPhone"=$10,"prevEmployerFax"=$11,"prevEmployerCityStateZip"=$12,"employerName"=$13,"employerAttention"=$14,"employerStreet"=$15,"employerCityStateZip"=$16,"employerPhone"=$17,"employerFax"=$18,"employerEmail"=$19,"confFax"=$20,"confEmail"=$21,"employedByCompany"=$22,"jobTitle"=$23,"fromDate"=$24,"toDate"=$25,"droveMotorVehicle"=$26,"vehicleStraightTruck"=$27,"vehicleTractorSemitrailer"=$28,"vehicleBus"=$29,"vehicleCargoTank"=$30,"vehicleDoublesTriples"=$31,"vehicleOther"=$32,"accidentHistory"=$33,"accidentDate1"=$34,"accidentLocation1"=$35,"accidentInjuries1"=$36,"accidentFatalities1"=$37,"accidentHazmat1"=$38,"accidentDate2"=$39,"accidentLocation2"=$40,"accidentInjuries2"=$41,"accidentFatalities2"=$42,"accidentHazmat2"=$43,"accidentDate3"=$44,"accidentLocation3"=$45,"accidentInjuries3"=$46,"accidentFatalities3"=$47,"accidentHazmat3"=$48,"otherAccidents"=$49,"dotCompany"=$50,"dotEmployee"=$51,"dotAlcoholTestPositive"=$52,"dotDrugTestPositive"=$53,"dotRefusedTest"=$54,"dotOtherViolations"=$55,"infoReceivedFrom"=$56,"infoReceivedDate"=$57,"updatedAt"=now() where id=$58 and "companyId"=$59 returning *';
+  try {
+    const { payload } = await jwtVerify(token, secret());
+    const id = Number(payload.sub);
+    const result = await query('select id, username, "displayName", role, "companyId", "isActive" from local_users where id=$1 limit 1', [id]);
+    const user = result.rows[0] || null;
+    if (!user || !user.isActive) return null;
+    return user;
+  } catch {
+    return null;
+  }
+}
 
-async function handleSafety(req: any, res: any, user: any, url: URL) { const companyId = Number(url.searchParams.get('companyId') || user.companyId || 1); if (req.method === 'GET') { const r = await query('select * from safety_reports where "companyId"=$1 order by id desc limit 500', [companyId]); return json(res, 200, { status: 'ok', reports: r.rows }); } if (req.method === 'POST') { const v = cleanReport(await readBody(req), companyId); if (!v.fileNumber && !v.applicantName) return json(res, 400, { status: 'error', message: 'File number or applicant name is required' }); const r = await query(safetyInsert, reportValues(v)); return json(res, 200, { status: 'ok', report: r.rows[0] }); } if (req.method === 'PATCH') { const body = await readBody(req); const id = Number(body.id); if (!id) return json(res, 400, { status: 'error', message: 'Report id is required' }); const v = cleanReport(body, companyId); const params = reportValues(v).slice(1); params.push(id, companyId); const r = await query(safetyUpdate, params); return json(res, 200, { status: 'ok', report: r.rows[0] }); } if (req.method === 'DELETE') { const id = Number(url.searchParams.get('id')); await query('delete from safety_reports where id=$1 and "companyId"=$2', [id, companyId]); return json(res, 200, { status: 'ok', success: true }); } return json(res, 405, { status: 'error', message: 'Method not allowed' }); }
+function pathName(req: any) {
+  const url = new URL(req.url || '/', 'https://local.test');
+  return url.pathname.replace(/^\/api\/?/, '').replace(/^\//, '');
+}
 
-async function handleUsers(req: any, res: any, user: any) { if (!requireAdmin(user, res)) return; if (req.method === 'GET') { const r = await query('select id, username, "displayName", role, "companyId", "isActive", "mustChangePassword", "lastSignedIn" from local_users order by id asc'); return json(res, 200, { status: 'ok', users: r.rows.map((x: any) => ({ ...publicUser(x), isActive: x.isActive, lastSignedIn: x.lastSignedIn })) }); } const body = await readBody(req); if (req.method === 'POST') { const username = String(body.username || '').trim().toLowerCase(); const password = String(body.password || ''); if (username.length < 3 || password.length < 6) return json(res, 400, { status: 'error', message: 'Username and password are required' }); const role = USER_ROLES.has(body.role) ? body.role : 'user'; const passwordHash = await bcrypt.hash(password, 12); const r = await query('insert into local_users (username,"passwordHash","displayName",role,"companyId","isActive","mustChangePassword") values ($1,$2,$3,$4,$5,true,false) returning id, username, "displayName", role, "companyId", "isActive", "mustChangePassword", "lastSignedIn"', [username, passwordHash, String(body.displayName || username), role, body.companyId ? Number(body.companyId) : null]); return json(res, 200, { status: 'ok', user: { ...publicUser(r.rows[0]), isActive: r.rows[0].isActive } }); } if (req.method === 'PATCH') { const id = Number(body.id); const role = USER_ROLES.has(body.role) ? body.role : 'user'; const r = await query('update local_users set "displayName"=$1, role=$2, "companyId"=$3, "isActive"=$4, "updatedAt"=now() where id=$5 returning id, username, "displayName", role, "companyId", "isActive", "mustChangePassword", "lastSignedIn"', [String(body.displayName || ''), role, body.companyId ? Number(body.companyId) : null, body.isActive !== false, id]); return json(res, 200, { status: 'ok', user: { ...publicUser(r.rows[0]), isActive: r.rows[0].isActive } }); } if (req.method === 'DELETE') { const url = new URL(req.url || '/', 'https://local.test'); const id = Number(url.searchParams.get('id')); if (id === user.id) return json(res, 400, { status: 'error', message: 'You cannot delete your own account' }); await query('delete from local_users where id=$1', [id]); return json(res, 200, { status: 'ok', success: true }); } return json(res, 405, { status: 'error', message: 'Method not allowed' }); }
+function getEnv() {
+  const baseUrl = String(process.env.TAZWORKS_PROXY_BASE_URL || '').replace(/\/+$/, '');
+  const proxySecret = String(process.env.TAZWORKS_PROXY_SECRET || '');
+  const clientGuid = String(process.env.TAZWORKS_CLIENT_GUID || '');
 
-async function handleEmails(req: any, res: any, user: any, url: URL) { if (!requireAdmin(user, res)) return; if (req.method === 'GET') { const r = await query('select id, label, email, "isActive" from notification_emails order by id asc'); return json(res, 200, { status: 'ok', emails: r.rows }); } const body = await readBody(req); if (req.method === 'POST') { const email = String(body.email || '').trim().toLowerCase(); if (!email.includes('@')) return json(res, 400, { status: 'error', message: 'Valid email is required' }); const r = await query('insert into notification_emails (label,email,"isActive") values ($1,$2,true) returning id,label,email,"isActive"', [String(body.label || '').trim(), email]); return json(res, 200, { status: 'ok', email: r.rows[0] }); } if (req.method === 'PATCH') { const r = await query('update notification_emails set label=$1,email=$2,"isActive"=$3,"updatedAt"=now() where id=$4 returning id,label,email,"isActive"', [String(body.label || '').trim(), String(body.email || '').trim().toLowerCase(), body.isActive !== false, Number(body.id)]); return json(res, 200, { status: 'ok', email: r.rows[0] }); } if (req.method === 'DELETE') { await query('delete from notification_emails where id=$1', [Number(url.searchParams.get('id'))]); return json(res, 200, { status: 'ok', success: true }); } return json(res, 405, { status: 'error', message: 'Method not allowed' }); }
+  if (!baseUrl) throw new Error('TAZWORKS_PROXY_BASE_URL is missing');
+  if (!proxySecret) throw new Error('TAZWORKS_PROXY_SECRET is missing');
+  if (!clientGuid) throw new Error('TAZWORKS_CLIENT_GUID is missing');
 
-async function handleImport(req: any, res: any, user: any) { if (!requireAdmin(user, res)) return; const body = await readBody(req); const companyId = Number(body.companyId || user.companyId || 1); const rows = Array.isArray(body.rows) ? body.rows : []; let imported = 0, skipped = 0; for (const row of rows) { const fileNumber = String(pick(row, ['fileNumber', 'File Number', 'File #', 'FileNumber', 'file_number'])).trim(); if (!fileNumber) { skipped++; continue; } await query('insert into applicants ("companyId","fileNumber","applicantName","orderDate","monitorStatus","mvrStatus","medExpire","medExpireOverridden",notes) values ($1,$2,$3,$4,$5,$6,$7,$8,$9) on conflict ("fileNumber","companyId") do update set "applicantName"=excluded."applicantName","orderDate"=excluded."orderDate","monitorStatus"=excluded."monitorStatus","mvrStatus"=excluded."mvrStatus","medExpire"=excluded."medExpire","medExpireOverridden"=excluded."medExpireOverridden",notes=excluded.notes,"updatedAt"=now()', [companyId, fileNumber, String(pick(row, ['name', 'Name', 'Applicant Name', 'applicantName'])).trim(), String(pick(row, ['orderDate', 'Order Date', 'Created', 'created'])).trim(), normalizeMonitorStatus(pick(row, ['monitorStatus', 'Monitor Status', 'Monitoring', 'monitoring'])), String(pick(row, ['mvrStatus', 'MVR Status', 'Status'])).trim(), String(pick(row, ['medExpire', 'Med Expire', 'Medical Expiration'])).trim() || null, Boolean(pick(row, ['medExpire', 'Med Expire', 'Medical Expiration'])), String(pick(row, ['notes', 'Notes'])).trim()]); imported++; } return json(res, 200, { status: 'ok', imported, skipped }); }
+  return { baseUrl, proxySecret, clientGuid };
+}
+
+function safeMessage(errorText: string, statusCode?: number) {
+  const value = String(errorText || '');
+  if (statusCode === 401 || statusCode === 403 || /NOT_AUTHORIZED|NOT_AUTHENTICATED|not authorized|unauthorized/i.test(value)) {
+    return 'Order access could not be verified.';
+  }
+  return 'The order connection is currently unavailable.';
+}
+
+function extractArray(payload: any) {
+  if (Array.isArray(payload)) return payload;
+  if (Array.isArray(payload?.content)) return payload.content;
+  if (Array.isArray(payload?.orders)) return payload.orders;
+  if (Array.isArray(payload?.items)) return payload.items;
+  if (Array.isArray(payload?.data)) return payload.data;
+  if (Array.isArray(payload?.results)) return payload.results;
+  if (Array.isArray(payload?.searches)) return payload.searches;
+  return [];
+}
+
+function normalizeDate(value: any) {
+  if (!value) return '';
+  const d = new Date(value);
+  if (Number.isNaN(d.getTime())) return String(value);
+  return d.toISOString();
+}
+
+function safeOrder(row: any) {
+  return {
+    orderGuid: row.orderGuid || row.guid || row.id || '',
+    fileNumber: row.fileNumber || row.fileNo || row.orderNumber || '',
+    orderStatus: row.orderStatus || row.status || '',
+    orderType: row.orderType || row.type || '',
+    orderedDate: normalizeDate(row.orderedDate || row.orderDate),
+    completedDate: normalizeDate(row.completedDate),
+    applicantName: row.applicantName || row.subjectName || row.name || '',
+    clientName: row.clientName || '',
+    clientCode: row.clientCode || '',
+    productName: row.productName || row.packageName || '',
+    requestedBy: row.requestedBy || row.requestor || '',
+    searchFlagged: Boolean(row.searchFlagged || row.flagged),
+    createdDate: normalizeDate(row.createdDate || row.createdAt),
+    modifiedDate: normalizeDate(row.modifiedDate || row.updatedAt),
+  };
+}
+
+function safeSearch(row: any) {
+  return {
+    searchGuid: row.searchGuid || row.guid || row.id || '',
+    searchName: row.searchName || row.name || row.type || '',
+    searchType: row.searchType || row.type || '',
+    status: row.status || row.searchStatus || '',
+    resultType: row.resultType || '',
+    createdDate: normalizeDate(row.createdDate || row.createdAt),
+    modifiedDate: normalizeDate(row.modifiedDate || row.updatedAt),
+    flagged: Boolean(row.flagged || row.searchFlagged),
+  };
+}
+
+function stripSensitive(value: any): any {
+  if (Array.isArray(value)) return value.map(stripSensitive);
+  if (value && typeof value === 'object') {
+    const out: any = {};
+    for (const [key, val] of Object.entries(value)) {
+      if (/token|secret|authorization|password|bearer/i.test(key)) continue;
+      out[key] = stripSensitive(val);
+    }
+    return out;
+  }
+  return value;
+}
+
+async function proxyGet(proxyPath: string) {
+  const env = getEnv();
+  const response = await fetch(`${env.baseUrl}${proxyPath}`, {
+    method: 'GET',
+    headers: {
+      Authorization: `Bearer ${env.proxySecret}`,
+      Accept: 'application/json',
+    },
+  });
+
+  const raw = await response.text();
+  let payload: any = {};
+  try { payload = raw ? JSON.parse(raw) : {}; } catch { payload = { raw }; }
+
+  if (!response.ok) {
+    const message = payload?.message || payload?.error || raw || `Proxy returned ${response.status}`;
+    const err: any = new Error(safeMessage(message, response.status));
+    err.statusCode = err.message === 'Order access could not be verified.' ? 403 : 503;
+    throw err;
+  }
+
+  return payload;
+}
+
+async function handleOrders(req: any, res: any, route: string, url: URL) {
+  if (req.method !== 'GET') return json(res, 405, { status: 'error', message: 'Read-only endpoint. Method not allowed.' });
+
+  const env = getEnv();
+
+  if (route === 'orders') {
+    const page = Math.max(0, Math.min(50, Number(url.searchParams.get('page') || '0') || 0));
+    const size = Math.max(1, Math.min(50, Number(url.searchParams.get('size') || '10') || 10));
+    const fileNumber = String(url.searchParams.get('fileNumber') || '').trim().toLowerCase();
+
+    const payload = await proxyGet(`/tazworks/orders?page=${page}&size=${size}&clientGuid=${encodeURIComponent(env.clientGuid)}`);
+    let orders = extractArray(payload).map(safeOrder);
+
+    if (fileNumber) {
+      orders = orders.filter((order: any) => String(order.fileNumber || '').toLowerCase().includes(fileNumber));
+    }
+
+    return json(res, 200, { status: 'ok', page, size, filtered: Boolean(fileNumber), orders, count: orders.length });
+  }
+
+  const searchesMatch = route.match(/^orders\/([^/]+)\/searches$/);
+  if (searchesMatch) {
+    const orderGuid = decodeURIComponent(searchesMatch[1]);
+    const payload = await proxyGet(`/tazworks/orders/${encodeURIComponent(orderGuid)}/searches?clientGuid=${encodeURIComponent(env.clientGuid)}`);
+    const searches = extractArray(payload).map(safeSearch);
+    return json(res, 200, { status: 'ok', orderGuid, searches, count: searches.length });
+  }
+
+  const resultMatch = route.match(/^orders\/([^/]+)\/searches\/([^/]+)\/results$/);
+  if (resultMatch) {
+    const orderGuid = decodeURIComponent(resultMatch[1]);
+    const searchGuid = decodeURIComponent(resultMatch[2]);
+    const resultType = String(url.searchParams.get('resultType') || 'EDITOR').trim() || 'EDITOR';
+
+    const payload = await proxyGet(`/tazworks/orders/${encodeURIComponent(orderGuid)}/searches/${encodeURIComponent(searchGuid)}/results?resultType=${encodeURIComponent(resultType)}&clientGuid=${encodeURIComponent(env.clientGuid)}`);
+
+    return json(res, 200, { status: 'ok', orderGuid, searchGuid, resultType, result: stripSensitive(payload) });
+  }
+
+  return json(res, 404, { status: 'error', message: 'Order route not found.' });
+}
 
 export default async function handler(req: any, res: any) {
+  const url = new URL(req.url || '/', 'https://local.test');
+  const route = pathName(req);
+
   try {
-    const url = new URL(req.url || '/', 'https://local.test');
-    const path = pathName(req);
-    const authHandled = await handleAuth(req, res, path);
-    if (authHandled !== false) return;
-    const user = await requireUser(req, res);
-    if (!user) return;
-    if (path === 'companies') return handleCompanies(req, res, user);
-    if (path === 'applicants') return handleApplicants(req, res, user, url);
-    if (path === 'safety-reports') return handleSafety(req, res, user, url);
-    if (path === 'users') return handleUsers(req, res, user);
-    if (path === 'notification-emails') return handleEmails(req, res, user, url);
-    if (path === 'import-applicants') return handleImport(req, res, user);
-    return json(res, 404, { status: 'error', message: 'Route not found' });
+    if (!route.startsWith('orders')) {
+      return json(res, 404, { status: 'error', message: 'Route not found.' });
+    }
+
+    const user = await getUser(req);
+    if (!user) return json(res, 401, { status: 'error', message: 'Login required' });
+
+    return await handleOrders(req, res, route, url);
   } catch (error: any) {
-    return json(res, 500, { status: 'error', message: error?.message || 'Server error' });
+    const statusCode = error?.statusCode || 503;
+    return json(res, statusCode, { status: 'error', message: error?.message || 'The order connection is currently unavailable.' });
   }
 }
