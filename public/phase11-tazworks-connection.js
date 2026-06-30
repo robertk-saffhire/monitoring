@@ -7,8 +7,12 @@
     return Array.from(document.querySelectorAll('.page-header h1')).some((h) => text(h) === 'Settings');
   }
 
-  async function api(url, options) {
-    const response = await fetch(url, Object.assign({ credentials: 'include' }, options || {}, {
+  function internalApi(path) {
+    return '/api/index?path=' + encodeURIComponent(path.replace(/^\/+/, ''));
+  }
+
+  async function api(path, options) {
+    const response = await fetch(internalApi(path), Object.assign({ credentials: 'include' }, options || {}, {
       headers: Object.assign({ 'Content-Type': 'application/json' }, (options && options.headers) || {})
     }));
     const raw = await response.text();
@@ -111,7 +115,7 @@
 
   async function loadOrders() {
     const fileNumber = document.getElementById('phase11-file-search')?.value?.trim() || '';
-    const url = fileNumber ? `/api/orders?page=0&size=10&fileNumber=${encodeURIComponent(fileNumber)}` : '/api/orders?page=0&size=10';
+    const path = fileNumber ? `orders?page=0&size=10&fileNumber=${encodeURIComponent(fileNumber)}` : 'orders?page=0&size=10';
 
     const button = document.getElementById('phase11-load-orders');
     if (button) {
@@ -120,7 +124,7 @@
     }
 
     try {
-      const data = await api(url);
+      const data = await api(path);
       renderOrders(data.orders || []);
       document.getElementById('phase11-searches').innerHTML = '';
       document.getElementById('phase11-result').innerHTML = '';
@@ -139,7 +143,7 @@
   async function loadSearches(orderGuid) {
     if (!orderGuid) return toast('No order GUID available for this row.', true);
     try {
-      const data = await api(`/api/orders/${encodeURIComponent(orderGuid)}/searches`);
+      const data = await api(`orders/${encodeURIComponent(orderGuid)}/searches`);
       renderSearches(orderGuid, data.searches || []);
       document.getElementById('phase11-result').innerHTML = '';
     } catch (error) {
@@ -150,7 +154,7 @@
   async function loadResult(orderGuid, searchGuid) {
     if (!orderGuid || !searchGuid) return toast('Order GUID and Search GUID are required.', true);
     try {
-      const data = await api(`/api/orders/${encodeURIComponent(orderGuid)}/searches/${encodeURIComponent(searchGuid)}/results?resultType=EDITOR`);
+      const data = await api(`orders/${encodeURIComponent(orderGuid)}/searches/${encodeURIComponent(searchGuid)}/results?resultType=EDITOR`);
       renderResult(data.result || {});
     } catch (error) {
       toast(error.message || 'The order connection is currently unavailable.', true);
@@ -166,9 +170,9 @@
     panel.className = 'card wide-card settings-card phase11-panel';
     panel.innerHTML = `
       <h2>TazWorks Proxy Connection Test</h2>
-      <p class="muted">Server-side only. This test uses internal API routes and the fixed-IP SaffHire proxy. The browser never calls the proxy directly.</p>
+      <p class="muted">Server-side only through the existing single API function. This avoids the Vercel Hobby serverless function limit.</p>
       <div class="phase11-warning">
-        Client GUID is locked by Vercel ENV. Proxy secret stays server-side.
+        Client GUID is locked by Vercel ENV. Proxy secret stays server-side. Browser calls only /api/index.
       </div>
       <div class="phase11-actions">
         <input id="phase11-file-search" placeholder="Optional file number search" />
