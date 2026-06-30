@@ -13,11 +13,13 @@
     "lucide-react": "latest",
     "pg": "^8.16.3",
     "jose": "^6.1.2",
+    "bcryptjs": "^2.4.3",
     "pdf-lib": "^1.17.1",
     "pdf-parse": "^1.1.1"
   },
   "devDependencies": {
     "@types/node": "^22.10.2",
+    "@types/bcryptjs": "^2.4.6",
     "@types/react": "latest",
     "@types/react-dom": "latest"
   }
