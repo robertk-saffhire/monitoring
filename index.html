@@ -16,7 +16,6 @@
           typeof url === 'string' &&
           url.startsWith('/api/') &&
           !url.startsWith('/api/index') &&
-          !url.startsWith('/api/orders') &&
           !url.startsWith('/api/safety-response-link') &&
           !url.startsWith('/api/safety-response') &&
           !url.startsWith('/api/fmcsa-packet') &&
@@ -49,8 +48,5 @@
     <script src="/phase9b-role-sync.js"></script>
     <script src="/phase10-medical-pdfs.js"></script>
     <script src="/phase10r-safe-header-sort.js"></script>
-
-    <!-- TazWorks proxy connection test -->
-    <script src="/phase11-tazworks-connection.js"></script>
   </body>
 </html>
