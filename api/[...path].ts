@@ -1,5 +1,6 @@
 import pg from 'pg';
 import { jwtVerify } from 'jose';
+import coreHandler from './index';
 
 const { Pool } = pg;
 let pool: any;
@@ -61,15 +62,13 @@ function pathName(req: any) {
   return url.pathname.replace(/^\/api\/?/, '').replace(/^\//, '');
 }
 
-function getEnv() {
+function env() {
   const baseUrl = String(process.env.TAZWORKS_PROXY_BASE_URL || '').replace(/\/+$/, '');
   const proxySecret = String(process.env.TAZWORKS_PROXY_SECRET || '');
   const clientGuid = String(process.env.TAZWORKS_CLIENT_GUID || '');
-
   if (!baseUrl) throw new Error('TAZWORKS_PROXY_BASE_URL is missing');
   if (!proxySecret) throw new Error('TAZWORKS_PROXY_SECRET is missing');
   if (!clientGuid) throw new Error('TAZWORKS_CLIENT_GUID is missing');
-
   return { baseUrl, proxySecret, clientGuid };
 }
 
@@ -81,7 +80,7 @@ function safeMessage(errorText: string, statusCode?: number) {
   return 'The order connection is currently unavailable.';
 }
 
-function extractArray(payload: any) {
+function arr(payload: any) {
   if (Array.isArray(payload)) return payload;
   if (Array.isArray(payload?.content)) return payload.content;
   if (Array.isArray(payload?.orders)) return payload.orders;
@@ -92,52 +91,52 @@ function extractArray(payload: any) {
   return [];
 }
 
-function normalizeDate(value: any) {
+function dt(value: any) {
   if (!value) return '';
   const d = new Date(value);
   if (Number.isNaN(d.getTime())) return String(value);
   return d.toISOString();
 }
 
-function safeOrder(row: any) {
+function order(row: any) {
   return {
     orderGuid: row.orderGuid || row.guid || row.id || '',
     fileNumber: row.fileNumber || row.fileNo || row.orderNumber || '',
     orderStatus: row.orderStatus || row.status || '',
     orderType: row.orderType || row.type || '',
-    orderedDate: normalizeDate(row.orderedDate || row.orderDate),
-    completedDate: normalizeDate(row.completedDate),
+    orderedDate: dt(row.orderedDate || row.orderDate),
+    completedDate: dt(row.completedDate),
     applicantName: row.applicantName || row.subjectName || row.name || '',
     clientName: row.clientName || '',
     clientCode: row.clientCode || '',
     productName: row.productName || row.packageName || '',
     requestedBy: row.requestedBy || row.requestor || '',
     searchFlagged: Boolean(row.searchFlagged || row.flagged),
-    createdDate: normalizeDate(row.createdDate || row.createdAt),
-    modifiedDate: normalizeDate(row.modifiedDate || row.updatedAt),
+    createdDate: dt(row.createdDate || row.createdAt),
+    modifiedDate: dt(row.modifiedDate || row.updatedAt),
   };
 }
 
-function safeSearch(row: any) {
+function search(row: any) {
   return {
     searchGuid: row.searchGuid || row.guid || row.id || '',
     searchName: row.searchName || row.name || row.type || '',
     searchType: row.searchType || row.type || '',
     status: row.status || row.searchStatus || '',
     resultType: row.resultType || '',
-    createdDate: normalizeDate(row.createdDate || row.createdAt),
-    modifiedDate: normalizeDate(row.modifiedDate || row.updatedAt),
+    createdDate: dt(row.createdDate || row.createdAt),
+    modifiedDate: dt(row.modifiedDate || row.updatedAt),
     flagged: Boolean(row.flagged || row.searchFlagged),
   };
 }
 
-function stripSensitive(value: any): any {
-  if (Array.isArray(value)) return value.map(stripSensitive);
+function strip(value: any): any {
+  if (Array.isArray(value)) return value.map(strip);
   if (value && typeof value === 'object') {
     const out: any = {};
     for (const [key, val] of Object.entries(value)) {
       if (/token|secret|authorization|password|bearer/i.test(key)) continue;
-      out[key] = stripSensitive(val);
+      out[key] = strip(val);
     }
     return out;
   }
@@ -145,11 +144,11 @@ function stripSensitive(value: any): any {
 }
 
 async function proxyGet(proxyPath: string) {
-  const env = getEnv();
-  const response = await fetch(`${env.baseUrl}${proxyPath}`, {
+  const e = env();
+  const response = await fetch(`${e.baseUrl}${proxyPath}`, {
     method: 'GET',
     headers: {
-      Authorization: `Bearer ${env.proxySecret}`,
+      Authorization: `Bearer ${e.proxySecret}`,
       Accept: 'application/json',
     },
   });
@@ -159,8 +158,8 @@ async function proxyGet(proxyPath: string) {
   try { payload = raw ? JSON.parse(raw) : {}; } catch { payload = { raw }; }
 
   if (!response.ok) {
-    const message = payload?.message || payload?.error || raw || `Proxy returned ${response.status}`;
-    const err: any = new Error(safeMessage(message, response.status));
+    const msg = payload?.message || payload?.error || raw || `Proxy returned ${response.status}`;
+    const err: any = new Error(safeMessage(msg, response.status));
     err.statusCode = err.message === 'Order access could not be verified.' ? 403 : 503;
     throw err;
   }
@@ -169,20 +168,22 @@ async function proxyGet(proxyPath: string) {
 }
 
 async function handleOrders(req: any, res: any, route: string, url: URL) {
-  if (req.method !== 'GET') return json(res, 405, { status: 'error', message: 'Read-only endpoint. Method not allowed.' });
+  if (req.method !== 'GET') {
+    return json(res, 405, { status: 'error', message: 'Read-only endpoint. Method not allowed.' });
+  }
 
-  const env = getEnv();
+  const e = env();
 
   if (route === 'orders') {
     const page = Math.max(0, Math.min(50, Number(url.searchParams.get('page') || '0') || 0));
     const size = Math.max(1, Math.min(50, Number(url.searchParams.get('size') || '10') || 10));
     const fileNumber = String(url.searchParams.get('fileNumber') || '').trim().toLowerCase();
 
-    const payload = await proxyGet(`/tazworks/orders?page=${page}&size=${size}&clientGuid=${encodeURIComponent(env.clientGuid)}`);
-    let orders = extractArray(payload).map(safeOrder);
+    const payload = await proxyGet(`/tazworks/orders?page=${page}&size=${size}&clientGuid=${encodeURIComponent(e.clientGuid)}`);
+    let orders = arr(payload).map(order);
 
     if (fileNumber) {
-      orders = orders.filter((order: any) => String(order.fileNumber || '').toLowerCase().includes(fileNumber));
+      orders = orders.filter((o: any) => String(o.fileNumber || '').toLowerCase().includes(fileNumber));
     }
 
     return json(res, 200, { status: 'ok', page, size, filtered: Boolean(fileNumber), orders, count: orders.length });
@@ -191,9 +192,8 @@ async function handleOrders(req: any, res: any, route: string, url: URL) {
   const searchesMatch = route.match(/^orders\/([^/]+)\/searches$/);
   if (searchesMatch) {
     const orderGuid = decodeURIComponent(searchesMatch[1]);
-    const payload = await proxyGet(`/tazworks/orders/${encodeURIComponent(orderGuid)}/searches?clientGuid=${encodeURIComponent(env.clientGuid)}`);
-    const searches = extractArray(payload).map(safeSearch);
-    return json(res, 200, { status: 'ok', orderGuid, searches, count: searches.length });
+    const payload = await proxyGet(`/tazworks/orders/${encodeURIComponent(orderGuid)}/searches?clientGuid=${encodeURIComponent(e.clientGuid)}`);
+    return json(res, 200, { status: 'ok', orderGuid, searches: arr(payload).map(search), count: arr(payload).length });
   }
 
   const resultMatch = route.match(/^orders\/([^/]+)\/searches\/([^/]+)\/results$/);
@@ -201,10 +201,8 @@ async function handleOrders(req: any, res: any, route: string, url: URL) {
     const orderGuid = decodeURIComponent(resultMatch[1]);
     const searchGuid = decodeURIComponent(resultMatch[2]);
     const resultType = String(url.searchParams.get('resultType') || 'EDITOR').trim() || 'EDITOR';
-
-    const payload = await proxyGet(`/tazworks/orders/${encodeURIComponent(orderGuid)}/searches/${encodeURIComponent(searchGuid)}/results?resultType=${encodeURIComponent(resultType)}&clientGuid=${encodeURIComponent(env.clientGuid)}`);
-
-    return json(res, 200, { status: 'ok', orderGuid, searchGuid, resultType, result: stripSensitive(payload) });
+    const payload = await proxyGet(`/tazworks/orders/${encodeURIComponent(orderGuid)}/searches/${encodeURIComponent(searchGuid)}/results?resultType=${encodeURIComponent(resultType)}&clientGuid=${encodeURIComponent(e.clientGuid)}`);
+    return json(res, 200, { status: 'ok', orderGuid, searchGuid, resultType, result: strip(payload) });
   }
 
   return json(res, 404, { status: 'error', message: 'Order route not found.' });
@@ -214,17 +212,18 @@ export default async function handler(req: any, res: any) {
   const url = new URL(req.url || '/', 'https://local.test');
   const route = pathName(req);
 
-  try {
-    if (!route.startsWith('orders')) {
-      return json(res, 404, { status: 'error', message: 'Route not found.' });
-    }
+  if (!route.startsWith('orders')) {
+    return coreHandler(req, res);
+  }
 
+  try {
     const user = await getUser(req);
     if (!user) return json(res, 401, { status: 'error', message: 'Login required' });
-
     return await handleOrders(req, res, route, url);
   } catch (error: any) {
-    const statusCode = error?.statusCode || 503;
-    return json(res, statusCode, { status: 'error', message: error?.message || 'The order connection is currently unavailable.' });
+    return json(res, error?.statusCode || 503, {
+      status: 'error',
+      message: error?.message || 'The order connection is currently unavailable.',
+    });
   }
 }
