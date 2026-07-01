@@ -1,3 +1,3 @@
-// Phase 11H login fix.
-// TazWorks test panel remains disabled until login is stable.
-(function(){ console.log('Phase 11 TazWorks panel disabled by Phase 11H.'); })();
+// Phase 11I.
+// TazWorks test panel remains disabled while login/build are restored.
+(function(){ console.log('Phase 11 TazWorks panel disabled by Phase 11I.'); })();
