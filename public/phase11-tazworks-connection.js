@@ -1,3 +1,3 @@
-// Phase 11F login rollback.
-// TazWorks test panel is disabled temporarily to restore login stability.
-(function(){ console.log('Phase 11 TazWorks panel disabled by Phase 11F login rollback.'); })();
+// Phase 11G login fix.
+// TazWorks test panel is temporarily disabled while login is restored.
+(function(){ console.log('Phase 11 TazWorks panel disabled by Phase 11G.'); })();
