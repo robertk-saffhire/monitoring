@@ -211,7 +211,7 @@ async function systemCheck(req: any, res: any, user: any) {
   return json(res, 200, { status: 'ok', checks });
 }
 
-// PHASE12A10_TAZWORKS_SYNC START
+// PHASE12A11_TAZWORKS_SYNC START
 function tazEnv() {
   const baseUrl = String(process.env.TAZWORKS_PROXY_BASE_URL || '').replace(/\/+$/, '');
   const proxySecret = String(process.env.TAZWORKS_PROXY_SECRET || '');
@@ -228,33 +228,45 @@ function tazSafe(errorText: string, statusCode?: number) {
   return 'The order connection is currently unavailable.';
 }
 
-function tazArrays(payload: any, depth = 0): any[] {
+function arrays(payload: any, depth = 0): any[] {
   if (!payload || depth > 4) return [];
   if (Array.isArray(payload)) return [payload];
   if (typeof payload !== 'object') return [];
   const out: any[] = [];
   for (const val of Object.values(payload)) {
     if (Array.isArray(val)) out.push(val);
-    else if (val && typeof val === 'object') out.push(...tazArrays(val, depth + 1));
+    else if (val && typeof val === 'object') out.push(...arrays(val, depth + 1));
   }
   return out;
 }
 
-function looksLikeOrder(row: any) {
+function flat(value: any, depth = 0): string {
+  if (value == null || depth > 6) return '';
+  if (typeof value === 'string' || typeof value === 'number' || typeof value === 'boolean') return String(value);
+  if (Array.isArray(value)) return value.map((v) => flat(v, depth + 1)).join('\n');
+  if (typeof value === 'object') return Object.entries(value).map(([k,v]) => `${k}: ${flat(v, depth + 1)}`).join('\n');
+  return '';
+}
+
+function looksOrder(row: any) {
   if (!row || typeof row !== 'object') return false;
   return Boolean(row.orderGuid || row.guid || row.id || row.fileNumber || row.fileNo || row.orderNumber || row.applicantName || row.subjectName || row.orderStatus || row.status);
 }
 
-function looksLikeSearch(row: any) {
+function looksSearch(row: any) {
   if (!row || typeof row !== 'object') return false;
-  return Boolean(row.searchGuid || row.guid || row.id || row.searchName || row.searchType || row.name || row.type || row.productName);
+  return Boolean(row.searchGuid || row.searchGUID || row.searchId || row.searchID || row.search_id || row.guid || row.id || row.searchName || row.searchType || row.name || row.type || row.productName || row.providerName || row._links || row.links);
 }
 
-function tazArray(payload: any, kind: 'order' | 'search' = 'order') {
-  const candidates = [payload, payload?.content, payload?.orders, payload?.searches, payload?.items, payload?.data, payload?.results, payload?.response?.content, payload?.response?.orders, payload?.response?.searches, payload?._embedded?.orders, payload?._embedded?.searches];
-  const test = kind === 'search' ? looksLikeSearch : looksLikeOrder;
+function arr(payload: any, kind: 'order' | 'search' = 'order') {
+  const candidates = [
+    payload, payload?.content, payload?.orders, payload?.searches, payload?.items, payload?.data, payload?.results,
+    payload?.response?.content, payload?.response?.orders, payload?.response?.searches,
+    payload?._embedded?.orders, payload?._embedded?.searches, payload?._embedded?.content
+  ];
+  const test = kind === 'search' ? looksSearch : looksOrder;
   for (const c of candidates) if (Array.isArray(c) && c.some(test)) return c;
-  const found = tazArrays(payload).find((arr) => arr.some(test));
+  const found = arrays(payload).find((a) => a.some(test));
   return found || [];
 }
 
@@ -269,7 +281,7 @@ function dateOnly(value: any) {
   return v ? v.slice(0, 10) : null;
 }
 
-function normalizeDate(value: any) {
+function dateFromText(value: any) {
   const raw = String(value || '').trim();
   if (!raw) return null;
   let m = raw.match(/\b(20\d{2})[\/\-](\d{1,2})[\/\-](\d{1,2})\b/);
@@ -281,26 +293,57 @@ function normalizeDate(value: any) {
   return null;
 }
 
-function flatten(value: any, depth = 0): string {
-  if (value == null || depth > 6) return '';
-  if (typeof value === 'string' || typeof value === 'number' || typeof value === 'boolean') return String(value);
-  if (Array.isArray(value)) return value.map((v) => flatten(v, depth + 1)).join('\\n');
-  if (typeof value === 'object') return Object.entries(value).map(([k,v]) => `${k}: ${flatten(v, depth + 1)}`).join('\\n');
+function findUuidText(value: any) {
+  const text = flat(value);
+  return Array.from(new Set((text.match(/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/ig) || []).map((v) => v.toLowerCase())));
+}
+
+function dig(obj: any, paths: string[]) {
+  for (const path of paths) {
+    const parts = path.split('.');
+    let cur = obj;
+    for (const part of parts) {
+      if (!cur || typeof cur !== 'object') { cur = null; break; }
+      cur = cur[part];
+    }
+    if (cur !== undefined && cur !== null && String(cur).trim() !== '') return cur;
+  }
   return '';
 }
 
+function searchGuidFrom(row: any, orderGuid?: string) {
+  const direct = dig(row, [
+    'searchGuid', 'searchGUID', 'searchId', 'searchID', 'search_id',
+    'guid', 'id', 'resultGuid', 'resultGUID', 'orderSearchGuid', 'orderSearchGUID',
+    'componentGuid', 'componentGUID', 'packageSearchGuid',
+    'search.guid', 'search.id', 'search.searchGuid',
+    '_links.self.href', '_links.result.href', '_links.results.href',
+    'links.self.href', 'links.result.href', 'links.results.href'
+  ]);
+
+  if (direct) {
+    const directText = String(direct).trim();
+    const uuid = directText.match(/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/i);
+    if (uuid) return uuid[0];
+    return directText;
+  }
+
+  const uuids = findUuidText(row).filter((uuid) => uuid !== String(orderGuid || '').toLowerCase());
+  return uuids[0] || '';
+}
+
 function findMedExpire(payload: any) {
-  const text = flatten(payload);
+  const text = flat(payload);
   const patterns = [
-    /(?:medical\s+certificate|medical|med\s*cert|dot\s*medical|certificate)[\s\S]{0,180}?(?:expiration|expiry|expires|expire)\s*(?:date)?\s*[:#-]?\s*([0-9]{4}[\/\-][0-9]{1,2}[\/\-][0-9]{1,2}|[0-9]{1,2}[\/\-][0-9]{1,2}[\/\-][0-9]{2,4})/i,
-    /(?:expiration|expiry|expires|expire)\s*(?:date)?\s*[:#-]?\s*([0-9]{4}[\/\-][0-9]{1,2}[\/\-][0-9]{1,2}|[0-9]{1,2}[\/\-][0-9]{1,2}[\/\-][0-9]{2,4})[\s\S]{0,140}?(?:medical|med\s*cert|certificate|dot)/i,
-    /(?:medical|med\s*cert|certificate|dot)[\s\S]{0,140}?([0-9]{4}[\/\-][0-9]{1,2}[\/\-][0-9]{1,2}|[0-9]{1,2}[\/\-][0-9]{1,2}[\/\-][0-9]{2,4})/i
+    /(?:medical\s+certificate|medical|med\s*cert|dot\s*medical|certificate)[\s\S]{0,200}?(?:expiration|expiry|expires|expire)\s*(?:date)?\s*[:#-]?\s*([0-9]{4}[\/\-][0-9]{1,2}[\/\-][0-9]{1,2}|[0-9]{1,2}[\/\-][0-9]{1,2}[\/\-][0-9]{2,4})/i,
+    /(?:expiration|expiry|expires|expire)\s*(?:date)?\s*[:#-]?\s*([0-9]{4}[\/\-][0-9]{1,2}[\/\-][0-9]{1,2}|[0-9]{1,2}[\/\-][0-9]{1,2}[\/\-][0-9]{2,4})[\s\S]{0,160}?(?:medical|med\s*cert|certificate|dot)/i,
+    /(?:medical|med\s*cert|certificate|dot)[\s\S]{0,160}?([0-9]{4}[\/\-][0-9]{1,2}[\/\-][0-9]{1,2}|[0-9]{1,2}[\/\-][0-9]{1,2}[\/\-][0-9]{2,4})/i
   ];
-  for (const p of patterns) {
-    const m = text.match(p);
-    if (m?.[1]) {
-      const d = normalizeDate(m[1]);
-      if (d) return { date: d, match: m[0].slice(0, 500) };
+  for (const pattern of patterns) {
+    const match = text.match(pattern);
+    if (match?.[1]) {
+      const d = dateFromText(match[1]);
+      if (d) return { date: d, match: match[0].slice(0, 500) };
     }
   }
   return null;
@@ -326,16 +369,18 @@ function orderFrom(row: any) {
   };
 }
 
-function searchFrom(row: any) {
+function searchFrom(row: any, orderGuid?: string) {
   return {
-    searchGuid: row.searchGuid || row.guid || row.id || '',
-    label: [row.searchName, row.searchType, row.name, row.type, row.productName, row.providerName].filter(Boolean).join(' '),
+    searchGuid: searchGuidFrom(row, orderGuid),
+    label: [row.searchName, row.searchType, row.name, row.type, row.productName, row.providerName, row.description].filter(Boolean).join(' '),
+    rawKeys: row && typeof row === 'object' ? Object.keys(row).slice(0, 25) : [],
+    rawUuids: findUuidText(row).filter((uuid) => uuid !== String(orderGuid || '').toLowerCase()).slice(0, 10),
     raw: row
   };
 }
 
 function isMvr(search: any) {
-  return /\bmvr\b|motor vehicle|driving record|driver record|driver license|dl record|dmv/i.test(search.label + ' ' + flatten(search.raw));
+  return /\bmvr\b|motor vehicle|driving record|driver record|driver license|dl record|dmv/i.test(search.label + ' ' + flat(search.raw));
 }
 
 async function proxyGet(proxyPath: string) {
@@ -355,26 +400,39 @@ async function proxyGet(proxyPath: string) {
 
 async function pullMvrMed(orderGuid: string, order: any) {
   const e = tazEnv();
-  const summary: any = { orderGuid, fileNumber: order.fileNumber || '', searchesPulled: 0, mvrSearches: 0, resultPulls: 0, medExpire: null };
+  const summary: any = { orderGuid, fileNumber: order.fileNumber || '', searchesPulled: 0, mvrSearches: 0, resultPulls: 0, noSearchGuid: 0, resultErrors: [], medExpire: null, mvrSearchDetails: [] };
   if (!orderGuid) return summary;
+
   const payload = await proxyGet(`/tazworks/orders/${encodeURIComponent(orderGuid)}/searches?clientGuid=${encodeURIComponent(e.clientGuid)}`);
-  const searches = tazArray(payload, 'search').map(searchFrom);
+  const searches = arr(payload, 'search').map((row: any) => searchFrom(row, orderGuid));
   summary.searchesPulled = searches.length;
+
   const mvrs = searches.filter(isMvr);
   summary.mvrSearches = mvrs.length;
+  summary.mvrSearchDetails = mvrs.slice(0, 5).map((s: any) => ({ searchGuid: s.searchGuid, label: s.label, rawKeys: s.rawKeys, rawUuids: s.rawUuids }));
+
   for (const s of mvrs) {
-    if (!s.searchGuid) continue;
-    summary.resultPulls++;
-    const result = await proxyGet(`/tazworks/orders/${encodeURIComponent(orderGuid)}/searches/${encodeURIComponent(s.searchGuid)}/results?resultType=EDITOR&clientGuid=${encodeURIComponent(e.clientGuid)}`);
-    const found = findMedExpire(result);
-    if (found?.date) {
-      summary.medExpire = found.date;
-      summary.searchGuid = s.searchGuid;
-      summary.searchLabel = s.label;
-      summary.rawMatch = found.match;
-      return summary;
+    if (!s.searchGuid) {
+      summary.noSearchGuid++;
+      continue;
+    }
+
+    try {
+      summary.resultPulls++;
+      const result = await proxyGet(`/tazworks/orders/${encodeURIComponent(orderGuid)}/searches/${encodeURIComponent(s.searchGuid)}/results?resultType=EDITOR&clientGuid=${encodeURIComponent(e.clientGuid)}`);
+      const found = findMedExpire(result);
+      if (found?.date) {
+        summary.medExpire = found.date;
+        summary.searchGuid = s.searchGuid;
+        summary.searchLabel = s.label;
+        summary.rawMatch = found.match;
+        return summary;
+      }
+    } catch (err: any) {
+      summary.resultErrors.push({ searchGuid: s.searchGuid, message: String(err?.message || err) });
     }
   }
+
   return summary;
 }
 
@@ -399,15 +457,18 @@ async function tazworksSyncRun(req: any, res: any, user: any) {
 
   try {
     const e = tazEnv();
+
     for (let page = 0; page < 5; page++) {
       const payload = await proxyGet(`/tazworks/orders?page=${page}&size=10&clientGuid=${encodeURIComponent(e.clientGuid)}`);
-      const list = tazArray(payload);
+      const list = arr(payload);
       pageSummaries.push({ page, arrayCount: list.length, topLevelKeys: payload && typeof payload === 'object' ? Object.keys(payload).slice(0, 20) : [] });
+
       for (const row of list) {
         const o = orderFrom(row);
         const key = String(o.orderGuid || o.fileNumber || JSON.stringify(row).slice(0, 100));
         if (!dedupe.has(key)) dedupe.set(key, o);
       }
+
       if (list.length < 10) break;
     }
 
@@ -417,6 +478,7 @@ async function tazworksSyncRun(req: any, res: any, user: any) {
     for (const o of orders) {
       try {
         let medExpire: string | null = null;
+
         if (o.orderGuid) {
           try {
             const mvr = await pullMvrMed(o.orderGuid, o);
@@ -442,6 +504,7 @@ async function tazworksSyncRun(req: any, res: any, user: any) {
              on conflict ("fileNumber","companyId") do update set "applicantName"=case when excluded."applicantName"<>'' then excluded."applicantName" else applicants."applicantName" end,"orderDate"=coalesce(excluded."orderDate",applicants."orderDate"),"mvrStatus"=coalesce(excluded."mvrStatus",applicants."mvrStatus"),"medExpire"=coalesce(excluded."medExpire",applicants."medExpire"),"updatedAt"=now()`,
             [companyId, String(o.fileNumber), String(o.applicantName || 'REVIEW NAME NEEDED'), dateOnly(o.orderedDate || o.createdDate), 'Off', String(o.orderStatus || ''), medExpire, false, '']
           );
+
           applicantsUpserted++;
           if (medExpire) medExpireUpdated++;
 
@@ -470,7 +533,7 @@ async function tazworksSyncRun(req: any, res: any, user: any) {
     return json(res, error?.statusCode || 503, { status: 'error', message: safe, runId });
   }
 }
-// PHASE12A10_TAZWORKS_SYNC END
+// PHASE12A11_TAZWORKS_SYNC END
 
 
 export default async function handler(req: any, res: any) {
