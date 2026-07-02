@@ -334,18 +334,46 @@ function searchGuidFrom(row: any, orderGuid?: string) {
 
 function findMedExpire(payload: any) {
   const text = flat(payload);
+
+  // IMPORTANT:
+  // Only accept dates tied to an expiration label.
+  // Never accept Issue Date, even if it appears inside the Medical Certificate section.
+  const expirationLabel = String.raw`(?:expiration|expiry|expires|expire)\\s*(?:date)?`;
+  const datePattern = String.raw`([0-9]{4}[\\/\\-][0-9]{1,2}[\\/\\-][0-9]{1,2}|[0-9]{1,2}[\\/\\-][0-9]{1,2}[\\/\\-][0-9]{2,4})`;
+
   const patterns = [
-    /(?:medical\s+certificate|medical|med\s*cert|dot\s*medical|certificate)[\s\S]{0,200}?(?:expiration|expiry|expires|expire)\s*(?:date)?\s*[:#-]?\s*([0-9]{4}[\/\-][0-9]{1,2}[\/\-][0-9]{1,2}|[0-9]{1,2}[\/\-][0-9]{1,2}[\/\-][0-9]{2,4})/i,
-    /(?:expiration|expiry|expires|expire)\s*(?:date)?\s*[:#-]?\s*([0-9]{4}[\/\-][0-9]{1,2}[\/\-][0-9]{1,2}|[0-9]{1,2}[\/\-][0-9]{1,2}[\/\-][0-9]{2,4})[\s\S]{0,160}?(?:medical|med\s*cert|certificate|dot)/i,
-    /(?:medical|med\s*cert|certificate|dot)[\s\S]{0,160}?([0-9]{4}[\/\-][0-9]{1,2}[\/\-][0-9]{1,2}|[0-9]{1,2}[\/\-][0-9]{1,2}[\/\-][0-9]{2,4})/i
+    // HTML-ish result:
+    // Expiration Date:</span><span class="data">2028/03/26
+    new RegExp(expirationLabel + String.raw`\\s*[:#\\-]?\\s*(?:<[^>]+>|&nbsp;|\\s|:|-)*` + datePattern, 'i'),
+
+    // Text result:
+    // Expiration Date: 2028/03/26
+    new RegExp(expirationLabel + String.raw`\\s*[:#\\-]?\\s*` + datePattern, 'i'),
+
+    // Label and date separated by report markup or extra words.
+    new RegExp(expirationLabel + String.raw`[\\s\\S]{0,120}?` + datePattern, 'i'),
+
+    // Medical Certificate section, but still requires an expiration label before the date.
+    new RegExp(String.raw`(?:medical\\s+certificate|medical|med\\s*cert|dot\\s*medical|certificate)[\\s\\S]{0,500}?` + expirationLabel + String.raw`[\\s\\S]{0,120}?` + datePattern, 'i')
   ];
+
   for (const pattern of patterns) {
     const match = text.match(pattern);
     if (match?.[1]) {
+      const context = match[0].slice(0, 700);
+
+      // Guardrail: reject any accidental Issue Date match.
+      const issueIndex = context.toLowerCase().lastIndexOf('issue date');
+      const expireIndex = context.toLowerCase().search(/expiration|expiry|expires|expire/);
+      if (issueIndex >= 0 && (expireIndex < 0 || issueIndex < expireIndex)) {
+        continue;
+      }
+
       const d = dateFromText(match[1]);
-      if (d) return { date: d, match: match[0].slice(0, 500) };
+      if (d) return { date: d, match: context };
     }
   }
+
   return null;
 }
 
