@@ -211,170 +211,176 @@ async function systemCheck(req: any, res: any, user: any) {
   return json(res, 200, { status: 'ok', checks });
 }
 
-// PHASE12A6_TAZWORKS_SYNC START
-function tazworksSyncEnv() {
+// PHASE12A10_TAZWORKS_SYNC START
+function tazEnv() {
   const baseUrl = String(process.env.TAZWORKS_PROXY_BASE_URL || '').replace(/\/+$/, '');
   const proxySecret = String(process.env.TAZWORKS_PROXY_SECRET || '');
   const clientGuid = String(process.env.TAZWORKS_CLIENT_GUID || '');
-
   if (!baseUrl) throw new Error('TAZWORKS_PROXY_BASE_URL is missing');
   if (!proxySecret) throw new Error('TAZWORKS_PROXY_SECRET is missing');
   if (!clientGuid) throw new Error('TAZWORKS_CLIENT_GUID is missing');
-
   return { baseUrl, proxySecret, clientGuid };
 }
 
-function tazworksSafeMessage(errorText: string, statusCode?: number) {
+function tazSafe(errorText: string, statusCode?: number) {
   const value = String(errorText || '');
-  if (statusCode === 401 || statusCode === 403 || /NOT_AUTHORIZED|NOT_AUTHENTICATED|not authorized|unauthorized/i.test(value)) {
-    return 'Order access could not be verified.';
-  }
+  if (statusCode === 401 || statusCode === 403 || /NOT_AUTHORIZED|NOT_AUTHENTICATED|not authorized|unauthorized/i.test(value)) return 'Order access could not be verified.';
   return 'The order connection is currently unavailable.';
 }
 
-function tazworksPayloadKeys(payload: any) {
-  if (!payload || typeof payload !== 'object') return [];
-  return Object.keys(payload).slice(0, 30);
-}
-
-function tazworksFindArrays(payload: any, path = '', depth = 0): any[] {
-  if (!payload || depth > 3) return [];
-  if (Array.isArray(payload)) return [{ path: path || 'root', value: payload }];
+function tazArrays(payload: any, depth = 0): any[] {
+  if (!payload || depth > 4) return [];
+  if (Array.isArray(payload)) return [payload];
   if (typeof payload !== 'object') return [];
-
-  const found: any[] = [];
-  for (const [key, value] of Object.entries(payload)) {
-    const nextPath = path ? `${path}.${key}` : key;
-    if (Array.isArray(value)) found.push({ path: nextPath, value });
-    else if (value && typeof value === 'object') found.push(...tazworksFindArrays(value, nextPath, depth + 1));
+  const out: any[] = [];
+  for (const val of Object.values(payload)) {
+    if (Array.isArray(val)) out.push(val);
+    else if (val && typeof val === 'object') out.push(...tazArrays(val, depth + 1));
   }
-  return found;
+  return out;
 }
 
-function tazworksLooksLikeOrder(row: any) {
+function looksLikeOrder(row: any) {
   if (!row || typeof row !== 'object') return false;
-  return Boolean(
-    row.orderGuid ||
-    row.guid ||
-    row.id ||
-    row.fileNumber ||
-    row.fileNo ||
-    row.orderNumber ||
-    row.applicantName ||
-    row.subjectName ||
-    row.orderStatus ||
-    row.status
-  );
+  return Boolean(row.orderGuid || row.guid || row.id || row.fileNumber || row.fileNo || row.orderNumber || row.applicantName || row.subjectName || row.orderStatus || row.status);
 }
 
-function tazworksArray(payload: any) {
-  const preferred = [
-    payload,
-    payload?.content,
-    payload?.orders,
-    payload?.items,
-    payload?.data,
-    payload?.results,
-    payload?.response,
-    payload?.response?.content,
-    payload?.response?.orders,
-    payload?._embedded?.orders,
-    payload?._embedded?.content,
-  ];
-
-  for (const candidate of preferred) {
-    if (Array.isArray(candidate) && candidate.some(tazworksLooksLikeOrder)) return candidate;
-  }
-
-  const arrays = tazworksFindArrays(payload);
-  const best = arrays.find((item) => item.value.some(tazworksLooksLikeOrder));
-  return best ? best.value : [];
+function looksLikeSearch(row: any) {
+  if (!row || typeof row !== 'object') return false;
+  return Boolean(row.searchGuid || row.guid || row.id || row.searchName || row.searchType || row.name || row.type || row.productName);
 }
 
-function tazworksArrayPath(payload: any) {
-  const preferred: Array<[string, any]> = [
-    ['root', payload],
-    ['content', payload?.content],
-    ['orders', payload?.orders],
-    ['items', payload?.items],
-    ['data', payload?.data],
-    ['results', payload?.results],
-    ['response', payload?.response],
-    ['response.content', payload?.response?.content],
-    ['response.orders', payload?.response?.orders],
-    ['_embedded.orders', payload?._embedded?.orders],
-    ['_embedded.content', payload?._embedded?.content],
-  ];
-
-  for (const [path, candidate] of preferred) {
-    if (Array.isArray(candidate) && candidate.some(tazworksLooksLikeOrder)) return path;
-  }
-
-  const arrays = tazworksFindArrays(payload);
-  const best = arrays.find((item) => item.value.some(tazworksLooksLikeOrder));
-  return best ? best.path : 'not_found';
+function tazArray(payload: any, kind: 'order' | 'search' = 'order') {
+  const candidates = [payload, payload?.content, payload?.orders, payload?.searches, payload?.items, payload?.data, payload?.results, payload?.response?.content, payload?.response?.orders, payload?.response?.searches, payload?._embedded?.orders, payload?._embedded?.searches];
+  const test = kind === 'search' ? looksLikeSearch : looksLikeOrder;
+  for (const c of candidates) if (Array.isArray(c) && c.some(test)) return c;
+  const found = tazArrays(payload).find((arr) => arr.some(test));
+  return found || [];
 }
 
-function tazworksIso(value: any) {
+function iso(value: any) {
   if (!value) return null;
   const d = new Date(value);
-  if (Number.isNaN(d.getTime())) return null;
-  return d.toISOString();
+  return Number.isNaN(d.getTime()) ? null : d.toISOString();
 }
 
-function tazworksDateOnly(value: any) {
-  const iso = tazworksIso(value);
-  return iso ? iso.slice(0, 10) : null;
+function dateOnly(value: any) {
+  const v = iso(value);
+  return v ? v.slice(0, 10) : null;
 }
 
-function tazworksOrder(row: any) {
+function normalizeDate(value: any) {
+  const raw = String(value || '').trim();
+  if (!raw) return null;
+  let m = raw.match(/\b(20\d{2})[\/\-](\d{1,2})[\/\-](\d{1,2})\b/);
+  if (m) return `${m[1]}-${String(m[2]).padStart(2,'0')}-${String(m[3]).padStart(2,'0')}`;
+  m = raw.match(/\b(\d{1,2})[\/\-](\d{1,2})[\/\-](20\d{2})\b/);
+  if (m) return `${m[3]}-${String(m[1]).padStart(2,'0')}-${String(m[2]).padStart(2,'0')}`;
+  m = raw.match(/\b(\d{1,2})[\/\-](\d{1,2})[\/\-](\d{2})\b/);
+  if (m) return `20${m[3]}-${String(m[1]).padStart(2,'0')}-${String(m[2]).padStart(2,'0')}`;
+  return null;
+}
+
+function flatten(value: any, depth = 0): string {
+  if (value == null || depth > 6) return '';
+  if (typeof value === 'string' || typeof value === 'number' || typeof value === 'boolean') return String(value);
+  if (Array.isArray(value)) return value.map((v) => flatten(v, depth + 1)).join('\\n');
+  if (typeof value === 'object') return Object.entries(value).map(([k,v]) => `${k}: ${flatten(v, depth + 1)}`).join('\\n');
+  return '';
+}
+
+function findMedExpire(payload: any) {
+  const text = flatten(payload);
+  const patterns = [
+    /(?:medical\s+certificate|medical|med\s*cert|dot\s*medical|certificate)[\s\S]{0,180}?(?:expiration|expiry|expires|expire)\s*(?:date)?\s*[:#-]?\s*([0-9]{4}[\/\-][0-9]{1,2}[\/\-][0-9]{1,2}|[0-9]{1,2}[\/\-][0-9]{1,2}[\/\-][0-9]{2,4})/i,
+    /(?:expiration|expiry|expires|expire)\s*(?:date)?\s*[:#-]?\s*([0-9]{4}[\/\-][0-9]{1,2}[\/\-][0-9]{1,2}|[0-9]{1,2}[\/\-][0-9]{1,2}[\/\-][0-9]{2,4})[\s\S]{0,140}?(?:medical|med\s*cert|certificate|dot)/i,
+    /(?:medical|med\s*cert|certificate|dot)[\s\S]{0,140}?([0-9]{4}[\/\-][0-9]{1,2}[\/\-][0-9]{1,2}|[0-9]{1,2}[\/\-][0-9]{1,2}[\/\-][0-9]{2,4})/i
+  ];
+  for (const p of patterns) {
+    const m = text.match(p);
+    if (m?.[1]) {
+      const d = normalizeDate(m[1]);
+      if (d) return { date: d, match: m[0].slice(0, 500) };
+    }
+  }
+  return null;
+}
+
+function orderFrom(row: any) {
   return {
     orderGuid: row.orderGuid || row.guid || row.id || '',
     fileNumber: row.fileNumber || row.fileNo || row.orderNumber || '',
     orderStatus: row.orderStatus || row.status || '',
     orderType: row.orderType || row.type || '',
-    orderedDate: tazworksIso(row.orderedDate || row.orderDate),
-    completedDate: tazworksIso(row.completedDate),
+    orderedDate: iso(row.orderedDate || row.orderDate),
+    completedDate: iso(row.completedDate),
     applicantName: row.applicantName || row.subjectName || row.name || '',
     clientName: row.clientName || '',
     clientCode: row.clientCode || '',
     productName: row.productName || row.packageName || '',
     requestedBy: row.requestedBy || row.requestor || '',
     searchFlagged: Boolean(row.searchFlagged || row.flagged),
-    createdDate: tazworksIso(row.createdDate || row.createdAt),
-    modifiedDate: tazworksIso(row.modifiedDate || row.updatedAt),
-    raw: row,
+    createdDate: iso(row.createdDate || row.createdAt),
+    modifiedDate: iso(row.modifiedDate || row.updatedAt),
+    raw: row
   };
 }
 
-async function tazworksProxyGet(proxyPath: string) {
-  const env = tazworksSyncEnv();
-  const response = await fetch(`${env.baseUrl}${proxyPath}`, {
-    method: 'GET',
-    headers: {
-      Authorization: `Bearer ${env.proxySecret}`,
-      Accept: 'application/json',
-    },
-  });
+function searchFrom(row: any) {
+  return {
+    searchGuid: row.searchGuid || row.guid || row.id || '',
+    label: [row.searchName, row.searchType, row.name, row.type, row.productName, row.providerName].filter(Boolean).join(' '),
+    raw: row
+  };
+}
 
+function isMvr(search: any) {
+  return /\bmvr\b|motor vehicle|driving record|driver record|driver license|dl record|dmv/i.test(search.label + ' ' + flatten(search.raw));
+}
+
+async function proxyGet(proxyPath: string) {
+  const e = tazEnv();
+  const response = await fetch(`${e.baseUrl}${proxyPath}`, { method: 'GET', headers: { Authorization: `Bearer ${e.proxySecret}`, Accept: 'application/json' } });
   const raw = await response.text();
   let payload: any = {};
   try { payload = raw ? JSON.parse(raw) : {}; } catch { payload = { raw }; }
-
   if (!response.ok) {
     const msg = payload?.message || payload?.error || raw || `Proxy returned ${response.status}`;
-    const err: any = new Error(tazworksSafeMessage(msg, response.status));
+    const err: any = new Error(tazSafe(msg, response.status));
     err.statusCode = err.message === 'Order access could not be verified.' ? 403 : 503;
     throw err;
   }
-
   return payload;
+}
+
+async function pullMvrMed(orderGuid: string, order: any) {
+  const e = tazEnv();
+  const summary: any = { orderGuid, fileNumber: order.fileNumber || '', searchesPulled: 0, mvrSearches: 0, resultPulls: 0, medExpire: null };
+  if (!orderGuid) return summary;
+  const payload = await proxyGet(`/tazworks/orders/${encodeURIComponent(orderGuid)}/searches?clientGuid=${encodeURIComponent(e.clientGuid)}`);
+  const searches = tazArray(payload, 'search').map(searchFrom);
+  summary.searchesPulled = searches.length;
+  const mvrs = searches.filter(isMvr);
+  summary.mvrSearches = mvrs.length;
+  for (const s of mvrs) {
+    if (!s.searchGuid) continue;
+    summary.resultPulls++;
+    const result = await proxyGet(`/tazworks/orders/${encodeURIComponent(orderGuid)}/searches/${encodeURIComponent(s.searchGuid)}/results?resultType=EDITOR&clientGuid=${encodeURIComponent(e.clientGuid)}`);
+    const found = findMedExpire(result);
+    if (found?.date) {
+      summary.medExpire = found.date;
+      summary.searchGuid = s.searchGuid;
+      summary.searchLabel = s.label;
+      summary.rawMatch = found.match;
+      return summary;
+    }
+  }
+  return summary;
 }
 
 async function tazworksSyncRuns(req: any, res: any, user: any) {
   if (req.method !== 'GET') return json(res, 405, { status: 'error', message: 'Method not allowed' });
   if (!requireAdmin(user, res)) return;
-
   const result = await query('select * from tazworks_sync_runs order by started_at desc limit 25');
   return json(res, 200, { status: 'ok', runs: result.rows });
 }
@@ -384,205 +390,87 @@ async function tazworksSyncRun(req: any, res: any, user: any) {
   if (!requireAdmin(user, res)) return;
 
   const companyId = Number(user.companyId || 1);
-  const startedBy = user.username || user.displayName || 'admin';
-
-  const runInsert = await query(
-    'insert into tazworks_sync_runs (status, triggered_by, message) values ($1,$2,$3) returning id',
-    ['running', startedBy, 'Manual sync started']
-  );
-
+  const runInsert = await query('insert into tazworks_sync_runs (status, triggered_by, message) values ($1,$2,$3) returning id', ['running', user.username || user.displayName || 'admin', 'Manual sync started']);
   const runId = runInsert.rows[0].id;
 
-  let ordersPulled = 0;
-  let applicantsUpserted = 0;
-  let safetyReportsUpdated = 0;
-  let errorsCount = 0;
-  const errors: string[] = [];
-  const pageSummaries: any[] = [];
+  let ordersPulled = 0, applicantsUpserted = 0, safetyReportsUpdated = 0, medExpireUpdated = 0, mvrSearchesChecked = 0, errorsCount = 0;
+  const errors: string[] = [], pageSummaries: any[] = [], mvrSamples: any[] = [];
   const dedupe = new Map<string, any>();
 
   try {
-    const env = tazworksSyncEnv();
-    const maxPages = 5;
-    const size = 10;
-
-    for (let page = 0; page < maxPages; page++) {
-      const payload = await tazworksProxyGet(`/tazworks/orders?page=${page}&size=${size}&clientGuid=${encodeURIComponent(env.clientGuid)}`);
-      const list = tazworksArray(payload);
-      const path = tazworksArrayPath(payload);
-      const keys = tazworksPayloadKeys(payload);
-
-      pageSummaries.push({
-        page,
-        size,
-        arrayPath: path,
-        arrayCount: list.length,
-        topLevelKeys: keys,
-      });
-
+    const e = tazEnv();
+    for (let page = 0; page < 5; page++) {
+      const payload = await proxyGet(`/tazworks/orders?page=${page}&size=10&clientGuid=${encodeURIComponent(e.clientGuid)}`);
+      const list = tazArray(payload);
+      pageSummaries.push({ page, arrayCount: list.length, topLevelKeys: payload && typeof payload === 'object' ? Object.keys(payload).slice(0, 20) : [] });
       for (const row of list) {
-        const order = tazworksOrder(row);
-        const key = String(order.orderGuid || order.fileNumber || JSON.stringify(row).slice(0, 100));
-        if (!dedupe.has(key)) dedupe.set(key, order);
+        const o = orderFrom(row);
+        const key = String(o.orderGuid || o.fileNumber || JSON.stringify(row).slice(0, 100));
+        if (!dedupe.has(key)) dedupe.set(key, o);
       }
-
-      if (list.length < size) break;
+      if (list.length < 10) break;
     }
 
-    const orders = Array.from(dedupe.values()).filter((order: any) => order.orderGuid || order.fileNumber);
+    const orders = Array.from(dedupe.values()).filter((o: any) => o.orderGuid || o.fileNumber);
     ordersPulled = orders.length;
 
-    for (const order of orders) {
+    for (const o of orders) {
       try {
+        let medExpire: string | null = null;
+        if (o.orderGuid) {
+          try {
+            const mvr = await pullMvrMed(o.orderGuid, o);
+            mvrSamples.push(mvr);
+            mvrSearchesChecked += Number(mvr.mvrSearches || 0);
+            if (mvr.medExpire) medExpire = mvr.medExpire;
+          } catch (err: any) {
+            errors.push(`MVR check failed for ${o.fileNumber || o.orderGuid}: ${String(err?.message || err)}`);
+          }
+        }
+
         await query(
-          `insert into tazworks_order_cache
-            (company_id, order_guid, file_number, applicant_name, order_status, order_type, ordered_date, completed_date, client_name, client_code, product_name, requested_by, search_flagged, source_modified_date, raw_order, last_seen_at, last_sync_run_id)
-            values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,now(),$16)
-            on conflict (order_guid) do update set
-              company_id=excluded.company_id,
-              file_number=excluded.file_number,
-              applicant_name=excluded.applicant_name,
-              order_status=excluded.order_status,
-              order_type=excluded.order_type,
-              ordered_date=excluded.ordered_date,
-              completed_date=excluded.completed_date,
-              client_name=excluded.client_name,
-              client_code=excluded.client_code,
-              product_name=excluded.product_name,
-              requested_by=excluded.requested_by,
-              search_flagged=excluded.search_flagged,
-              source_modified_date=excluded.source_modified_date,
-              raw_order=excluded.raw_order,
-              last_seen_at=now(),
-              last_sync_run_id=excluded.last_sync_run_id`,
-          [
-            companyId,
-            order.orderGuid || `file-${order.fileNumber}`,
-            order.fileNumber || null,
-            order.applicantName || null,
-            order.orderStatus || null,
-            order.orderType || null,
-            order.orderedDate,
-            order.completedDate,
-            order.clientName || null,
-            order.clientCode || null,
-            order.productName || null,
-            order.requestedBy || null,
-            Boolean(order.searchFlagged),
-            order.modifiedDate || order.createdDate || null,
-            JSON.stringify(order.raw || {}),
-            runId,
-          ]
+          `insert into tazworks_order_cache (company_id, order_guid, file_number, applicant_name, order_status, order_type, ordered_date, completed_date, client_name, client_code, product_name, requested_by, search_flagged, source_modified_date, raw_order, last_seen_at, last_sync_run_id)
+           values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,now(),$16)
+           on conflict (order_guid) do update set company_id=excluded.company_id,file_number=excluded.file_number,applicant_name=excluded.applicant_name,order_status=excluded.order_status,order_type=excluded.order_type,ordered_date=excluded.ordered_date,completed_date=excluded.completed_date,client_name=excluded.client_name,client_code=excluded.client_code,product_name=excluded.product_name,requested_by=excluded.requested_by,search_flagged=excluded.search_flagged,source_modified_date=excluded.source_modified_date,raw_order=excluded.raw_order,last_seen_at=now(),last_sync_run_id=excluded.last_sync_run_id`,
+          [companyId, o.orderGuid || `file-${o.fileNumber}`, o.fileNumber || null, o.applicantName || null, o.orderStatus || null, o.orderType || null, o.orderedDate, o.completedDate, o.clientName || null, o.clientCode || null, o.productName || null, o.requestedBy || null, Boolean(o.searchFlagged), o.modifiedDate || o.createdDate || null, JSON.stringify(o.raw || {}), runId]
         );
 
-        if (order.fileNumber) {
+        if (o.fileNumber) {
           await query(
-            `insert into applicants ("companyId","fileNumber","applicantName","orderDate","monitorStatus","mvrStatus",notes)
-              values ($1,$2,$3,$4,$5,$6,$7)
-              on conflict ("fileNumber","companyId") do update set
-                "applicantName" = case when excluded."applicantName" <> '' then excluded."applicantName" else applicants."applicantName" end,
-                "orderDate" = coalesce(excluded."orderDate", applicants."orderDate"),
-                "mvrStatus" = coalesce(excluded."mvrStatus", applicants."mvrStatus"),
-                "updatedAt" = now()`,
-            [
-              companyId,
-              String(order.fileNumber),
-              String(order.applicantName || 'REVIEW NAME NEEDED'),
-              tazworksDateOnly(order.orderedDate || order.createdDate),
-              'Off',
-              String(order.orderStatus || ''),
-              '',
-            ]
+            `insert into applicants ("companyId","fileNumber","applicantName","orderDate","monitorStatus","mvrStatus","medExpire","medExpireOverridden",notes)
+             values ($1,$2,$3,$4,$5,$6,$7,$8,$9)
+             on conflict ("fileNumber","companyId") do update set "applicantName"=case when excluded."applicantName"<>'' then excluded."applicantName" else applicants."applicantName" end,"orderDate"=coalesce(excluded."orderDate",applicants."orderDate"),"mvrStatus"=coalesce(excluded."mvrStatus",applicants."mvrStatus"),"medExpire"=coalesce(excluded."medExpire",applicants."medExpire"),"updatedAt"=now()`,
+            [companyId, String(o.fileNumber), String(o.applicantName || 'REVIEW NAME NEEDED'), dateOnly(o.orderedDate || o.createdDate), 'Off', String(o.orderStatus || ''), medExpire, false, '']
           );
-
           applicantsUpserted++;
+          if (medExpire) medExpireUpdated++;
 
           const safetyUpdate = await query(
-            `update safety_reports
-              set "applicantName" = case when $1 <> '' then $1 else "applicantName" end,
-                  "updatedAt" = now()
-              where "companyId"=$2 and "fileNumber"=$3
-              returning id`,
-            [String(order.applicantName || ''), companyId, String(order.fileNumber)]
+            `update safety_reports set "applicantName"=case when $1<>'' then $1 else "applicantName" end,"updatedAt"=now() where "companyId"=$2 and "fileNumber"=$3 returning id`,
+            [String(o.applicantName || ''), companyId, String(o.fileNumber)]
           );
-
           safetyReportsUpdated += safetyUpdate.rowCount || 0;
         }
-      } catch (orderError: any) {
+      } catch (err: any) {
         errorsCount++;
-        errors.push(String(orderError?.message || orderError));
+        errors.push(String(err?.message || err));
       }
     }
 
-    const status = errorsCount ? 'completed_with_errors' : 'completed';
-    const message = ordersPulled === 0
-      ? 'Sync completed but no orders were found. Check raw_summary for payload keys and array path.'
-      : errorsCount
-        ? `Sync completed with ${errorsCount} record error(s). Pulled ${ordersPulled} orders.`
-        : `Sync completed. Pulled ${ordersPulled} orders.`;
-
+    const message = `Sync completed. Pulled ${ordersPulled} orders. Updated ${medExpireUpdated} medical expiration date(s).`;
     await query(
       'update tazworks_sync_runs set status=$1, completed_at=now(), orders_pulled=$2, applicants_upserted=$3, safety_reports_updated=$4, errors_count=$5, message=$6, raw_summary=$7 where id=$8',
-      [
-        status,
-        ordersPulled,
-        applicantsUpserted,
-        safetyReportsUpdated,
-        errorsCount,
-        message,
-        JSON.stringify({
-          pages: pageSummaries,
-          uniqueOrderCount: ordersPulled,
-          defaultMonitoringForNewOrders: 'Off',
-          errors: errors.slice(0, 10),
-        }),
-        runId,
-      ]
+      [errorsCount ? 'completed_with_errors' : 'completed', ordersPulled, applicantsUpserted, safetyReportsUpdated, errorsCount, message, JSON.stringify({ pages: pageSummaries, mvrSearchesChecked, medExpireUpdated, mvrSamples: mvrSamples.slice(0, 20), errors: errors.slice(0, 10) }), runId]
     );
 
-    return json(res, 200, {
-      status: 'ok',
-      runId,
-      ordersPulled,
-      applicantsUpserted,
-      safetyReportsUpdated,
-      errorsCount,
-      message,
-      pages: pageSummaries,
-    });
+    return json(res, 200, { status: 'ok', runId, ordersPulled, applicantsUpserted, safetyReportsUpdated, medExpireUpdated, mvrSearchesChecked, errorsCount, message, pages: pageSummaries });
   } catch (error: any) {
     const safe = error?.message || 'The order connection is currently unavailable.';
-
-    await query(
-      'update tazworks_sync_runs set status=$1, completed_at=now(), errors_count=$2, message=$3, raw_summary=$4 where id=$5',
-      [
-        'failed',
-        errorsCount + 1,
-        safe,
-        JSON.stringify({
-          pages: pageSummaries,
-          errors: [safe, ...errors].slice(0, 10),
-        }),
-        runId,
-      ]
-    );
-
-    return json(res, error?.statusCode || 503, {
-      status: 'error',
-      message: safe,
-      runId,
-    });
+    await query('update tazworks_sync_runs set status=$1, completed_at=now(), errors_count=$2, message=$3, raw_summary=$4 where id=$5', ['failed', errorsCount + 1, safe, JSON.stringify({ pages: pageSummaries, mvrSearchesChecked, medExpireUpdated, mvrSamples: mvrSamples.slice(0, 20), errors: [safe, ...errors].slice(0, 10) }), runId]);
+    return json(res, error?.statusCode || 503, { status: 'error', message: safe, runId });
   }
 }
-
-async function tazworksSyncDebug(req: any, res: any, user: any) {
-  if (req.method !== 'GET') return json(res, 405, { status: 'error', message: 'Method not allowed' });
-  if (!requireAdmin(user, res)) return;
-
-  const result = await query('select id, status, message, raw_summary from tazworks_sync_runs order by started_at desc limit 1');
-  return json(res, 200, { status: 'ok', latest: result.rows[0] || null });
-}
-// PHASE12A6_TAZWORKS_SYNC END
+// PHASE12A10_TAZWORKS_SYNC END
 
 
 export default async function handler(req: any, res: any) {
@@ -602,7 +490,6 @@ export default async function handler(req: any, res: any) {
     if (route === 'change-password') return changePassword(req, res, user);
     if (route === 'tazworks-sync/run') return tazworksSyncRun(req, res, user);
     if (route === 'tazworks-sync/runs') return tazworksSyncRuns(req, res, user);
-    if (route === 'tazworks-sync/debug') return tazworksSyncDebug(req, res, user);
     if (route === 'system-check') return systemCheck(req, res, user);
     return json(res, 404, { status: 'error', message: `Route not found: ${route}` });
   } catch (error: any) {
