@@ -214,6 +214,43 @@ async function changePassword(req: any, res: any, user: any) {
 }
 
 
+
+async function clientApplicantUpdate(req: any, res: any, user: any) {
+  if (req.method !== 'PATCH') return json(res, 405, { status: 'error', message: 'Method not allowed' });
+  if (!requireCompanyScope(user, res)) return;
+
+  const companyId = requestedCompanyId(req, user);
+  const body = await readBody(req);
+  const id = Number(body.id);
+
+  if (!id) return json(res, 400, { status: 'error', message: 'Applicant id is required' });
+
+  const current = await query(
+    'select id from applicants where id=$1 and "companyId"=$2 limit 1',
+    [id, companyId]
+  );
+
+  if (!current.rows[0]) {
+    return json(res, 404, { status: 'error', message: 'Monitoring record not found for this client' });
+  }
+
+  const monitorStatus = normalizeMonitorStatus(body.monitorStatus);
+  const notes = String(body.notes ?? '').trim();
+
+  const result = await query(
+    `update applicants
+     set "monitorStatus"=$1,
+         notes=$2,
+         "updatedAt"=now()
+     where id=$3 and "companyId"=$4
+     returning id, "fileNumber", "applicantName" as name, "orderDate", "monitorStatus", "mvrStatus", "medExpire", notes`,
+    [monitorStatus, notes, id, companyId]
+  );
+
+  return json(res, 200, { status: 'ok', applicant: result.rows[0] });
+}
+
+
 async function clientDashboard(req: any, res: any, user: any) {
   if (req.method !== 'GET') return json(res, 405, { status: 'error', message: 'Method not allowed' });
   if (!requireCompanyScope(user, res)) return;
@@ -240,7 +277,7 @@ async function clientDashboard(req: any, res: any, user: any) {
 
   const recentApplicants = await query(
     `select id, "fileNumber", "applicantName" as name, "orderDate", "monitorStatus", "mvrStatus", "medExpire", notes
-     from applicants where "companyId"=$1 order by id desc limit 25`, [companyId]);
+     from applicants where "companyId"=$1 order by id desc limit 100`, [companyId]);
 
   const recentSafety = await query(
     `select id, "fileNumber", "applicantName", created, status, "followUpDate", "prevEmployerName", notes
@@ -1188,6 +1225,7 @@ export default async function handler(req: any, res: any) {
     if (route === 'tazworks-sync/runs') return tazworksSyncRuns(req, res, user);
     if (route === 'tazworks-sync/clear') return tazworksSyncClear(req, res, user);
     if (route === 'tazworks-mvr-test') return tazworksMvrTest(req, res, user);
+    if (route === 'client-applicant') return clientApplicantUpdate(req, res, user);
     if (route === 'client-dashboard') return clientDashboard(req, res, user);
     if (route === 'client-users') return clientUsers(req, res, user);
     if (route === 'system-check') return systemCheck(req, res, user);
