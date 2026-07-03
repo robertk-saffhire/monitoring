@@ -893,6 +893,43 @@ async function tazworksMvrTest(req: any, res: any, user: any) {
 // PHASE12A17_MVR_TEST_PAGE END
 
 
+
+async function tazworksSyncClear(req: any, res: any, user: any) {
+  if (req.method !== 'POST') return json(res, 405, { status: 'error', message: 'Method not allowed' });
+  if (!requireAdmin(user, res)) return;
+
+  const body = await readBody(req);
+  const keepLatest = Math.max(0, Math.min(10, Number(body.keepLatest || 0)));
+
+  if (keepLatest > 0) {
+    const result = await query(
+      `delete from tazworks_sync_runs
+       where id not in (
+         select id from tazworks_sync_runs
+         order by started_at desc
+         limit $1
+       )`,
+      [keepLatest]
+    );
+
+    return json(res, 200, {
+      status: 'ok',
+      cleared: result.rowCount || 0,
+      keepLatest,
+      message: `Sync log cleared. Kept the latest ${keepLatest} run(s).`
+    });
+  }
+
+  const result = await query('delete from tazworks_sync_runs');
+
+  return json(res, 200, {
+    status: 'ok',
+    cleared: result.rowCount || 0,
+    keepLatest: 0,
+    message: 'Sync log cleared.'
+  });
+}
+
 async function tazworksSyncRuns(req: any, res: any, user: any) {
   if (req.method !== 'GET') return json(res, 405, { status: 'error', message: 'Method not allowed' });
   if (!requireAdmin(user, res)) return;
@@ -1026,6 +1063,7 @@ export default async function handler(req: any, res: any) {
     if (route === 'change-password') return changePassword(req, res, user);
     if (route === 'tazworks-sync/run') return tazworksSyncRun(req, res, user);
     if (route === 'tazworks-sync/runs') return tazworksSyncRuns(req, res, user);
+    if (route === 'tazworks-sync/clear') return tazworksSyncClear(req, res, user);
     if (route === 'tazworks-mvr-test') return tazworksMvrTest(req, res, user);
     if (route === 'system-check') return systemCheck(req, res, user);
     return json(res, 404, { status: 'error', message: `Route not found: ${route}` });
