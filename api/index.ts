@@ -332,43 +332,65 @@ function searchGuidFrom(row: any, orderGuid?: string) {
   return uuids[0] || '';
 }
 
-function findMedExpire(payload: any) {
-  const text = flat(payload);
+function cleanResultText(value: any) {
+  return flat(value)
+    .replace(/<script[\s\S]*?<\/script>/gi, ' ')
+    .replace(/<style[\s\S]*?<\/style>/gi, ' ')
+    .replace(/<[^>]+>/g, ' ')
+    .replace(/&nbsp;|&#160;/gi, ' ')
+    .replace(/&amp;/gi, '&')
+    .replace(/&lt;/gi, '<')
+    .replace(/&gt;/gi, '>')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
 
-  // IMPORTANT:
-  // Only accept dates tied to an expiration label.
-  // Never accept Issue Date, even if it appears inside the Medical Certificate section.
-  const expirationLabel = String.raw`(?:expiration|expiry|expires|expire)\\s*(?:date)?`;
-  const datePattern = String.raw`([0-9]{4}[\\/\\-][0-9]{1,2}[\\/\\-][0-9]{1,2}|[0-9]{1,2}[\\/\\-][0-9]{1,2}[\\/\\-][0-9]{2,4})`;
-
+function findExpirationDateInText(text: string) {
+  const datePattern = `([0-9]{4}[\\/\\-][0-9]{1,2}[\\/\\-][0-9]{1,2}|[0-9]{1,2}[\\/\\-][0-9]{1,2}[\\/\\-][0-9]{2,4})`;
   const patterns = [
-    // HTML-ish result:
-    // Expiration Date:</span><span class="data">2028/03/26
-    new RegExp(expirationLabel + String.raw`\\s*[:#\\-]?\\s*(?:<[^>]+>|&nbsp;|\\s|:|-)*` + datePattern, 'i'),
-
-    // Text result:
-    // Expiration Date: 2028/03/26
-    new RegExp(expirationLabel + String.raw`\\s*[:#\\-]?\\s*` + datePattern, 'i'),
-
-    // Label and date separated by report markup or extra words.
-    new RegExp(expirationLabel + String.raw`[\\s\\S]{0,120}?` + datePattern, 'i'),
-
-    // Medical Certificate section, but still requires an expiration label before the date.
-    new RegExp(String.raw`(?:medical\\s+certificate|medical|med\\s*cert|dot\\s*medical|certificate)[\\s\\S]{0,500}?` + expirationLabel + String.raw`[\\s\\S]{0,120}?` + datePattern, 'i')
+    new RegExp(`(?:expiration|expiry|expires|expire)\\s*(?:date)?\\s*[:#\\-]?\\s*${datePattern}`, 'i'),
+    new RegExp(`(?:medical|med\\s*cert|certificate|dot\\s*medical)[\\s\\S]{0,250}?(?:expiration|expiry|expires|expire)\\s*(?:date)?\\s*[:#\\-]?\\s*${datePattern}`, 'i')
   ];
 
   for (const pattern of patterns) {
     const match = text.match(pattern);
     if (match?.[1]) {
       const context = match[0].slice(0, 700);
+      const beforeDate = context.slice(0, Math.max(0, context.indexOf(match[1])));
+      if (/issue\s*date/i.test(beforeDate) && !/(expiration|expiry|expires|expire)/i.test(beforeDate)) continue;
+      const d = dateFromText(match[1]);
+      if (d) return { date: d, match: context };
+    }
+  }
 
-      // Guardrail: reject any accidental Issue Date match.
-      const issueIndex = context.toLowerCase().lastIndexOf('issue date');
-      const expireIndex = context.toLowerCase().search(/expiration|expiry|expires|expire/);
-      if (issueIndex >= 0 && (expireIndex < 0 || issueIndex < expireIndex)) {
-        continue;
-      }
+  return null;
+}
 
+function findMedExpire(payload: any) {
+  const text = cleanResultText(payload);
+  if (!text) return null;
+
+  const sectionStarts: number[] = [];
+  const sectionRegex = /(certificate\s+information|medical\s+certificate|medical\s+certification|med\s*cert|dot\s*medical)/ig;
+  let sectionMatch: RegExpExecArray | null;
+  while ((sectionMatch = sectionRegex.exec(text)) !== null) sectionStarts.push(sectionMatch.index);
+
+  for (const start of sectionStarts) {
+    const section = text.slice(start, start + 1400);
+    const found = findExpirationDateInText(section);
+    if (found?.date) return found;
+  }
+
+  const fallbackPatterns = [
+    /(?:medical|med\s*cert|medical\s*certificate|dot\s*medical)[\s\S]{0,250}?(?:expiration|expiry|expires|expire)\s*(?:date)?\s*[:#\-]?\s*([0-9]{4}[\/\-][0-9]{1,2}[\/\-][0-9]{1,2}|[0-9]{1,2}[\/\-][0-9]{1,2}[\/\-][0-9]{2,4})/i,
+    /(?:expiration|expiry|expires|expire)\s*(?:date)?\s*[:#\-]?\s*([0-9]{4}[\/\-][0-9]{1,2}[\/\-][0-9]{1,2}|[0-9]{1,2}[\/\-][0-9]{1,2}[\/\-][0-9]{2,4})[\s\S]{0,250}?(?:medical|med\s*cert|medical\s*certificate|dot\s*medical)/i
+  ];
+
+  for (const pattern of fallbackPatterns) {
+    const match = text.match(pattern);
+    if (match?.[1]) {
+      const context = match[0].slice(0, 700);
+      if (/issue\s*date/i.test(context) && !/(expiration|expiry|expires|expire)/i.test(context)) continue;
       const d = dateFromText(match[1]);
       if (d) return { date: d, match: context };
     }
@@ -428,7 +450,19 @@ async function proxyGet(proxyPath: string) {
 
 async function pullMvrMed(orderGuid: string, order: any) {
   const e = tazEnv();
-  const summary: any = { orderGuid, fileNumber: order.fileNumber || '', searchesPulled: 0, mvrSearches: 0, resultPulls: 0, noSearchGuid: 0, resultErrors: [], medExpire: null, mvrSearchDetails: [] };
+  const summary: any = {
+    orderGuid,
+    fileNumber: order.fileNumber || '',
+    searchesPulled: 0,
+    mvrSearches: 0,
+    fallbackAllSearches: false,
+    resultPulls: 0,
+    noSearchGuid: 0,
+    resultErrors: [],
+    medExpire: null,
+    mvrSearchDetails: []
+  };
+
   if (!orderGuid) return summary;
 
   const payload = await proxyGet(`/tazworks/orders/${encodeURIComponent(orderGuid)}/searches?clientGuid=${encodeURIComponent(e.clientGuid)}`);
@@ -437,9 +471,21 @@ async function pullMvrMed(orderGuid: string, order: any) {
 
   const mvrs = searches.filter(isMvr);
   summary.mvrSearches = mvrs.length;
-  summary.mvrSearchDetails = mvrs.slice(0, 5).map((s: any) => ({ searchGuid: s.searchGuid, label: s.label, rawKeys: s.rawKeys, rawUuids: s.rawUuids }));
 
-  for (const s of mvrs) {
+  // If TazWorks does not label the search as MVR, still scan all searches.
+  // File 6328 is an example: searchesPulled=1, mvrSearches=0, but it has a medical expiration.
+  const candidates = mvrs.length ? mvrs : searches;
+  summary.fallbackAllSearches = mvrs.length === 0 && searches.length > 0;
+
+  summary.mvrSearchDetails = candidates.slice(0, 5).map((s: any) => ({
+    searchGuid: s.searchGuid,
+    label: s.label,
+    rawKeys: s.rawKeys,
+    rawUuids: s.rawUuids,
+    fallbackCandidate: mvrs.length === 0
+  }));
+
+  for (const s of candidates) {
     if (!s.searchGuid) {
       summary.noSearchGuid++;
       continue;
@@ -449,6 +495,7 @@ async function pullMvrMed(orderGuid: string, order: any) {
       summary.resultPulls++;
       const result = await proxyGet(`/tazworks/orders/${encodeURIComponent(orderGuid)}/searches/${encodeURIComponent(s.searchGuid)}/results?resultType=EDITOR&clientGuid=${encodeURIComponent(e.clientGuid)}`);
       const found = findMedExpire(result);
+
       if (found?.date) {
         summary.medExpire = found.date;
         summary.searchGuid = s.searchGuid;
