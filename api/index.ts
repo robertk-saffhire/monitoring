@@ -65,6 +65,63 @@ function normalizeMonitorStatus(value: any) { return String(value || '').trim().
 function asBool(value: any) { const raw = String(value ?? '').trim().toLowerCase(); return value === true || raw === 'true' || raw === 'yes' || raw === 'y' || raw === '1' || raw === 'on' || raw === 'x'; }
 function pick(row: any, keys: string[]) { for (const key of keys) if (row[key] !== undefined && row[key] !== null && String(row[key]).trim() !== '') return row[key]; return ''; }
 
+
+async function clientAuth(req: any, res: any, route: string) {
+  if (route === 'client-auth/login' && req.method === 'POST') {
+    const body = await readBody(req);
+    const username = String(body.username || '').trim().toLowerCase();
+    const password = String(body.password || '');
+
+    const result = await query(
+      'select id, username, "passwordHash", "displayName", role, "companyId", "isActive", "mustChangePassword", "lastSignedIn" from local_users where lower(username)=lower($1) limit 1',
+      [username]
+    );
+
+    const user = result.rows[0];
+
+    if (!user || !user.isActive || !(await bcrypt.compare(password, user.passwordHash))) {
+      return json(res, 401, { status: 'error', message: 'Invalid username or password' });
+    }
+
+    if (!user.companyId) {
+      return json(res, 403, { status: 'error', message: 'Client account is not assigned to a company' });
+    }
+
+    const allowedClientRoles = new Set(['client_admin', 'client_user', 'viewer', 'user']);
+    if (!allowedClientRoles.has(user.role)) {
+      return json(res, 403, { status: 'error', message: 'This login is for client users only' });
+    }
+
+    await query('update local_users set "lastSignedIn"=now() where id=$1', [user.id]);
+
+    const token = await new SignJWT({
+      sub: String(user.id),
+      role: user.role,
+      name: user.displayName || user.username,
+      clientPortal: true,
+    }).setProtectedHeader({ alg: 'HS256' }).setIssuedAt().setExpirationTime(body.rememberMe ? '30d' : '1d').sign(secret());
+
+    setSessionCookie(res, token, body.rememberMe ? 60 * 60 * 24 * 30 : 60 * 60 * 24);
+
+    return json(res, 200, { status: 'ok', user: publicUser(user), redirect: '/client-portal.html' });
+  }
+
+  if (route === 'client-auth/me' && req.method === 'GET') {
+    const user = await getUserFromRequest(req);
+    if (!user) return json(res, 401, { status: 'error', message: 'Login required' });
+    if (!user.companyId) return json(res, 403, { status: 'error', message: 'Client company access is required' });
+    return json(res, 200, { status: 'ok', user: publicUser(user) });
+  }
+
+  if (route === 'client-auth/logout' && req.method === 'POST') {
+    clearSessionCookie(res);
+    return json(res, 200, { status: 'ok' });
+  }
+
+  return false;
+}
+
+
 async function auth(req: any, res: any, route: string) {
   if (route === 'debug' && req.method === 'GET') return json(res, 200, { status: 'ok', route, hasDatabaseUrl: Boolean(process.env.DATABASE_URL), hasJwtSecret: Boolean(process.env.JWT_SECRET) });
   if (route === 'auth/setup-status' && req.method === 'GET') { const result = await query("select count(*)::int as count from local_users where role='admin'"); return json(res, 200, { status: 'ok', hasAdmin: Number(result.rows[0]?.count || 0) > 0 }); }
@@ -281,7 +338,7 @@ async function clientDashboard(req: any, res: any, user: any) {
 
   const recentSafety = await query(
     `select id, "fileNumber", "applicantName", created, status, "followUpDate", "prevEmployerName", notes
-     from safety_reports where "companyId"=$1 order by id desc limit 25`, [companyId]);
+     from safety_reports where "companyId"=$1 order by id desc limit 500`, [companyId]);
 
   const clientUsers = await query(
     `select id, username, "displayName", role, "companyId", "isActive", "mustChangePassword", "lastSignedIn"
@@ -1093,7 +1150,7 @@ async function tazworksSyncClear(req: any, res: any, user: any) {
 async function tazworksSyncRuns(req: any, res: any, user: any) {
   if (req.method !== 'GET') return json(res, 405, { status: 'error', message: 'Method not allowed' });
   if (!requireAdmin(user, res)) return;
-  const result = await query('select * from tazworks_sync_runs order by started_at desc limit 25');
+  const result = await query('select * from tazworks_sync_runs order by started_at desc limit 500');
   return json(res, 200, { status: 'ok', runs: result.rows });
 }
 
@@ -1209,6 +1266,8 @@ async function tazworksSyncRun(req: any, res: any, user: any) {
 export default async function handler(req: any, res: any) {
   const route = getRoute(req);
   try {
+    const clientAuthResult = await clientAuth(req, res, route);
+    if (clientAuthResult !== false) return;
     const authResult = await auth(req, res, route);
     if (authResult !== false) return;
     const user = await requireUser(req, res);
