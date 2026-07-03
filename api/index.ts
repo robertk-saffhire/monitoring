@@ -683,6 +683,175 @@ async function pullMvrMed(orderGuid: string, order: any) {
   return summary;
 }
 
+
+// PHASE12A17_MVR_TEST_PAGE START
+function safePreview(value: any, max = 120000) {
+  try {
+    const text = typeof value === 'string' ? value : JSON.stringify(value, null, 2);
+    return text.length > max ? text.slice(0, max) + '\n\n...[truncated]' : text;
+  } catch {
+    const text = String(value || '');
+    return text.length > max ? text.slice(0, max) + '\n\n...[truncated]' : text;
+  }
+}
+
+function diagnosticDatesFromText(text: string) {
+  const clean = String(text || '');
+  const datePattern = /([0-9]{4}[\/\-][0-9]{1,2}[\/\-][0-9]{1,2}|[0-9]{1,2}[\/\-][0-9]{1,2}[\/\-][0-9]{2,4})/g;
+  const out: any[] = [];
+  let match: RegExpExecArray | null;
+  while ((match = datePattern.exec(clean)) !== null && out.length < 50) {
+    const start = Math.max(0, match.index - 140);
+    const end = Math.min(clean.length, match.index + match[0].length + 140);
+    const context = clean.slice(start, end);
+    out.push({
+      dateText: match[1],
+      normalized: dateFromText(match[1]),
+      context,
+      looksLikeMedical: /(medical|med\s*cert|certificate information|medical\s*certificate|dot\s*medical|medical card|medical examiner)/i.test(context),
+      looksLikeLicense: /(license info|license type|driver license|class description|commercial lic|lic type)/i.test(context),
+      hasExpirationLabel: /(expiration|expiry|expires|expire|exp\.?\s*date)/i.test(context),
+      hasIssueLabel: /(issue date|issued|original issue)/i.test(context),
+    });
+  }
+  return out;
+}
+
+async function tazworksMvrTest(req: any, res: any, user: any) {
+  if (req.method !== 'GET') return json(res, 405, { status: 'error', message: 'Method not allowed' });
+  if (!requireAdmin(user, res)) return;
+
+  const url = new URL(req.url || '/', 'https://local.test');
+  const fileNumber = String(url.searchParams.get('fileNumber') || '6328').trim();
+  const maxPages = Math.min(20, Math.max(1, Number(url.searchParams.get('pages') || 10)));
+  const resultTypes: Array<string | null> = ['EDITOR', null];
+
+  const e = tazEnv();
+  const pages: any[] = [];
+  const allOrders: any[] = [];
+  let foundOrder: any = null;
+
+  for (let page = 0; page < maxPages; page++) {
+    const payload = await proxyGet(`/tazworks/orders?page=${page}&size=10&clientGuid=${encodeURIComponent(e.clientGuid)}`);
+    const list = arr(payload);
+    pages.push({
+      page,
+      arrayCount: list.length,
+      topLevelKeys: payload && typeof payload === 'object' ? Object.keys(payload).slice(0, 30) : [],
+      fileNumbers: list.map((row: any) => String(row.fileNumber || row.fileNo || row.orderNumber || '')).filter(Boolean)
+    });
+
+    for (const row of list) {
+      const normalized = orderFrom(row);
+      allOrders.push({ normalized, raw: row });
+      if (String(normalized.fileNumber) === fileNumber) {
+        foundOrder = { normalized, raw: row };
+      }
+    }
+
+    if (foundOrder || list.length < 10) break;
+  }
+
+  if (!foundOrder) {
+    return json(res, 404, {
+      status: 'error',
+      message: `File number ${fileNumber} was not found in the first ${maxPages} page(s).`,
+      fileNumber,
+      pages,
+      ordersSeen: allOrders.map((item) => item.normalized.fileNumber).filter(Boolean)
+    });
+  }
+
+  const orderGuid = String(foundOrder.normalized.orderGuid || '');
+  const searchesPayload = await proxyGet(`/tazworks/orders/${encodeURIComponent(orderGuid)}/searches?clientGuid=${encodeURIComponent(e.clientGuid)}`);
+  const rawSearches = arr(searchesPayload, 'search');
+  const searches = rawSearches.map((row: any) => searchFrom(row, orderGuid));
+
+  const searchResults: any[] = [];
+
+  for (let i = 0; i < searches.length; i++) {
+    const search = searches[i];
+    const rawSearch = rawSearches[i];
+    const searchRowText = cleanResultText(rawSearch);
+    const searchRowFound = findMedExpire(rawSearch);
+
+    const item: any = {
+      index: i,
+      searchGuid: search.searchGuid,
+      label: search.label,
+      isMvr: isMvr(search),
+      rawKeys: search.rawKeys,
+      rawUuids: search.rawUuids,
+      rawSearch,
+      searchRowCleanText: safePreview(searchRowText, 40000),
+      searchRowCertificatePreview: certPreview(rawSearch),
+      searchRowDateDiagnostics: diagnosticDatesFromText(searchRowText),
+      searchRowMedExpireFound: searchRowFound,
+      resultVariants: []
+    };
+
+    if (!search.searchGuid) {
+      item.resultVariants.push({ resultType: 'none', ok: false, error: 'No searchGuid found for this search row.' });
+      searchResults.push(item);
+      continue;
+    }
+
+    for (const resultType of resultTypes) {
+      try {
+        const result = await tryResultVariant(orderGuid, search.searchGuid, resultType);
+        const cleanText = cleanResultText(result);
+        const found = findMedExpire(result);
+
+        item.resultVariants.push({
+          resultType: resultType || 'none',
+          ok: true,
+          topLevelKeys: result && typeof result === 'object' ? Object.keys(result).slice(0, 50) : [],
+          medExpireFound: found,
+          certificatePreview: certPreview(result),
+          cleanTextPreview: safePreview(cleanText, 80000),
+          dateDiagnostics: diagnosticDatesFromText(cleanText),
+          rawResult: safePreview(result, 120000)
+        });
+      } catch (error: any) {
+        item.resultVariants.push({
+          resultType: resultType || 'none',
+          ok: false,
+          error: String(error?.message || error)
+        });
+      }
+    }
+
+    searchResults.push(item);
+  }
+
+  const allFoundDates = searchResults.flatMap((search) => {
+    const found: any[] = [];
+    if (search.searchRowMedExpireFound?.date) found.push({ source: 'search-row', searchGuid: search.searchGuid, value: search.searchRowMedExpireFound });
+    for (const variant of search.resultVariants || []) {
+      if (variant.medExpireFound?.date) found.push({ source: `result-${variant.resultType}`, searchGuid: search.searchGuid, value: variant.medExpireFound });
+    }
+    return found;
+  });
+
+  return json(res, 200, {
+    status: 'ok',
+    fileNumber,
+    orderGuid,
+    pages,
+    order: foundOrder,
+    searchesPulled: searches.length,
+    searches: searchResults,
+    allFoundMedicalExpirationDates: allFoundDates,
+    notes: [
+      'This test page shows the exact order, search rows, and result payloads pulled through the server-side proxy.',
+      'License expiration dates should not be saved into Med Expire.',
+      'Med Expire should only come from medical/certificate related expiration labels.'
+    ]
+  });
+}
+// PHASE12A17_MVR_TEST_PAGE END
+
+
 async function tazworksSyncRuns(req: any, res: any, user: any) {
   if (req.method !== 'GET') return json(res, 405, { status: 'error', message: 'Method not allowed' });
   if (!requireAdmin(user, res)) return;
@@ -800,6 +969,7 @@ export default async function handler(req: any, res: any) {
     if (route === 'change-password') return changePassword(req, res, user);
     if (route === 'tazworks-sync/run') return tazworksSyncRun(req, res, user);
     if (route === 'tazworks-sync/runs') return tazworksSyncRuns(req, res, user);
+    if (route === 'tazworks-mvr-test') return tazworksMvrTest(req, res, user);
     if (route === 'system-check') return systemCheck(req, res, user);
     return json(res, 404, { status: 'error', message: `Route not found: ${route}` });
   } catch (error: any) {
