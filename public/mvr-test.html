@@ -1,0 +1,289 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>TazWorks MVR Test Page</title>
+  <style>
+    :root {
+      --green: #1fff00;
+      --ink: #0f172a;
+      --muted: #64748b;
+      --line: #e2e8f0;
+      --bg: #f8fafc;
+      --card: #ffffff;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      font-family: ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      color: var(--ink);
+      background: var(--bg);
+    }
+    header {
+      padding: 24px;
+      background: #0f172a;
+      color: white;
+      border-bottom: 5px solid var(--green);
+    }
+    header h1 { margin: 0 0 6px; font-size: 26px; }
+    header p { margin: 0; color: #cbd5e1; }
+    main { padding: 20px; max-width: 1500px; margin: 0 auto; }
+    .panel {
+      background: var(--card);
+      border: 1px solid var(--line);
+      border-radius: 16px;
+      padding: 16px;
+      margin-bottom: 16px;
+      box-shadow: 0 8px 24px rgba(15, 23, 42, 0.06);
+    }
+    .controls {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 10px;
+      align-items: end;
+    }
+    label { font-weight: 800; display: block; margin-bottom: 6px; }
+    input {
+      border: 1px solid #cbd5e1;
+      border-radius: 12px;
+      padding: 10px 12px;
+      font-size: 15px;
+      min-width: 180px;
+    }
+    button {
+      border: 1px solid #16a34a;
+      background: #ecfdf5;
+      color: #166534;
+      border-radius: 999px;
+      padding: 10px 14px;
+      font-weight: 900;
+      cursor: pointer;
+    }
+    button:disabled { opacity: .6; cursor: wait; }
+    .grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+      gap: 12px;
+    }
+    .metric {
+      padding: 12px;
+      border-radius: 14px;
+      border: 1px solid var(--line);
+      background: #fff;
+    }
+    .metric b { display: block; font-size: 22px; margin-bottom: 3px; }
+    .metric span { color: var(--muted); font-size: 13px; }
+    details {
+      border: 1px solid var(--line);
+      border-radius: 14px;
+      background: #fff;
+      margin: 12px 0;
+      overflow: hidden;
+    }
+    summary {
+      padding: 12px 14px;
+      cursor: pointer;
+      font-weight: 900;
+      background: #f8fafc;
+      border-bottom: 1px solid var(--line);
+    }
+    details[open] summary { border-bottom: 1px solid var(--line); }
+    pre {
+      white-space: pre-wrap;
+      word-break: break-word;
+      margin: 0;
+      padding: 14px;
+      max-height: 520px;
+      overflow: auto;
+      background: #020617;
+      color: #e2e8f0;
+      font-size: 12px;
+      line-height: 1.45;
+    }
+    .preview {
+      background: #fff7ed;
+      border: 1px solid #fed7aa;
+      color: #7c2d12;
+      padding: 12px;
+      border-radius: 12px;
+      white-space: pre-wrap;
+      word-break: break-word;
+      margin: 10px 14px 14px;
+    }
+    .good { color: #166534; font-weight: 900; }
+    .bad { color: #991b1b; font-weight: 900; }
+    .muted { color: var(--muted); }
+    .row-title {
+      display:flex;
+      justify-content:space-between;
+      gap: 12px;
+      align-items: center;
+      flex-wrap: wrap;
+    }
+    .pill {
+      border-radius: 999px;
+      padding: 4px 8px;
+      background: #f1f5f9;
+      font-size: 12px;
+      font-weight: 900;
+      border: 1px solid #e2e8f0;
+    }
+    .pill.green { background: rgba(31,255,0,.16); border-color: var(--green); }
+    .pill.red { background: #fee2e2; border-color: #fecaca; color: #991b1b; }
+  </style>
+</head>
+<body>
+  <header>
+    <h1>TazWorks MVR Test Page</h1>
+    <p>Shows everything pulled for a specific file number through the server-side proxy.</p>
+  </header>
+
+  <main>
+    <section class="panel">
+      <div class="controls">
+        <div>
+          <label for="fileNumber">File Number</label>
+          <input id="fileNumber" value="6328" />
+        </div>
+        <div>
+          <label for="pages">Pages to Search</label>
+          <input id="pages" value="10" />
+        </div>
+        <button id="run">Pull MVR Test Data</button>
+        <a href="/" class="muted">Back to app</a>
+      </div>
+      <p class="muted">You must be logged in as an admin in this browser. This page does not expose proxy secrets or TazWorks tokens.</p>
+    </section>
+
+    <section id="status" class="panel">Ready.</section>
+    <section id="output"></section>
+  </main>
+
+<script>
+const $ = (id) => document.getElementById(id);
+
+function esc(value) {
+  return String(value ?? '').replaceAll('&','&amp;').replaceAll('<','&lt;').replaceAll('>','&gt;').replaceAll('"','&quot;').replaceAll("'","&#039;");
+}
+
+function pre(value) {
+  return `<pre>${esc(typeof value === 'string' ? value : JSON.stringify(value, null, 2))}</pre>`;
+}
+
+function details(title, value, open = false) {
+  return `<details ${open ? 'open' : ''}><summary>${esc(title)}</summary>${pre(value)}</details>`;
+}
+
+function preview(title, value) {
+  if (!value) return '';
+  return `<details open><summary>${esc(title)}</summary><div class="preview">${esc(value)}</div></details>`;
+}
+
+function metric(label, value) {
+  return `<div class="metric"><b>${esc(value)}</b><span>${esc(label)}</span></div>`;
+}
+
+function render(data) {
+  const foundDates = data.allFoundMedicalExpirationDates || [];
+  const searches = data.searches || [];
+
+  let html = `
+    <section class="panel">
+      <h2>Summary</h2>
+      <div class="grid">
+        ${metric('File Number', data.fileNumber)}
+        ${metric('Order GUID', data.orderGuid || 'Not found')}
+        ${metric('Searches Pulled', data.searchesPulled ?? 0)}
+        ${metric('Medical Expiration Dates Found', foundDates.length)}
+      </div>
+      ${foundDates.length ? '<p class="good">Medical expiration candidate found.</p>' : '<p class="bad">No medical expiration candidate found.</p>'}
+    </section>
+  `;
+
+  html += `<section class="panel"><h2>Found Medical Expiration Candidates</h2>${details('allFoundMedicalExpirationDates', foundDates, true)}</section>`;
+  html += `<section class="panel"><h2>Order</h2>${details('Normalized Order', data.order?.normalized, true)}${details('Raw Order', data.order?.raw)}</section>`;
+  html += `<section class="panel"><h2>Pages Searched</h2>${details('Pages', data.pages, true)}</section>`;
+
+  html += `<section class="panel"><h2>Searches and Results</h2>`;
+
+  searches.forEach((search, index) => {
+    const hasFound = !!(search.searchRowMedExpireFound?.date || (search.resultVariants || []).some(v => v.medExpireFound?.date));
+    html += `
+      <details open>
+        <summary>
+          <div class="row-title">
+            <span>Search ${index + 1}: ${esc(search.label || '(no label)')}</span>
+            <span>
+              <span class="pill ${search.isMvr ? 'green' : ''}">${search.isMvr ? 'MVR match' : 'Not labeled MVR'}</span>
+              <span class="pill ${hasFound ? 'green' : 'red'}">${hasFound ? 'Date found' : 'No medical date'}</span>
+            </span>
+          </div>
+        </summary>
+        <div style="padding:14px">
+          <div class="grid">
+            ${metric('Search GUID', search.searchGuid || 'Missing')}
+            ${metric('Is MVR', search.isMvr ? 'Yes' : 'No')}
+            ${metric('Result Variants', (search.resultVariants || []).length)}
+          </div>
+        </div>
+        ${preview('Search Row Certificate Preview', search.searchRowCertificatePreview)}
+        ${details('Search Row Medical Expire Found', search.searchRowMedExpireFound, true)}
+        ${details('Search Row Date Diagnostics', search.searchRowDateDiagnostics)}
+        ${details('Search Row Clean Text', search.searchRowCleanText)}
+        ${details('Raw Search Row', search.rawSearch)}
+    `;
+
+    (search.resultVariants || []).forEach((variant) => {
+      html += `
+        <details>
+          <summary>Result Variant: ${esc(variant.resultType)} — ${variant.ok ? 'OK' : 'ERROR'}</summary>
+          ${variant.ok ? `
+            ${details('Medical Expire Found', variant.medExpireFound, true)}
+            ${preview('Certificate Preview', variant.certificatePreview)}
+            ${details('Date Diagnostics', variant.dateDiagnostics)}
+            ${details('Clean Text Preview', variant.cleanTextPreview)}
+            ${details('Raw Result', variant.rawResult)}
+          ` : details('Error', variant.error, true)}
+        </details>
+      `;
+    });
+
+    html += `</details>`;
+  });
+
+  html += `</section>`;
+  html += `<section class="panel"><h2>Full API Response</h2>${details('Full Response JSON', data)}</section>`;
+
+  $('output').innerHTML = html;
+}
+
+async function run() {
+  const fileNumber = $('fileNumber').value.trim() || '6328';
+  const pages = $('pages').value.trim() || '10';
+  $('run').disabled = true;
+  $('status').textContent = 'Pulling test data...';
+  $('output').innerHTML = '';
+
+  try {
+    const response = await fetch(`/api/index?path=tazworks-mvr-test&fileNumber=${encodeURIComponent(fileNumber)}&pages=${encodeURIComponent(pages)}`, {
+      credentials: 'include'
+    });
+    const raw = await response.text();
+    let data = {};
+    try { data = raw ? JSON.parse(raw) : {}; } catch {}
+    if (!response.ok) throw new Error(data.message || raw || 'Request failed.');
+    $('status').innerHTML = `<span class="good">Loaded test data for file ${esc(fileNumber)}.</span>`;
+    render(data);
+  } catch (error) {
+    $('status').innerHTML = `<span class="bad">${esc(error.message || error)}</span>`;
+  } finally {
+    $('run').disabled = false;
+  }
+}
+
+$('run').addEventListener('click', run);
+run();
+</script>
+</body>
+</html>
