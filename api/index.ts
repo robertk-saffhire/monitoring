@@ -908,7 +908,7 @@ async function tazworksSyncRun(req: any, res: any, user: any) {
   const runInsert = await query('insert into tazworks_sync_runs (status, triggered_by, message) values ($1,$2,$3) returning id', ['running', user.username || user.displayName || 'admin', 'Manual sync started']);
   const runId = runInsert.rows[0].id;
 
-  let ordersPulled = 0, applicantsUpserted = 0, safetyReportsUpdated = 0, medExpireUpdated = 0, mvrSearchesChecked = 0, errorsCount = 0;
+  let ordersPulled = 0, applicantsUpserted = 0, safetyReportsUpdated = 0, medExpireUpdated = 0, medExpireCleared = 0, mvrSearchesChecked = 0, errorsCount = 0;
   const errors: string[] = [], pageSummaries: any[] = [], mvrSamples: any[] = [];
   const dedupe = new Map<string, any>();
 
@@ -955,16 +955,32 @@ async function tazworksSyncRun(req: any, res: any, user: any) {
         );
 
         if (o.fileNumber) {
+          const existingApplicant = await query(
+            'select "medExpire", "medExpireOverridden" from applicants where "companyId"=$1 and "fileNumber"=$2 limit 1',
+            [companyId, String(o.fileNumber)]
+          );
+          const existingMedExpire = existingApplicant.rows[0]?.medExpire || null;
+          const existingOverridden = Boolean(existingApplicant.rows[0]?.medExpireOverridden);
+
           await query(
             `insert into applicants ("companyId","fileNumber","applicantName","orderDate","monitorStatus","mvrStatus","medExpire","medExpireOverridden",notes)
              values ($1,$2,$3,$4,$5,$6,$7,$8,$9)
-             on conflict ("fileNumber","companyId") do update set "applicantName"=case when excluded."applicantName"<>'' then excluded."applicantName" else applicants."applicantName" end,"orderDate"=coalesce(excluded."orderDate",applicants."orderDate"),"mvrStatus"=coalesce(excluded."mvrStatus",applicants."mvrStatus"),"medExpire"=coalesce(excluded."medExpire",applicants."medExpire"),"updatedAt"=now()`,
+             on conflict ("fileNumber","companyId") do update set
+               "applicantName"=case when excluded."applicantName"<>'' then excluded."applicantName" else applicants."applicantName" end,
+               "orderDate"=coalesce(excluded."orderDate",applicants."orderDate"),
+               "mvrStatus"=coalesce(excluded."mvrStatus",applicants."mvrStatus"),
+               "medExpire"=case
+                 when applicants."medExpireOverridden"=true then applicants."medExpire"
+                 when excluded."medExpire" is not null then excluded."medExpire"
+                 else null
+               end,
+               "updatedAt"=now()`,
             [companyId, String(o.fileNumber), String(o.applicantName || 'REVIEW NAME NEEDED'), dateOnly(o.orderedDate || o.createdDate), 'Off', String(o.orderStatus || ''), medExpire, false, '']
           );
 
           applicantsUpserted++;
           if (medExpire) medExpireUpdated++;
-
+          else if (existingMedExpire && !existingOverridden) medExpireCleared++;
           const safetyUpdate = await query(
             `update safety_reports set "applicantName"=case when $1<>'' then $1 else "applicantName" end,"updatedAt"=now() where "companyId"=$2 and "fileNumber"=$3 returning id`,
             [String(o.applicantName || ''), companyId, String(o.fileNumber)]
@@ -977,16 +993,16 @@ async function tazworksSyncRun(req: any, res: any, user: any) {
       }
     }
 
-    const message = `Sync completed. Pulled ${ordersPulled} orders. Updated ${medExpireUpdated} medical expiration date(s).`;
+    const message = `Sync completed. Pulled ${ordersPulled} orders. Updated ${medExpireUpdated} medical expiration date(s). Cleared ${medExpireCleared} stale medical date(s).`;
     await query(
       'update tazworks_sync_runs set status=$1, completed_at=now(), orders_pulled=$2, applicants_upserted=$3, safety_reports_updated=$4, errors_count=$5, message=$6, raw_summary=$7 where id=$8',
-      [errorsCount ? 'completed_with_errors' : 'completed', ordersPulled, applicantsUpserted, safetyReportsUpdated, errorsCount, message, JSON.stringify({ pages: pageSummaries, mvrSearchesChecked, medExpireUpdated, mvrSamples: mvrSamples.slice(0, 20), errors: errors.slice(0, 10) }), runId]
+      [errorsCount ? 'completed_with_errors' : 'completed', ordersPulled, applicantsUpserted, safetyReportsUpdated, errorsCount, message, JSON.stringify({ pages: pageSummaries, mvrSearchesChecked, medExpireUpdated, medExpireCleared, mvrSamples: mvrSamples.slice(0, 20), errors: errors.slice(0, 10) }), runId]
     );
 
-    return json(res, 200, { status: 'ok', runId, ordersPulled, applicantsUpserted, safetyReportsUpdated, medExpireUpdated, mvrSearchesChecked, errorsCount, message, pages: pageSummaries });
+    return json(res, 200, { status: 'ok', runId, ordersPulled, applicantsUpserted, safetyReportsUpdated, medExpireUpdated, medExpireCleared, mvrSearchesChecked, errorsCount, message, pages: pageSummaries });
   } catch (error: any) {
     const safe = error?.message || 'The order connection is currently unavailable.';
-    await query('update tazworks_sync_runs set status=$1, completed_at=now(), errors_count=$2, message=$3, raw_summary=$4 where id=$5', ['failed', errorsCount + 1, safe, JSON.stringify({ pages: pageSummaries, mvrSearchesChecked, medExpireUpdated, mvrSamples: mvrSamples.slice(0, 20), errors: [safe, ...errors].slice(0, 10) }), runId]);
+    await query('update tazworks_sync_runs set status=$1, completed_at=now(), errors_count=$2, message=$3, raw_summary=$4 where id=$5', ['failed', errorsCount + 1, safe, JSON.stringify({ pages: pageSummaries, mvrSearchesChecked, medExpireUpdated, medExpireCleared, mvrSamples: mvrSamples.slice(0, 20), errors: [safe, ...errors].slice(0, 10) }), runId]);
     return json(res, error?.statusCode || 503, { status: 'error', message: safe, runId });
   }
 }
