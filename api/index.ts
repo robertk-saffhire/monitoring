@@ -6,7 +6,7 @@ const { Pool } = pg;
 let pool: any;
 const SESSION_COOKIE = 'saffhire_session';
 const SAFETY_STATUSES = new Set(['S1 Complete', 'Emp Sent', 'Emp Complete', 'Completed']);
-const USER_ROLES = new Set(['admin', 'user', 'viewer']);
+const USER_ROLES = new Set(['admin', 'user', 'viewer', 'client_admin', 'client_user']);
 const BOOL_REPORT_FIELDS = new Set([
   'vehicleStraightTruck', 'vehicleTractorSemitrailer', 'vehicleBus', 'vehicleCargoTank', 'vehicleDoublesTriples', 'vehicleOther',
   'dotAlcoholTestPositive', 'dotDrugTestPositive', 'dotRefusedTest', 'dotOtherViolations',
@@ -42,6 +42,23 @@ function publicUser(user: any) { if (!user) return null; return { id: user.id, u
 async function getUserFromRequest(req: any) { const token = parseCookies(req)[SESSION_COOKIE]; if (!token) return null; try { const { payload } = await jwtVerify(token, secret()); const id = Number(payload.sub); const result = await query('select id, username, "displayName", role, "companyId", "isActive", "mustChangePassword", "lastSignedIn" from local_users where id=$1 limit 1', [id]); const user = result.rows[0] || null; if (!user || !user.isActive) return null; return user; } catch { return null; } }
 async function requireUser(req: any, res: any) { const user = await getUserFromRequest(req); if (!user) { json(res, 401, { status: 'error', message: 'Login required' }); return null; } return user; }
 function requireAdmin(user: any, res: any) { if (user.role !== 'admin') { json(res, 403, { status: 'error', message: 'Admin access required' }); return false; } return true; }
+function isAdmin(user: any) { return user?.role === 'admin'; }
+function isClientAdmin(user: any) { return user?.role === 'client_admin'; }
+function canManageClientUsers(user: any) { return isAdmin(user) || isClientAdmin(user); }
+function requestedCompanyId(req: any, user: any) {
+  const url = new URL(req.url || '/', 'https://local.test');
+  const requested = Number(url.searchParams.get('companyId') || user.companyId || 1);
+  return isAdmin(user) ? requested : Number(user.companyId || requested || 1);
+}
+function requireCompanyScope(user: any, res: any) {
+  if (isAdmin(user)) return true;
+  if (!user.companyId) {
+    json(res, 403, { status: 'error', message: 'Client company access is required' });
+    return false;
+  }
+  return true;
+}
+
 function getRoute(req: any) { const url = new URL(req.url || '/', 'https://local.test'); return url.searchParams.get('path') || url.pathname.replace(/^\/api\/?/, '').replace(/^\//, ''); }
 function slugify(value: string) { return String(value || '').trim().toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '') || 'company'; }
 function normalizeMonitorStatus(value: any) { return String(value || '').trim().toLowerCase() === 'on' ? 'On' : 'Off'; }
@@ -68,7 +85,7 @@ async function companies(req: any, res: any, user: any) {
 }
 
 async function applicants(req: any, res: any, user: any) {
-  const url = new URL(req.url || '/', 'https://local.test'); const companyId = Number(url.searchParams.get('companyId') || user.companyId || 1);
+  const url = new URL(req.url || '/', 'https://local.test'); const companyId = requestedCompanyId(req, user);
   if (req.method === 'GET') { const result = await query('select id, "fileNumber", "applicantName" as name, "orderDate", "monitorStatus", "mvrStatus", "medExpire", notes from applicants where "companyId"=$1 order by id desc limit 1000', [companyId]); return json(res, 200, { status: 'ok', applicants: result.rows }); }
   if (req.method === 'PATCH') { const body = await readBody(req); const id = Number(body.id); if (!id) return json(res, 400, { status: 'error', message: 'Applicant id is required' }); const current = await query('select * from applicants where id=$1 and "companyId"=$2 limit 1', [id, companyId]); if (!current.rows[0]) return json(res, 404, { status: 'error', message: 'Applicant not found' }); const monitorStatus = normalizeMonitorStatus(body.monitorStatus ?? current.rows[0].monitorStatus); const medExpire = body.medExpire ?? current.rows[0].medExpire; const notes = body.notes ?? current.rows[0].notes; const result = await query('update applicants set "monitorStatus"=$1, "medExpire"=$2, "medExpireOverridden"=$3, notes=$4, "updatedAt"=now() where id=$5 and "companyId"=$6 returning id, "fileNumber", "applicantName" as name, "orderDate", "monitorStatus", "mvrStatus", "medExpire", notes', [monitorStatus, medExpire || null, Boolean(medExpire), String(notes || ''), id, companyId]); return json(res, 200, { status: 'ok', applicant: result.rows[0] }); }
   return json(res, 405, { status: 'error', message: 'Method not allowed' });
@@ -121,7 +138,7 @@ function safetyCsvToReport(row: any) {
 }
 
 async function safetyReports(req: any, res: any, user: any) {
-  const url = new URL(req.url || '/', 'https://local.test'); const companyId = Number(url.searchParams.get('companyId') || user.companyId || 1);
+  const url = new URL(req.url || '/', 'https://local.test'); const companyId = requestedCompanyId(req, user);
   if (req.method === 'GET') {
     let r = await query('select * from safety_reports where "companyId"=$1 order by id desc limit 500', [companyId]);
     let source = 'selected_company';
@@ -194,6 +211,112 @@ async function changePassword(req: any, res: any, user: any) {
   if (!row || !(await bcrypt.compare(currentPassword, row.passwordHash))) return json(res, 400, { status: 'error', message: 'Current password is incorrect' });
   await query('update local_users set "passwordHash"=$1, "mustChangePassword"=false, "updatedAt"=now() where id=$2', [await bcrypt.hash(newPassword, 12), user.id]);
   return json(res, 200, { status: 'ok', success: true });
+}
+
+
+async function clientDashboard(req: any, res: any, user: any) {
+  if (req.method !== 'GET') return json(res, 405, { status: 'error', message: 'Method not allowed' });
+  if (!requireCompanyScope(user, res)) return;
+  const companyId = requestedCompanyId(req, user);
+
+  const company = await query('select id, name, slug, "isActive" from companies where id=$1 limit 1', [companyId]);
+  const applicantStats = await query(
+    `select count(*)::int as total,
+      count(*) filter (where "monitorStatus"='On')::int as on_monitoring,
+      count(*) filter (where "monitorStatus"<>'On' or "monitorStatus" is null)::int as off_monitoring,
+      count(*) filter (where "medExpire" is null or "medExpire"='')::int as blank_med_expire,
+      count(*) filter (where "medExpire" is not null and "medExpire"<>'' and "medExpire"::date < current_date)::int as expired_medical,
+      count(*) filter (where "medExpire" is not null and "medExpire"<>'' and "medExpire"::date between current_date and current_date + interval '30 days')::int as expiring_30,
+      count(*) filter (where "medExpire" is not null and "medExpire"<>'' and "medExpire"::date between current_date + interval '31 days' and current_date + interval '60 days')::int as expiring_60
+     from applicants where "companyId"=$1`, [companyId]);
+
+  const safetyStats = await query(
+    `select count(*)::int as total,
+      count(*) filter (where status='S1 Complete')::int as s1_complete,
+      count(*) filter (where status='Emp Sent')::int as emp_sent,
+      count(*) filter (where status='Emp Complete')::int as emp_complete,
+      count(*) filter (where status='Completed')::int as completed
+     from safety_reports where "companyId"=$1`, [companyId]);
+
+  const recentApplicants = await query(
+    `select id, "fileNumber", "applicantName" as name, "orderDate", "monitorStatus", "mvrStatus", "medExpire", notes
+     from applicants where "companyId"=$1 order by id desc limit 25`, [companyId]);
+
+  const recentSafety = await query(
+    `select id, "fileNumber", "applicantName", created, status, "followUpDate", "prevEmployerName", notes
+     from safety_reports where "companyId"=$1 order by id desc limit 25`, [companyId]);
+
+  const clientUsers = await query(
+    `select id, username, "displayName", role, "companyId", "isActive", "mustChangePassword", "lastSignedIn"
+     from local_users where "companyId"=$1 order by id asc`, [companyId]);
+
+  return json(res, 200, {
+    status: 'ok',
+    company: company.rows[0] || { id: companyId, name: `Company ${companyId}` },
+    applicantStats: applicantStats.rows[0] || {},
+    safetyStats: safetyStats.rows[0] || {},
+    recentApplicants: recentApplicants.rows,
+    recentSafetyReports: recentSafety.rows,
+    users: clientUsers.rows.map(publicUser),
+    canManageUsers: canManageClientUsers(user)
+  });
+}
+
+async function clientUsers(req: any, res: any, user: any) {
+  if (!canManageClientUsers(user)) return json(res, 403, { status: 'error', message: 'Client admin access required' });
+  if (!requireCompanyScope(user, res)) return;
+  const companyId = requestedCompanyId(req, user);
+
+  if (req.method === 'GET') {
+    const r = await query(`select id, username, "displayName", role, "companyId", "isActive", "mustChangePassword", "lastSignedIn" from local_users where "companyId"=$1 order by id asc`, [companyId]);
+    return json(res, 200, { status: 'ok', users: r.rows.map(publicUser) });
+  }
+
+  const body = await readBody(req);
+
+  if (req.method === 'POST') {
+    const username = String(body.username || '').trim().toLowerCase();
+    const password = String(body.password || '');
+    if (username.length < 3 || password.length < 8) return json(res, 400, { status: 'error', message: 'Username and temporary password of at least 8 characters are required' });
+    let role = String(body.role || 'client_user');
+    const allowed = isAdmin(user) ? new Set(['client_admin','client_user','viewer','user']) : new Set(['client_user','viewer']);
+    if (!allowed.has(role)) role = 'client_user';
+    const hash = await bcrypt.hash(password, 12);
+    const r = await query(`insert into local_users (username,"passwordHash","displayName",role,"companyId","isActive","mustChangePassword") values ($1,$2,$3,$4,$5,true,true) returning id, username, "displayName", role, "companyId", "isActive", "mustChangePassword", "lastSignedIn"`, [username, hash, String(body.displayName || username), role, companyId]);
+    return json(res, 200, { status: 'ok', user: publicUser(r.rows[0]) });
+  }
+
+  if (req.method === 'PATCH') {
+    const id = Number(body.id);
+    if (!id) return json(res, 400, { status: 'error', message: 'User id is required' });
+    const current = await query('select id, role from local_users where id=$1 and "companyId"=$2 limit 1', [id, companyId]);
+    if (!current.rows[0]) return json(res, 404, { status: 'error', message: 'User not found for this client' });
+    let role = String(body.role || current.rows[0].role || 'client_user');
+    const allowed = isAdmin(user) ? new Set(['client_admin','client_user','viewer','user']) : new Set(['client_user','viewer']);
+    if (!allowed.has(role)) role = current.rows[0].role || 'client_user';
+
+    let params: any[] = [String(body.displayName || ''), role, body.isActive !== false];
+    let sql = 'update local_users set "displayName"=$1, role=$2, "isActive"=$3, "updatedAt"=now()';
+    if (body.password) {
+      params.push(await bcrypt.hash(String(body.password), 12));
+      sql += `, "passwordHash"=$${params.length}, "mustChangePassword"=true`;
+    }
+    params.push(id, companyId);
+    sql += ` where id=$${params.length-1} and "companyId"=$${params.length} returning id, username, "displayName", role, "companyId", "isActive", "mustChangePassword", "lastSignedIn"`;
+    const r = await query(sql, params);
+    return json(res, 200, { status: 'ok', user: publicUser(r.rows[0]) });
+  }
+
+  if (req.method === 'DELETE') {
+    const url = new URL(req.url || '/', 'https://local.test');
+    const id = Number(url.searchParams.get('id'));
+    if (!id) return json(res, 400, { status: 'error', message: 'User id is required' });
+    if (id === user.id) return json(res, 400, { status: 'error', message: 'You cannot delete your own account' });
+    await query('delete from local_users where id=$1 and "companyId"=$2', [id, companyId]);
+    return json(res, 200, { status: 'ok', success: true });
+  }
+
+  return json(res, 405, { status: 'error', message: 'Method not allowed' });
 }
 
 async function systemCheck(req: any, res: any, user: any) {
@@ -1065,6 +1188,8 @@ export default async function handler(req: any, res: any) {
     if (route === 'tazworks-sync/runs') return tazworksSyncRuns(req, res, user);
     if (route === 'tazworks-sync/clear') return tazworksSyncClear(req, res, user);
     if (route === 'tazworks-mvr-test') return tazworksMvrTest(req, res, user);
+    if (route === 'client-dashboard') return clientDashboard(req, res, user);
+    if (route === 'client-users') return clientUsers(req, res, user);
     if (route === 'system-check') return systemCheck(req, res, user);
     return json(res, 404, { status: 'error', message: `Route not found: ${route}` });
   } catch (error: any) {
