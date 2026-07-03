@@ -363,7 +363,6 @@ function Metric({ title, value, icon: Icon }) {
 
 function Dashboard({ company, applicants, reports, refresh }) {
   const onCount = applicants.filter((a) => a.monitorStatus === 'On').length;
-  const statusCounts = STATUSES.map((status) => [status, reports.filter((r) => r.status === status).length]);
   return (
     <>
       <Header title="Dashboard" subtitle={company?.name || 'Driver Pipeline'} action={refresh} />
@@ -373,11 +372,6 @@ function Dashboard({ company, applicants, reports, refresh }) {
         <Metric title="Safety Reports" value={reports.length} icon={Truck} />
         <Metric title="Follow Ups" value={reports.filter((r) => r.followUpDate).length} icon={Activity} />
       </div>
-      <section className="card wide-card">
-        <h2>Phase 4 Build</h2>
-        <p>This build adds Safety Performance print/PDF output and an employer email draft workflow while keeping data in Supabase only.</p>
-        <div className="status-list">{statusCounts.map(([label, count]) => <React.Fragment key={label}><span>{label}</span><b>{count}</b></React.Fragment>)}</div>
-      </section>
     </>
   );
 }
