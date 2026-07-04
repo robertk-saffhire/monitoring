@@ -1903,6 +1903,42 @@ async function monitoringOnOffExportsRepair(req: any, res: any, user: any) {
   return json(res, 200, { status: 'ok', checked: rows.rows.length, repaired });
 }
 
+
+async function monitoringOnOffExportsUpdate(req: any, res: any, user: any) {
+  if (!requireAdmin(user, res)) return;
+  if (req.method !== 'PATCH' && req.method !== 'POST') {
+    return json(res, 405, { status: 'error', message: 'Method not allowed' });
+  }
+
+  const companyId = requestedCompanyId(req, user);
+  const body = await readBody(req);
+  const id = Number(body.id || 0);
+
+  if (!id) {
+    return json(res, 400, { status: 'error', message: 'Queue row id is required' });
+  }
+
+  const dob = String(body.dob ?? '').trim();
+
+  const result = await query(
+    `update monitoring_on_off_exports
+     set dob=$1,
+         "rawDetails" = coalesce("rawDetails", '{}'::jsonb) || jsonb_build_object('manualDobUpdatedAt', now(), 'manualDobUpdatedBy', $2),
+         "createdAt" = "createdAt"
+     where id=$3 and "companyId"=$4 and "clearedAt" is null
+     returning id, "fileNumber" as "ReferenceId", "firstName" as "FirstName", "middleName" as "MiddleName",
+               "lastName" as "LastName", dob as "DOB", "dlNumber" as "DL Number", "dlState" as "DL State",
+               action, source, "createdAt"`,
+    [dob, user?.username || user?.displayName || '', id, companyId]
+  );
+
+  if (!result.rows[0]) {
+    return json(res, 404, { status: 'error', message: 'Queue row not found or already cleared' });
+  }
+
+  return json(res, 200, { status: 'ok', row: result.rows[0] });
+}
+
 // PHASE12A60_MONITORING_ON_OFF_EXPORT_QUEUE END
 
 
@@ -2436,6 +2472,7 @@ export default async function handler(req: any, res: any) {
     if (route === 'monitoring-on-off') return monitoringOnOffExports(req, res, user);
     if (route === 'monitoring-on-off/clear') return monitoringOnOffExportsClear(req, res, user);
     if (route === 'monitoring-on-off/repair') return monitoringOnOffExportsRepair(req, res, user);
+    if (route === 'monitoring-on-off/update') return monitoringOnOffExportsUpdate(req, res, user);
     if (route === 'invoices/diagnostics') return invoiceDiagnostics(req, res, user);
     if (route === 'system-check') return systemCheck(req, res, user);
     return json(res, 404, { status: 'error', message: `Route not found: ${route}` });
