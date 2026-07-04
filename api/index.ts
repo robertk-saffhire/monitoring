@@ -1,7 +1,6 @@
 import pg from 'pg';
 import bcrypt from 'bcryptjs';
 import { jwtVerify, SignJWT } from 'jose';
-import { PDFDocument, StandardFonts, rgb } from 'pdf-lib';
 import fs from 'fs';
 import path from 'path';
 
@@ -474,6 +473,7 @@ function pdfSetAccidentRows(form: any, report: any) {
   pdfSetText(form, 'to government agencies or insurers or retained under internal company policies 3', lines[3]);
 }
 async function buildCompletedSafetyPdf(report: any) {
+  const { PDFDocument } = await import('pdf-lib');
   const templatePath = path.join(process.cwd(), 'public', 'fmcsa-safety-performance-template.pdf');
   if (!fs.existsSync(templatePath)) throw new Error('FMCSA PDF template is missing from public/fmcsa-safety-performance-template.pdf');
   const templateBytes = fs.readFileSync(templatePath);
@@ -1611,11 +1611,18 @@ async function invoices(req: any, res: any, user: any) {
   const companyId = requestedCompanyId(req, user);
 
   if (req.method === 'GET') {
-    try { await correctCurrentMonthDraftToPreviousMonth(companyId); } catch (error) { console.error('invoice draft correction failed', error); }
-    await ensureMonthlyInvoice(companyId);
-    const list = await query(`${invoiceSelectSql()} where "companyId"=$1 order by "invoiceMonth" desc, id desc limit 36`, [companyId]);
-    const currentCount = await invoiceCurrentMvrCount(companyId);
-    return json(res, 200, { status: 'ok', currentMonitoringOnCount: currentCount, currentMvrOnCount: currentCount, invoices: list.rows });
+    try {
+      try { await correctCurrentMonthDraftToPreviousMonth(companyId); } catch (error) { console.error('invoice draft correction failed', error); }
+      await ensureMonthlyInvoice(companyId);
+      const list = await query(`${invoiceSelectSql()} where "companyId"=$1 order by "invoiceMonth" desc, id desc limit 36`, [companyId]);
+      const currentCount = await invoiceCurrentMvrCount(companyId);
+      return json(res, 200, { status: 'ok', currentMonitoringOnCount: currentCount, currentMvrOnCount: currentCount, invoices: list.rows });
+    } catch (error: any) {
+      return json(res, 500, {
+        status: 'error',
+        message: `Invoices could not load: ${errorMessage(error)}. Confirm the Phase 12A-52 invoices SQL migration has been run.`
+      });
+    }
   }
 
   if (req.method === 'POST') {
@@ -1743,6 +1750,7 @@ function drawRight(page: any, textValue: string, xRight: number, y: number, opti
   page.drawText(textValue, { ...options, x: xRight - width, y });
 }
 async function invoicePdf(req: any, res: any, user: any) {
+  const { PDFDocument, StandardFonts, rgb } = await import('pdf-lib');
   if (!requireAdmin(user, res)) return;
   const companyId = requestedCompanyId(req, user);
   const url = new URL(req.url || '/', 'https://local.test');
@@ -1859,6 +1867,41 @@ async function invoicePdf(req: any, res: any, user: any) {
   res.setHeader('Content-Disposition', `attachment; filename="${safeNumber}.pdf"`);
   res.end(Buffer.from(bytes));
 }
+
+async function invoiceDiagnostics(req: any, res: any, user: any) {
+  if (!requireAdmin(user, res)) return;
+  const companyId = requestedCompanyId(req, user);
+  const checks: any[] = [];
+
+  async function add(name: string, fn: any) {
+    try {
+      const value = await fn();
+      checks.push({ name, ok: true, value });
+    } catch (error: any) {
+      checks.push({ name, ok: false, error: errorMessage(error) });
+    }
+  }
+
+  await add('database', async () => {
+    const r = await query('select 1 as ok');
+    return r.rows[0]?.ok;
+  });
+
+  await add('invoices table exists', async () => {
+    const r = await query("select exists (select 1 from information_schema.tables where table_name='invoices') as exists");
+    return r.rows[0]?.exists;
+  });
+
+  await add('on monitoring count', async () => invoiceCurrentMvrCount(companyId));
+
+  await add('pdf-lib available', async () => {
+    await import('pdf-lib');
+    return true;
+  });
+
+  return json(res, 200, { status: 'ok', checks });
+}
+
 // PHASE12A52_ADMIN_INVOICES END
 
 
@@ -1892,6 +1935,7 @@ export default async function handler(req: any, res: any) {
     if (route === 'client-safety-pdf') return clientSafetyPdf(req, res, user);
     if (route === 'invoices') return invoices(req, res, user);
     if (route === 'invoices/pdf') return invoicePdf(req, res, user);
+    if (route === 'invoices/diagnostics') return invoiceDiagnostics(req, res, user);
     if (route === 'system-check') return systemCheck(req, res, user);
     return json(res, 404, { status: 'error', message: `Route not found: ${route}` });
   } catch (error: any) {
