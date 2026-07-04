@@ -609,4 +609,185 @@
 })();
 
 </script>
+<script>
+
+// Phase 12A-42: place Order MVR button inside the MVR Status column
+(function () {
+  const MVR_BASE = 'https://saffhiresecure.com/app/client/driverpipeline/mvr/';
+
+  function text(el) {
+    return (el && el.textContent ? el.textContent : '').trim();
+  }
+
+  function normalize(value) {
+    return String(value || '')
+      .replace(/[↕↑↓▲▼]/g, '')
+      .replace(/\s+/g, ' ')
+      .trim()
+      .toLowerCase();
+  }
+
+  function currentTitle() {
+    return text(document.querySelector('.page-header h1')) || text(document.querySelector('.head h2'));
+  }
+
+  function activePortalPage() {
+    const active = Array.from(document.querySelectorAll('nav button')).find((button) => button.classList.contains('active'));
+    return active ? active.dataset.p : '';
+  }
+
+  function isMonitoringContext() {
+    const title = currentTitle();
+    return title === 'Monitoring' || activePortalPage() === 'mon' || title === 'Client View';
+  }
+
+  function getMonitoringTables() {
+    if (!isMonitoringContext()) return [];
+
+    return Array.from(document.querySelectorAll('table')).filter((table) => {
+      const headers = Array.from(table.querySelectorAll('thead th')).map((th) => normalize(text(th)));
+      return headers.includes('file #') &&
+        (headers.includes('mvr status') || headers.includes('mvr') || headers.includes('order mvr')) &&
+        (headers.includes('monitoring') || headers.includes('monitor status'));
+    });
+  }
+
+  function headerIndexes(table) {
+    const headers = Array.from(table.querySelectorAll('thead th')).map((th) => normalize(text(th)));
+
+    return {
+      headers,
+      fileIndex: headers.indexOf('file #'),
+      mvrIndex: headers.includes('mvr status') ? headers.indexOf('mvr status') : headers.indexOf('mvr'),
+      orderMvrIndex: headers.indexOf('order mvr')
+    };
+  }
+
+  function removeOldSeparateOrderMvrColumn(table) {
+    const indexes = headerIndexes(table);
+
+    // If Order MVR is already the renamed MVR column, do not remove it.
+    if (indexes.orderMvrIndex < 0 || indexes.mvrIndex < 0) return;
+
+    const oldOrderIndex = indexes.orderMvrIndex;
+
+    const headerRow = table.querySelector('thead tr');
+    if (headerRow && headerRow.children[oldOrderIndex]) {
+      headerRow.children[oldOrderIndex].remove();
+    }
+
+    Array.from(table.querySelectorAll('tbody tr')).forEach((row) => {
+      if (row.children[oldOrderIndex]) row.children[oldOrderIndex].remove();
+    });
+  }
+
+  function fileNumberFromRow(row, fileIndex) {
+    const cell = row.children[fileIndex];
+    const raw = text(cell);
+    const match = raw.match(/[0-9]+/);
+    return match ? match[0] : '';
+  }
+
+  function makeMvrButton(fileNumber) {
+    const a = document.createElement('a');
+    a.href = MVR_BASE + encodeURIComponent(fileNumber);
+    a.target = '_blank';
+    a.rel = 'noopener';
+    a.className = 'phase12a42-mvr-button';
+    a.textContent = 'Order MVR';
+    a.title = 'Order MVR for file ' + fileNumber;
+    return a;
+  }
+
+  function enhanceTable(table) {
+    if (!table) return;
+
+    // Remove the old extra column from Phase 12A-41 if it exists.
+    removeOldSeparateOrderMvrColumn(table);
+
+    const indexes = headerIndexes(table);
+    const fileIndex = indexes.fileIndex;
+    let mvrIndex = indexes.mvrIndex;
+
+    // If it has already been changed to Order MVR, use that same column.
+    if (mvrIndex < 0 && indexes.orderMvrIndex >= 0) {
+      mvrIndex = indexes.orderMvrIndex;
+    }
+
+    if (fileIndex < 0 || mvrIndex < 0) return;
+
+    const header = table.querySelectorAll('thead th')[mvrIndex];
+    if (header && normalize(text(header)) !== 'order mvr') {
+      header.textContent = 'Order MVR';
+    }
+
+    Array.from(table.querySelectorAll('tbody tr')).forEach((row) => {
+      const fileNumber = fileNumberFromRow(row, fileIndex);
+      const cell = row.children[mvrIndex];
+
+      if (!cell || !fileNumber) return;
+
+      const existing = cell.querySelector('.phase12a42-mvr-button');
+      if (existing && existing.href.includes('/' + encodeURIComponent(fileNumber))) return;
+
+      cell.innerHTML = '';
+      cell.classList.add('phase12a42-mvr-cell');
+      cell.appendChild(makeMvrButton(fileNumber));
+    });
+
+    table.dataset.phase12a42MvrPosition = '1';
+  }
+
+  function refreshTables() {
+    getMonitoringTables().forEach(enhanceTable);
+  }
+
+  function addStyles() {
+    if (document.getElementById('phase12a42-mvr-style')) return;
+
+    const style = document.createElement('style');
+    style.id = 'phase12a42-mvr-style';
+    style.textContent = `
+      .phase12a42-mvr-cell {
+        white-space: nowrap;
+      }
+
+      .phase12a42-mvr-button {
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        border: 1px solid #16a34a;
+        background: #ecfdf5;
+        color: #166534;
+        border-radius: 999px;
+        padding: 7px 10px;
+        font-size: 12px;
+        font-weight: 1000;
+        text-decoration: none;
+        white-space: nowrap;
+      }
+
+      .phase12a42-mvr-button:hover {
+        background: rgba(31, 255, 0, .18);
+        border-color: #1fff00;
+      }
+    `;
+
+    document.head.appendChild(style);
+  }
+
+  function boot() {
+    addStyles();
+    refreshTables();
+    setInterval(refreshTables, 800);
+  }
+
+  if (document.readyState === 'loading') {
+    document.addEventListener('DOMContentLoaded', boot);
+  } else {
+    boot();
+  }
+})();
+
+</script>
 </body></html>
