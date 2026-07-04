@@ -198,8 +198,10 @@
 
 
 
-// Phase 12A-43: Monitoring search by file number or name
+// Phase 12A-44: Stable Monitoring search by file number or name
 (function () {
+  let searchValue = '';
+
   function text(el) {
     return (el && el.textContent ? el.textContent : '').trim();
   }
@@ -238,100 +240,111 @@
     });
   }
 
-  function getHeaderIndexes(table) {
+  function getIndexes(table) {
     const headers = Array.from(table.querySelectorAll('thead th')).map((th) => normalizeHeader(text(th)));
     return {
-      fileIndex: headers.indexOf('file #'),
-      nameIndex: headers.indexOf('name') >= 0 ? headers.indexOf('name') : headers.indexOf('applicant name')
+      file: headers.indexOf('file #'),
+      name: headers.includes('name') ? headers.indexOf('name') : headers.indexOf('applicant name')
     };
   }
 
-  function searchValue(row, indexes) {
-    const fileText = indexes.fileIndex >= 0 && row.children[indexes.fileIndex] ? text(row.children[indexes.fileIndex]) : '';
-    const nameText = indexes.nameIndex >= 0 && row.children[indexes.nameIndex] ? text(row.children[indexes.nameIndex]) : '';
+  function rowSearchText(row, indexes) {
+    const fileText = indexes.file >= 0 && row.children[indexes.file] ? text(row.children[indexes.file]) : '';
+    const nameText = indexes.name >= 0 && row.children[indexes.name] ? text(row.children[indexes.name]) : '';
     return `${fileText} ${nameText}`.toLowerCase();
   }
 
-  function filterTable(table) {
-    const panel = table.closest('[data-phase12a43-search-wrap]') ||
-      table.parentElement?.parentElement?.querySelector('[data-phase12a43-search-wrap]') ||
-      document.querySelector('[data-phase12a43-search-wrap]');
-
-    const input = panel ? panel.querySelector('[data-phase12a43-search]') : null;
-    const query = String(input ? input.value : '').trim().toLowerCase();
-    const indexes = getHeaderIndexes(table);
-
+  function applyFilter(table) {
+    const indexes = getIndexes(table);
+    const query = searchValue.trim().toLowerCase();
     let visible = 0;
 
     Array.from(table.querySelectorAll('tbody tr')).forEach((row) => {
-      const haystack = searchValue(row, indexes);
-      const show = !query || haystack.includes(query);
-      row.style.display = show ? '' : 'none';
-      if (show) visible++;
+      const show = !query || rowSearchText(row, indexes).includes(query);
+
+      if (show) {
+        row.removeAttribute('data-phase12a44-search-hidden');
+        visible++;
+      } else {
+        row.setAttribute('data-phase12a44-search-hidden', '1');
+      }
     });
 
-    const count = panel ? panel.querySelector('[data-phase12a43-count]') : null;
+    const count = document.querySelector('[data-phase12a44-count]');
     if (count) count.textContent = `${visible} visible`;
   }
 
-  function addSearchForTable(table) {
-    if (!table || table.dataset.phase12a43Search === '1') return;
+  function applyAllFilters() {
+    findMonitoringTables().forEach(applyFilter);
+  }
+
+  function ensureSearchBox() {
+    const tables = findMonitoringTables();
+
+    if (!tables.length) {
+      document.querySelectorAll('[data-phase12a44-search-wrap]').forEach((el) => el.remove());
+      return;
+    }
+
+    const table = tables[0];
+
+    if (document.querySelector('[data-phase12a44-search-wrap]')) {
+      applyAllFilters();
+      return;
+    }
 
     const container = table.closest('.table-wrap, .phase12a24-table-wrap, .card, section') || table.parentElement;
     if (!container || !container.parentElement) return;
 
     const wrap = document.createElement('div');
-    wrap.className = 'phase12a43-search-wrap';
-    wrap.dataset.phase12a43SearchWrap = '1';
+    wrap.className = 'phase12a44-search-wrap';
+    wrap.setAttribute('data-phase12a44-search-wrap', '1');
     wrap.innerHTML = `
-      <div class="phase12a43-search-box">
-        <span>Search</span>
-        <input data-phase12a43-search type="search" placeholder="Search by file number or name..." />
-        <button type="button" data-phase12a43-clear>Clear</button>
-        <strong data-phase12a43-count></strong>
+      <div class="phase12a44-search-box">
+        <strong>Search</strong>
+        <input data-phase12a44-search type="search" placeholder="Search by file number or name..." />
+        <button type="button" data-phase12a44-clear>Clear</button>
+        <span data-phase12a44-count></span>
       </div>
     `;
 
     container.parentElement.insertBefore(wrap, container);
 
-    const input = wrap.querySelector('[data-phase12a43-search]');
-    const clear = wrap.querySelector('[data-phase12a43-clear]');
+    const input = wrap.querySelector('[data-phase12a44-search]');
+    const clear = wrap.querySelector('[data-phase12a44-clear]');
 
-    input.addEventListener('input', () => filterTable(table));
+    input.value = searchValue;
+
+    input.addEventListener('input', () => {
+      searchValue = input.value || '';
+      applyAllFilters();
+    });
+
     clear.addEventListener('click', () => {
+      searchValue = '';
       input.value = '';
-      filterTable(table);
+      applyAllFilters();
       input.focus();
     });
 
-    table.dataset.phase12a43Search = '1';
-    filterTable(table);
-  }
-
-  function refresh() {
-    const tables = findMonitoringTables();
-
-    // Remove search boxes when leaving monitoring/client monitoring.
-    if (!tables.length) {
-      document.querySelectorAll('[data-phase12a43-search-wrap]').forEach((el) => el.remove());
-      return;
-    }
-
-    tables.forEach(addSearchForTable);
-    tables.forEach(filterTable);
+    applyAllFilters();
   }
 
   function addStyles() {
-    if (document.getElementById('phase12a43-search-style')) return;
+    if (document.getElementById('phase12a44-search-style')) return;
 
     const style = document.createElement('style');
-    style.id = 'phase12a43-search-style';
+    style.id = 'phase12a44-search-style';
     style.textContent = `
-      .phase12a43-search-wrap {
+      tr[data-phase12a44-search-hidden="1"] {
+        display: none !important;
+      }
+
+      .phase12a44-search-wrap {
         margin: 0 0 12px;
       }
 
-      .phase12a43-search-box {
+      .phase12a44-search-box {
         display: flex;
         align-items: center;
         gap: 10px;
@@ -342,12 +355,12 @@
         padding: 12px;
       }
 
-      .phase12a43-search-box span {
+      .phase12a44-search-box strong {
         color: #475569;
-        font-weight: 900;
+        font-weight: 1000;
       }
 
-      .phase12a43-search-box input {
+      .phase12a44-search-box input {
         flex: 1;
         min-width: 240px;
         border: 1px solid #cbd5e1;
@@ -356,7 +369,7 @@
         font: inherit;
       }
 
-      .phase12a43-search-box button {
+      .phase12a44-search-box button {
         border: 1px solid #38bdf8;
         background: #f0f9ff;
         color: #075985;
@@ -366,9 +379,10 @@
         cursor: pointer;
       }
 
-      .phase12a43-search-box strong {
+      .phase12a44-search-box span {
         color: #166534;
         font-size: 13px;
+        font-weight: 900;
       }
     `;
 
@@ -377,8 +391,14 @@
 
   function boot() {
     addStyles();
-    refresh();
-    setInterval(refresh, 900);
+    ensureSearchBox();
+
+    // Only ensure the search box exists on page/table changes.
+    // The hidden row state is controlled by CSS, so it will not flash.
+    setInterval(() => {
+      ensureSearchBox();
+      applyAllFilters();
+    }, 1000);
   }
 
   if (document.readyState === 'loading') {
