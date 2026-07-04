@@ -685,7 +685,8 @@
   function mainPanel() { return document.querySelector('.main-panel') || document.querySelector('main') || document.body; }
   function currentTitle() { return text(document.querySelector('.page-header h1')) || text(document.querySelector('.head h2')); }
   function isAdminMonitoring() { return currentTitle() === 'Monitoring'; }
-  function isTerminatedPage() { return document.body.dataset.phase12a46TerminatedPage === '1'; }
+  function isTerminatedPage() { return document.body.dataset.phase12a46TerminatedPage === '1' ||
+      document.body.dataset.phase12a60MonitoringOnOffPage === '1'; }
   function endpoint(path) { return '/api/index?path=' + encodeURIComponent(path); }
 
   async function api(path, options) {
@@ -1386,7 +1387,8 @@
   function isCustomAdminPageActive() {
     return document.body.dataset.phase12a54Invoices === '1' ||
       document.body.dataset.phase12a52InvoicePage === '1' ||
-      document.body.dataset.phase12a46TerminatedPage === '1';
+      document.body.dataset.phase12a46TerminatedPage === '1' ||
+      document.body.dataset.phase12a60MonitoringOnOffPage === '1';
   }
 
   function isMainAdminNavLabel(label) {
@@ -1511,6 +1513,406 @@
     applySavedTarget();
     addHardResetButton();
     setInterval(addHardResetButton, 1000);
+  }
+
+  if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', boot);
+  else boot();
+})();
+
+
+
+
+// Phase 12A-60: Admin Monitoring On/Off export queue
+(function () {
+  let state = { onRows: [], offRows: [] };
+
+  const HEADERS = ['ReferenceId', 'FirstName', 'MiddleName', 'LastName', 'DOB', 'DL Number', 'DL State'];
+
+  function text(el) {
+    return (el && el.textContent ? el.textContent : '').trim();
+  }
+
+  function mainPanel() {
+    return document.querySelector('.main-panel') || document.querySelector('main') || document.body;
+  }
+
+  function endpoint(path) {
+    return '/api/index?path=' + encodeURIComponent(path);
+  }
+
+  function esc(value) {
+    return String(value ?? '')
+      .replaceAll('&', '&amp;')
+      .replaceAll('<', '&lt;')
+      .replaceAll('>', '&gt;')
+      .replaceAll('"', '&quot;')
+      .replaceAll("'", '&#039;');
+  }
+
+  async function api(path, options) {
+    const res = await fetch(endpoint(path), Object.assign({ credentials: 'include' }, options || {}, {
+      headers: Object.assign({ 'Content-Type': 'application/json' }, (options && options.headers) || {})
+    }));
+
+    const raw = await res.text();
+    let data = {};
+    try { data = raw ? JSON.parse(raw) : {}; } catch {}
+
+    if (!res.ok) throw new Error(data.message || raw || 'Request failed');
+    return data;
+  }
+
+  function addNavButton() {
+    if (document.getElementById('phase12a60-monitoring-on-off-nav')) return;
+
+    const monitoringButton = Array.from(document.querySelectorAll('button, a')).find((el) => text(el) === 'Monitoring');
+    const parent = monitoringButton ? monitoringButton.parentElement : (document.querySelector('aside') || document.querySelector('nav'));
+    if (!parent) return;
+
+    const button = document.createElement('button');
+    button.id = 'phase12a60-monitoring-on-off-nav';
+    button.type = 'button';
+    button.className = 'phase12a60-nav-button';
+    button.innerHTML = '<span>↕</span><span>Monitoring On/Off</span>';
+    button.addEventListener('click', () => renderPage(true));
+
+    if (monitoringButton && monitoringButton.nextSibling) parent.insertBefore(button, monitoringButton.nextSibling);
+    else parent.appendChild(button);
+  }
+
+  async function loadRows() {
+    const data = await api('monitoring-on-off');
+    state.onRows = data.onRows || [];
+    state.offRows = data.offRows || [];
+  }
+
+  function csvEscape(value) {
+    const s = String(value ?? '');
+    return /[",\n]/.test(s) ? `"${s.replaceAll('"', '""')}"` : s;
+  }
+
+  function rowValues(row) {
+    return [
+      row.ReferenceId,
+      row.FirstName,
+      row.MiddleName,
+      row.LastName,
+      row.DOB,
+      row['DL Number'],
+      row['DL State']
+    ];
+  }
+
+  function downloadCsv(rows, filename) {
+    const lines = [HEADERS.map(csvEscape).join(',')];
+    rows.forEach((row) => lines.push(rowValues(row).map(csvEscape).join(',')));
+
+    const blob = new Blob([lines.join('\n')], { type: 'text/csv;charset=utf-8' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = filename;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    URL.revokeObjectURL(url);
+  }
+
+  async function clearSection(action, label) {
+    if (!confirm(`Clear the ${label} section? Download the CSV first if you need it.`)) return;
+
+    const data = await api('monitoring-on-off/clear', {
+      method: 'POST',
+      body: JSON.stringify({ action })
+    });
+
+    alert(`Cleared ${data.cleared || 0} row(s).`);
+    await renderPage(true);
+  }
+
+  function sectionHtml(type, title, help, rows) {
+    const filename = type === 'on' ? 'monitoring-turn-on.csv' : 'monitoring-turn-off.csv';
+    return `
+      <section class="card phase12a60-section">
+        <div class="phase12a60-section-head">
+          <div>
+            <h3>${esc(title)}</h3>
+            <p>${esc(help)}</p>
+          </div>
+          <div class="phase12a60-actions">
+            <button type="button" data-phase12a60-download="${esc(type)}">Download CSV</button>
+            <button type="button" data-phase12a60-clear="${esc(type)}">Clear Section</button>
+          </div>
+        </div>
+        <div class="phase12a60-count">${rows.length} row(s) waiting</div>
+        <div class="phase12a60-table-wrap">
+          <table class="phase12a60-table">
+            <thead>
+              <tr>
+                ${HEADERS.map((h) => `<th>${esc(h)}</th>`).join('')}
+              </tr>
+            </thead>
+            <tbody>
+              ${rows.length ? rows.map((row) => `
+                <tr>
+                  ${rowValues(row).map((value) => `<td>${esc(value || '')}</td>`).join('')}
+                </tr>
+              `).join('') : `<tr><td colspan="${HEADERS.length}" class="phase12a60-empty">No rows waiting.</td></tr>`}
+            </tbody>
+          </table>
+        </div>
+      </section>
+    `;
+  }
+
+  function bindPage() {
+    document.getElementById('phase12a60-refresh')?.addEventListener('click', () => renderPage(true));
+
+    document.querySelectorAll('[data-phase12a60-download]').forEach((button) => {
+      button.addEventListener('click', () => {
+        const type = button.dataset.phase12a60Download;
+        const rows = type === 'on' ? state.onRows : state.offRows;
+        const filename = type === 'on' ? 'monitoring-turn-on.csv' : 'monitoring-turn-off.csv';
+        downloadCsv(rows, filename);
+      });
+    });
+
+    document.querySelectorAll('[data-phase12a60-clear]').forEach((button) => {
+      button.addEventListener('click', () => {
+        const type = button.dataset.phase12a60Clear;
+        clearSection(type, type === 'on' ? 'Turn Monitoring On' : 'Turn Monitoring Off');
+      });
+    });
+  }
+
+  async function renderPage(reload) {
+    document.body.dataset.phase12a60MonitoringOnOffPage = '1';
+
+    const panel = mainPanel();
+    panel.innerHTML = `
+      <div class="page-header">
+        <div>
+          <h1>Monitoring On/Off</h1>
+          <p>Loading monitoring change export queue...</p>
+        </div>
+      </div>
+      <section class="card">Loading...</section>
+    `;
+
+    try {
+      if (reload) await loadRows();
+
+      panel.innerHTML = `
+        <div class="page-header phase12a60-header">
+          <div>
+            <h1>Monitoring On/Off</h1>
+            <p>Export files that need monitoring turned on or turned off.</p>
+          </div>
+          <button type="button" class="phase12a60-primary" id="phase12a60-refresh">Refresh</button>
+        </div>
+        <div class="phase12a60-summary">
+          <div><b>${esc(state.onRows.length)}</b><span>Turn On Rows</span></div>
+          <div><b>${esc(state.offRows.length)}</b><span>Turn Off Rows</span></div>
+        </div>
+        ${sectionHtml('on', 'Turn Monitoring On', 'Rows are added here when monitoring is changed from Off to On.', state.onRows)}
+        ${sectionHtml('off', 'Turn Monitoring Off', 'Rows are added here when monitoring is changed from On to Off.', state.offRows)}
+      `;
+
+      bindPage();
+    } catch (error) {
+      panel.innerHTML = `
+        <div class="page-header">
+          <div>
+            <h1>Monitoring On/Off</h1>
+            <p>Could not load export queue</p>
+          </div>
+        </div>
+        <section class="card">
+          <p class="phase12a60-error">${esc(error.message || 'Unknown error')}</p>
+          <p>Confirm the Phase 12A-60 SQL migration was run.</p>
+        </section>
+      `;
+    }
+  }
+
+  function addStyles() {
+    if (document.getElementById('phase12a60-style')) return;
+
+    const style = document.createElement('style');
+    style.id = 'phase12a60-style';
+    style.textContent = `
+      .phase12a60-nav-button {
+        width: calc(100% - 24px);
+        margin: 4px 12px;
+        border: 0;
+        border-radius: 12px;
+        padding: 10px 12px;
+        background: transparent;
+        color: inherit;
+        display: flex;
+        gap: 10px;
+        align-items: center;
+        font-weight: 800;
+        cursor: pointer;
+        text-align: left;
+      }
+
+      .phase12a60-nav-button:hover {
+        background: rgba(31,255,0,.14);
+        box-shadow: inset 4px 0 0 #1fff00;
+      }
+
+      .phase12a60-header {
+        align-items: center;
+      }
+
+      .phase12a60-primary,
+      .phase12a60-actions button {
+        border: 1px solid #16a34a;
+        background: #ecfdf5;
+        color: #166534;
+        border-radius: 999px;
+        padding: 8px 11px;
+        font-weight: 1000;
+        cursor: pointer;
+      }
+
+      .phase12a60-summary {
+        display: grid;
+        grid-template-columns: repeat(2, minmax(170px, 1fr));
+        gap: 12px;
+        margin: 0 0 14px;
+      }
+
+      .phase12a60-summary div {
+        border: 1px solid #dbe3ef;
+        border-radius: 16px;
+        padding: 14px;
+        background: #fff;
+      }
+
+      .phase12a60-summary b {
+        display: block;
+        font-size: 28px;
+        line-height: 1;
+      }
+
+      .phase12a60-summary span {
+        display: block;
+        color: #475569;
+        font-weight: 900;
+        margin-top: 5px;
+      }
+
+      .phase12a60-section {
+        margin-bottom: 16px;
+      }
+
+      .phase12a60-section-head {
+        display: flex;
+        align-items: flex-start;
+        justify-content: space-between;
+        gap: 12px;
+        margin-bottom: 10px;
+      }
+
+      .phase12a60-section-head h3 {
+        margin: 0;
+      }
+
+      .phase12a60-section-head p {
+        margin: 4px 0 0;
+        color: #64748b;
+        font-weight: 700;
+      }
+
+      .phase12a60-actions {
+        display: flex;
+        gap: 8px;
+        flex-wrap: wrap;
+      }
+
+      .phase12a60-count {
+        color: #475569;
+        font-weight: 900;
+        margin: 0 0 10px;
+      }
+
+      .phase12a60-table-wrap {
+        overflow: auto;
+        border: 1px solid #dbe3ef;
+        border-radius: 14px;
+      }
+
+      .phase12a60-table {
+        width: 100%;
+        border-collapse: collapse;
+        background: #fff;
+      }
+
+      .phase12a60-table th,
+      .phase12a60-table td {
+        padding: 10px;
+        border-bottom: 1px solid #e2e8f0;
+        text-align: left;
+        white-space: nowrap;
+      }
+
+      .phase12a60-table th {
+        background: #f8fafc;
+        color: #475569;
+        text-transform: uppercase;
+        font-size: 12px;
+      }
+
+      .phase12a60-empty {
+        color: #64748b;
+        font-weight: 800;
+      }
+
+      .phase12a60-error {
+        color: #b91c1c;
+        font-weight: 900;
+      }
+
+      @media(max-width: 800px) {
+        .phase12a60-summary {
+          grid-template-columns: 1fr;
+        }
+
+        .phase12a60-section-head {
+          display: block;
+        }
+
+        .phase12a60-actions {
+          margin-top: 10px;
+        }
+      }
+    `;
+
+    document.head.appendChild(style);
+  }
+
+  function leaveCustomPageOnMainNav() {
+    document.addEventListener('click', (event) => {
+      const target = event.target && event.target.closest ? event.target.closest('button, a') : null;
+      if (!target) return;
+      if (target.id === 'phase12a60-monitoring-on-off-nav') return;
+
+      const label = text(target);
+      if (!document.body.dataset.phase12a60MonitoringOnOffPage || document.body.dataset.phase12a60MonitoringOnOffPage !== '1') return;
+
+      if (['Dashboard', 'Monitoring', 'Safety Performance', 'Settings', 'Client View', 'Client Admin', 'Terminated', 'Invoices'].includes(label)) {
+        document.body.dataset.phase12a60MonitoringOnOffPage = '0';
+      }
+    }, true);
+  }
+
+  function boot() {
+    addStyles();
+    addNavButton();
+    leaveCustomPageOnMainNav();
+    setInterval(addNavButton, 1000);
   }
 
   if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', boot);
