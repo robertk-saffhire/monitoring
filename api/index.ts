@@ -146,7 +146,7 @@ async function companies(req: any, res: any, user: any) {
 async function applicants(req: any, res: any, user: any) {
   const url = new URL(req.url || '/', 'https://local.test'); const companyId = requestedCompanyId(req, user);
   if (req.method === 'GET') { const result = await query('select id, "fileNumber", "applicantName" as name, "orderDate", "monitorStatus", "mvrStatus", "medExpire", "terminated", notes from applicants where "companyId"=$1 order by id desc limit 10000', [companyId]); return json(res, 200, { status: 'ok', applicants: result.rows }); }
-  if (req.method === 'PATCH') { const body = await readBody(req); const id = Number(body.id); if (!id) return json(res, 400, { status: 'error', message: 'Applicant id is required' }); const current = await query('select * from applicants where id=$1 and "companyId"=$2 limit 1', [id, companyId]); if (!current.rows[0]) return json(res, 404, { status: 'error', message: 'Applicant not found' }); const monitorStatus = normalizeMonitorStatus(body.monitorStatus ?? current.rows[0].monitorStatus); const medExpire = body.medExpire ?? current.rows[0].medExpire; const notes = body.notes ?? current.rows[0].notes; const terminated = body.terminated === undefined ? Boolean(current.rows[0].terminated) : asBool(body.terminated); const result = await query('update applicants set "monitorStatus"=$1, "medExpire"=$2, "medExpireOverridden"=$3, notes=$4, "terminated"=$5, "updatedAt"=now() where id=$6 and "companyId"=$7 returning id, "fileNumber", "applicantName" as name, "orderDate", "monitorStatus", "mvrStatus", "medExpire", "terminated", notes', [monitorStatus, medExpire || null, Boolean(medExpire), String(notes || ''), terminated, id, companyId]); return json(res, 200, { status: 'ok', applicant: result.rows[0] }); }
+  if (req.method === 'PATCH') { const body = await readBody(req); const id = Number(body.id); if (!id) return json(res, 400, { status: 'error', message: 'Applicant id is required' }); const current = await query('select * from applicants where id=$1 and "companyId"=$2 limit 1', [id, companyId]); if (!current.rows[0]) return json(res, 404, { status: 'error', message: 'Applicant not found' }); const monitorStatus = normalizeMonitorStatus(body.monitorStatus ?? current.rows[0].monitorStatus); const medExpire = body.medExpire ?? current.rows[0].medExpire; const notes = body.notes ?? current.rows[0].notes; const terminated = body.terminated === undefined ? Boolean(current.rows[0].terminated) : asBool(body.terminated); await logMonitoringOnOffChange(companyId, current.rows[0], monitorStatus, user); const result = await query('update applicants set "monitorStatus"=$1, "medExpire"=$2, "medExpireOverridden"=$3, notes=$4, "terminated"=$5, "updatedAt"=now() where id=$6 and "companyId"=$7 returning id, "fileNumber", "applicantName" as name, "orderDate", "monitorStatus", "mvrStatus", "medExpire", "terminated", notes', [monitorStatus, medExpire || null, Boolean(medExpire), String(notes || ''), terminated, id, companyId]); return json(res, 200, { status: 'ok', applicant: result.rows[0] }); }
   return json(res, 405, { status: 'error', message: 'Method not allowed' });
 }
 
@@ -285,7 +285,7 @@ async function clientApplicantUpdate(req: any, res: any, user: any) {
   if (!id) return json(res, 400, { status: 'error', message: 'Applicant id is required' });
 
   const current = await query(
-    'select id, "terminated" from applicants where id=$1 and "companyId"=$2 limit 1',
+    'select id, "fileNumber", "applicantName", "monitorStatus", "terminated", notes from applicants where id=$1 and "companyId"=$2 limit 1',
     [id, companyId]
   );
 
@@ -293,9 +293,11 @@ async function clientApplicantUpdate(req: any, res: any, user: any) {
     return json(res, 404, { status: 'error', message: 'Monitoring record not found for this client' });
   }
 
-  const monitorStatus = normalizeMonitorStatus(body.monitorStatus);
-  const notes = String(body.notes ?? '').trim();
+  const monitorStatus = normalizeMonitorStatus(body.monitorStatus ?? current.rows[0].monitorStatus);
+  const notes = body.notes === undefined ? String(current.rows[0].notes || '') : String(body.notes ?? '').trim();
   const terminated = body.terminated === undefined ? Boolean(current.rows[0].terminated) : asBool(body.terminated);
+
+  await logMonitoringOnOffChange(companyId, current.rows[0], monitorStatus, user);
 
   const result = await query(
     `update applicants
@@ -1428,6 +1430,307 @@ async function tazworksSyncRun(req: any, res: any, user: any) {
   }
 }
 
+
+// PHASE12A60_MONITORING_ON_OFF_EXPORT_QUEUE START
+function splitMonitoringExportName(rawName: any) {
+  const raw = String(rawName || '').replace(/\s+/g, ' ').trim();
+  if (!raw) return { firstName: '', middleName: '', lastName: '' };
+
+  if (raw.includes(',')) {
+    const [lastPart, restPart] = raw.split(',', 2);
+    const rest = String(restPart || '').trim().split(/\s+/).filter(Boolean);
+    return {
+      firstName: rest[0] || '',
+      middleName: rest.slice(1).join(' '),
+      lastName: String(lastPart || '').trim()
+    };
+  }
+
+  const parts = raw.split(/\s+/).filter(Boolean);
+  if (parts.length === 1) return { firstName: parts[0], middleName: '', lastName: '' };
+  if (parts.length === 2) return { firstName: parts[0], middleName: '', lastName: parts[1] };
+  return { firstName: parts[0], middleName: parts.slice(1, -1).join(' '), lastName: parts[parts.length - 1] };
+}
+
+function monitoringExportValueAfterLabels(text: string, labels: string[], maxLength = 80) {
+  const source = String(text || '');
+  if (!source) return '';
+
+  for (const label of labels) {
+    const escaped = label.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+
+    // Prefer normal line-separated values if available.
+    let match = source.match(new RegExp(`${escaped}\\s*[:#\\-]?\\s*([^\\n\\r|;]{1,${maxLength}})`, 'i'));
+    if (match?.[1]) {
+      const value = match[1]
+        .replace(/\s{2,}/g, ' ')
+        .replace(/\b(Date|Class|Type|Status|Restrictions|Endorsements|Expiration|Issue)\\b.*$/i, '')
+        .trim();
+      if (value) return value;
+    }
+
+    // Fallback for flattened JSON/text.
+    match = source.match(new RegExp(`${escaped}\\s*[:#\\-]?\\s*([A-Za-z0-9][A-Za-z0-9\\-\\/. ]{0,${maxLength}})`, 'i'));
+    if (match?.[1]) {
+      const value = match[1]
+        .replace(/\s{2,}/g, ' ')
+        .replace(/\b(Date|Class|Type|Status|Restrictions|Endorsements|Expiration|Issue)\\b.*$/i, '')
+        .trim();
+      if (value) return value;
+    }
+  }
+
+  return '';
+}
+
+function monitoringExportLicenseContext(payload: any) {
+  const full = cleanResultText(payload);
+  if (!full) return '';
+
+  const lower = full.toLowerCase();
+  const anchors = [
+    'license info',
+    'driver license',
+    'drivers license',
+    'driver licence',
+    'dl number',
+    'license number',
+    'mvr',
+    'motor vehicle'
+  ];
+
+  for (const anchor of anchors) {
+    const idx = lower.indexOf(anchor);
+    if (idx >= 0) return full.slice(Math.max(0, idx - 250), idx + 2600);
+  }
+
+  return full.slice(0, 3000);
+}
+
+function monitoringExportDateFromContext(value: any) {
+  const raw = String(value || '').trim();
+  if (!raw) return '';
+  const d = dateFromText(raw);
+  return d || raw.slice(0, 20).trim();
+}
+
+function monitoringExportDetailsFromPayload(payload: any) {
+  const context = monitoringExportLicenseContext(payload);
+  if (!context) return { dob: '', dlNumber: '', dlState: '', rawFound: false };
+
+  const dobRaw = monitoringExportValueAfterLabels(context, [
+    'Date of Birth',
+    'Birth Date',
+    'Birthdate',
+    'DOB',
+    'D.O.B.'
+  ], 40);
+
+  let dlNumber = monitoringExportValueAfterLabels(context, [
+    'Driver License Number',
+    'Drivers License Number',
+    'Driver Lic Number',
+    'DL Number',
+    'DL #',
+    'License Number',
+    'License #',
+    'Lic Number',
+    'DLN'
+  ], 70);
+
+  dlNumber = String(dlNumber || '')
+    .replace(/\b(State|Class|Type|Status|DOB|Date of Birth|Expiration|Issue)\\b.*$/i, '')
+    .replace(/[^A-Za-z0-9-]/g, '')
+    .trim();
+
+  let dlState = monitoringExportValueAfterLabels(context, [
+    'Driver License State',
+    'Drivers License State',
+    'DL State',
+    'License State',
+    'Lic State',
+    'State'
+  ], 30);
+
+  const stateMatch = String(dlState || '').toUpperCase().match(/\b[A-Z]{2}\b/);
+  dlState = stateMatch ? stateMatch[0] : String(dlState || '').slice(0, 2).toUpperCase();
+
+  return {
+    dob: monitoringExportDateFromContext(dobRaw),
+    dlNumber,
+    dlState,
+    rawFound: Boolean(dobRaw || dlNumber || dlState)
+  };
+}
+
+function monitoringExportMergeDetails(base: any, candidate: any) {
+  return {
+    dob: base.dob || candidate.dob || '',
+    dlNumber: base.dlNumber || candidate.dlNumber || '',
+    dlState: base.dlState || candidate.dlState || '',
+    rawFound: Boolean(base.rawFound || candidate.rawFound)
+  };
+}
+
+async function monitoringExportTazworksDetails(companyId: number, fileNumber: string) {
+  const blank = { dob: '', dlNumber: '', dlState: '', source: 'not-found' };
+  const file = String(fileNumber || '').trim();
+  if (!file) return blank;
+
+  try {
+    const cached = await query(
+      `select order_guid, applicant_name, raw_order
+       from tazworks_order_cache
+       where company_id=$1 and file_number=$2
+       order by last_seen_at desc nulls last, id desc
+       limit 1`,
+      [companyId, file]
+    );
+
+    const order = cached.rows[0];
+    if (!order?.order_guid) {
+      const fromRaw = monitoringExportDetailsFromPayload(order?.raw_order || {});
+      return { ...blank, ...fromRaw, source: fromRaw.rawFound ? 'tazworks-order-cache' : 'not-found' };
+    }
+
+    let details = monitoringExportDetailsFromPayload(order.raw_order || {});
+    if (details.rawFound && details.dob && details.dlNumber && details.dlState) {
+      return { dob: details.dob, dlNumber: details.dlNumber, dlState: details.dlState, source: 'tazworks-order-cache' };
+    }
+
+    const e = tazEnv();
+    const searchesPayload = await proxyGet(`/tazworks/orders/${encodeURIComponent(order.order_guid)}/searches?clientGuid=${encodeURIComponent(e.clientGuid)}`);
+    const rawSearches = Array.isArray(searchesPayload) ? searchesPayload : (searchesPayload.searches || searchesPayload.data || searchesPayload.items || []);
+    const searches = rawSearches.map((row: any) => searchFrom(row, order.order_guid));
+    const candidates = searches.filter(isMvr);
+    const scan = candidates.length ? candidates : searches;
+
+    for (const search of scan.slice(0, 6)) {
+      details = monitoringExportMergeDetails(details, monitoringExportDetailsFromPayload(search.raw));
+      if (details.dob && details.dlNumber && details.dlState) {
+        return { dob: details.dob, dlNumber: details.dlNumber, dlState: details.dlState, source: 'tazworks-search-row' };
+      }
+
+      for (const resultType of ['EDITOR', 'CLIENT', 'FINAL', null] as any[]) {
+        try {
+          const result = await tryResultVariant(order.order_guid, search.searchGuid, resultType);
+          details = monitoringExportMergeDetails(details, monitoringExportDetailsFromPayload(result));
+          if (details.dob && details.dlNumber && details.dlState) {
+            return {
+              dob: details.dob,
+              dlNumber: details.dlNumber,
+              dlState: details.dlState,
+              source: `tazworks-result-${resultType || 'default'}`
+            };
+          }
+        } catch {}
+      }
+    }
+
+    return {
+      dob: details.dob || '',
+      dlNumber: details.dlNumber || '',
+      dlState: details.dlState || '',
+      source: details.rawFound ? 'tazworks-partial' : 'not-found'
+    };
+  } catch (error: any) {
+    return { ...blank, source: `error: ${errorMessage(error)}`.slice(0, 240) };
+  }
+}
+
+async function logMonitoringOnOffChange(companyId: number, currentRow: any, newMonitorStatus: string, user: any) {
+  try {
+    const oldStatus = normalizeMonitorStatus(currentRow?.monitorStatus);
+    const nextStatus = normalizeMonitorStatus(newMonitorStatus);
+    if (oldStatus === nextStatus) return;
+
+    const action = nextStatus === 'On' ? 'on' : 'off';
+    const fileNumber = String(currentRow?.fileNumber || '').trim();
+    if (!fileNumber) return;
+
+    const nameParts = splitMonitoringExportName(currentRow?.applicantName || currentRow?.name || '');
+    const taz = await monitoringExportTazworksDetails(companyId, fileNumber);
+
+    await query(
+      `insert into monitoring_on_off_exports (
+        "companyId", "applicantId", "fileNumber", action,
+        "firstName", "middleName", "lastName", dob, "dlNumber", "dlState",
+        source, "createdBy", "rawDetails"
+      ) values (
+        $1,$2,$3,$4,
+        $5,$6,$7,$8,$9,$10,
+        $11,$12,$13
+      )`,
+      [
+        companyId,
+        currentRow?.id || null,
+        fileNumber,
+        action,
+        nameParts.firstName,
+        nameParts.middleName,
+        nameParts.lastName,
+        taz.dob || '',
+        taz.dlNumber || '',
+        taz.dlState || '',
+        taz.source || '',
+        user?.username || user?.displayName || '',
+        JSON.stringify({ previousMonitorStatus: oldStatus, newMonitorStatus: nextStatus, tazworksSource: taz.source || '' })
+      ]
+    );
+  } catch (error) {
+    console.error('Monitoring On/Off export queue insert failed', error);
+  }
+}
+
+async function monitoringOnOffExports(req: any, res: any, user: any) {
+  if (!requireAdmin(user, res)) return;
+  const companyId = requestedCompanyId(req, user);
+
+  if (req.method === 'GET') {
+    const result = await query(
+      `select id, "fileNumber" as "ReferenceId", "firstName" as "FirstName", "middleName" as "MiddleName",
+              "lastName" as "LastName", dob as "DOB", "dlNumber" as "DL Number", "dlState" as "DL State",
+              action, source, "createdAt"
+       from monitoring_on_off_exports
+       where "companyId"=$1 and "clearedAt" is null
+       order by "createdAt" asc, id asc`,
+      [companyId]
+    );
+
+    const onRows = result.rows.filter((row: any) => row.action === 'on');
+    const offRows = result.rows.filter((row: any) => row.action === 'off');
+
+    return json(res, 200, { status: 'ok', onRows, offRows });
+  }
+
+  return json(res, 405, { status: 'error', message: 'Method not allowed' });
+}
+
+async function monitoringOnOffExportsClear(req: any, res: any, user: any) {
+  if (!requireAdmin(user, res)) return;
+  if (req.method !== 'POST') return json(res, 405, { status: 'error', message: 'Method not allowed' });
+
+  const companyId = requestedCompanyId(req, user);
+  const body = await readBody(req);
+  const action = String(body.action || '').trim().toLowerCase();
+
+  if (!['on', 'off'].includes(action)) {
+    return json(res, 400, { status: 'error', message: 'action must be on or off' });
+  }
+
+  const result = await query(
+    `update monitoring_on_off_exports
+     set "clearedAt"=now(), "clearedBy"=$1
+     where "companyId"=$2 and action=$3 and "clearedAt" is null
+     returning id`,
+    [user?.username || user?.displayName || '', companyId, action]
+  );
+
+  return json(res, 200, { status: 'ok', cleared: result.rows.length });
+}
+// PHASE12A60_MONITORING_ON_OFF_EXPORT_QUEUE END
+
+
 // PHASE12A52_ADMIN_INVOICES START
 function invoiceDateOnly(value: any) {
   const raw = String(value || '').trim();
@@ -1955,6 +2258,8 @@ export default async function handler(req: any, res: any) {
     if (route === 'client-safety-pdf') return clientSafetyPdf(req, res, user);
     if (route === 'invoices') return invoices(req, res, user);
     if (route === 'invoices/pdf') return invoicePdf(req, res, user);
+    if (route === 'monitoring-on-off') return monitoringOnOffExports(req, res, user);
+    if (route === 'monitoring-on-off/clear') return monitoringOnOffExportsClear(req, res, user);
     if (route === 'invoices/diagnostics') return invoiceDiagnostics(req, res, user);
     if (route === 'system-check') return systemCheck(req, res, user);
     return json(res, 404, { status: 'error', message: `Route not found: ${route}` });
