@@ -1003,4 +1003,267 @@
 })();
 
 </script>
+<script>
+
+// Phase 12A-45: Terminated checkbox column
+(function () {
+  let applicantMap = new Map();
+  let lastFetchAt = 0;
+
+  function text(el) {
+    return (el && el.textContent ? el.textContent : '').trim();
+  }
+
+  function normalize(value) {
+    return String(value || '')
+      .replace(/[↕↑↓▲▼]/g, '')
+      .replace(/\s+/g, ' ')
+      .trim()
+      .toLowerCase();
+  }
+
+  function currentTitle() {
+    return text(document.querySelector('.page-header h1')) || text(document.querySelector('.head h2'));
+  }
+
+  function activePortalPage() {
+    const active = Array.from(document.querySelectorAll('nav button')).find((button) => button.classList.contains('active'));
+    return active ? active.dataset.p : '';
+  }
+
+  function isPortal() {
+    return location.pathname.includes('client-portal');
+  }
+
+  function isMonitoringContext() {
+    const title = currentTitle();
+    return title === 'Monitoring' || activePortalPage() === 'mon' || title === 'Client View';
+  }
+
+  function endpoint(path) {
+    return '/api/index?path=' + encodeURIComponent(path);
+  }
+
+  async function refreshApplicantMap(force) {
+    const now = Date.now();
+    if (!force && now - lastFetchAt < 5000 && applicantMap.size) return;
+    lastFetchAt = now;
+
+    try {
+      const path = isPortal() ? 'client-dashboard' : 'applicants';
+      const res = await fetch(endpoint(path), { credentials: 'include' });
+      const raw = await res.text();
+      let data = {};
+      try { data = raw ? JSON.parse(raw) : {}; } catch {}
+      if (!res.ok) return;
+
+      const rows = isPortal() ? (data.recentApplicants || []) : (data.applicants || []);
+      applicantMap = new Map();
+      rows.forEach((row) => {
+        const file = String(row.fileNumber || '').trim();
+        if (!file) return;
+        applicantMap.set(file, {
+          id: row.id,
+          terminated: Boolean(row.terminated)
+        });
+      });
+    } catch {}
+  }
+
+  function findMonitoringTables() {
+    if (!isMonitoringContext()) return [];
+    return Array.from(document.querySelectorAll('table')).filter((table) => {
+      const headers = Array.from(table.querySelectorAll('thead th')).map((th) => normalize(text(th)));
+      return headers.includes('file #') &&
+        headers.includes('notes') &&
+        (headers.includes('monitoring') || headers.includes('monitor status')) &&
+        headers.includes('med expire');
+    });
+  }
+
+  function indexes(table) {
+    const headers = Array.from(table.querySelectorAll('thead th')).map((th) => normalize(text(th)));
+    return {
+      file: headers.indexOf('file #'),
+      notes: headers.indexOf('notes'),
+      save: headers.indexOf('save'),
+      terminated: headers.indexOf('terminated')
+    };
+  }
+
+  function fileNumber(row, fileIndex) {
+    const raw = fileIndex >= 0 && row.children[fileIndex] ? text(row.children[fileIndex]) : '';
+    const match = raw.match(/[0-9]+/);
+    return match ? match[0] : '';
+  }
+
+  function insertCell(row, index, cell) {
+    if (index >= row.children.length) row.appendChild(cell);
+    else row.insertBefore(cell, row.children[index]);
+  }
+
+  async function saveTerminated(file, checked, checkbox) {
+    const found = applicantMap.get(file);
+    if (!found || !found.id) {
+      await refreshApplicantMap(true);
+    }
+
+    const row = applicantMap.get(file);
+    if (!row || !row.id) {
+      alert('Could not find applicant id for file ' + file);
+      checkbox.checked = !checked;
+      return;
+    }
+
+    checkbox.disabled = true;
+
+    try {
+      const path = isPortal() ? 'client-applicant' : 'applicants';
+      const res = await fetch(endpoint(path), {
+        method: 'PATCH',
+        credentials: 'include',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ id: row.id, terminated: checked })
+      });
+
+      const raw = await res.text();
+      let data = {};
+      try { data = raw ? JSON.parse(raw) : {}; } catch {}
+      if (!res.ok) throw new Error(data.message || raw || 'Could not save terminated flag');
+
+      row.terminated = checked;
+      applicantMap.set(file, row);
+      checkbox.closest('tr')?.classList.toggle('phase12a45-terminated-row', checked);
+    } catch (error) {
+      alert(error.message || 'Could not save terminated flag');
+      checkbox.checked = !checked;
+    } finally {
+      checkbox.disabled = false;
+    }
+  }
+
+  function enhanceTable(table) {
+    const idx = indexes(table);
+    if (idx.file < 0 || idx.notes < 0) return;
+
+    let insertIndex = idx.notes + 1;
+
+    if (idx.terminated < 0) {
+      const headerRow = table.querySelector('thead tr');
+      const th = document.createElement('th');
+      th.textContent = 'Terminated';
+      th.className = 'phase12a45-terminated-header';
+      insertCell(headerRow, insertIndex, th);
+    } else {
+      insertIndex = idx.terminated;
+    }
+
+    const fresh = indexes(table);
+
+    Array.from(table.querySelectorAll('tbody tr')).forEach((row) => {
+      const file = fileNumber(row, fresh.file);
+      if (!file) return;
+
+      if (row.querySelector('[data-phase12a45-terminated]')) {
+        const cb = row.querySelector('[data-phase12a45-terminated]');
+        const found = applicantMap.get(file);
+        if (found) {
+          cb.checked = Boolean(found.terminated);
+          row.classList.toggle('phase12a45-terminated-row', Boolean(found.terminated));
+        }
+        return;
+      }
+
+      const td = document.createElement('td');
+      td.className = 'phase12a45-terminated-cell';
+
+      const label = document.createElement('label');
+      label.className = 'phase12a45-terminated-label';
+
+      const checkbox = document.createElement('input');
+      checkbox.type = 'checkbox';
+      checkbox.setAttribute('data-phase12a45-terminated', '1');
+
+      const found = applicantMap.get(file);
+      checkbox.checked = Boolean(found?.terminated);
+      row.classList.toggle('phase12a45-terminated-row', Boolean(found?.terminated));
+
+      const span = document.createElement('span');
+      span.textContent = 'Terminated';
+
+      label.appendChild(checkbox);
+      label.appendChild(span);
+      td.appendChild(label);
+
+      checkbox.addEventListener('change', () => {
+        saveTerminated(file, checkbox.checked, checkbox);
+      });
+
+      insertCell(row, fresh.terminated >= 0 ? fresh.terminated : insertIndex, td);
+    });
+  }
+
+  async function refresh() {
+    const tables = findMonitoringTables();
+    if (!tables.length) return;
+    await refreshApplicantMap(false);
+    tables.forEach(enhanceTable);
+  }
+
+  function addStyles() {
+    if (document.getElementById('phase12a45-terminated-style')) return;
+
+    const style = document.createElement('style');
+    style.id = 'phase12a45-terminated-style';
+    style.textContent = `
+      .phase12a45-terminated-header,
+      .phase12a45-terminated-cell {
+        white-space: nowrap;
+        text-align: center;
+      }
+
+      .phase12a45-terminated-label {
+        display: inline-flex;
+        align-items: center;
+        gap: 7px;
+        border: 1px solid #cbd5e1;
+        border-radius: 999px;
+        padding: 6px 9px;
+        font-size: 12px;
+        font-weight: 900;
+        color: #475569;
+        background: #fff;
+        cursor: pointer;
+      }
+
+      .phase12a45-terminated-label input {
+        width: auto !important;
+        margin: 0;
+      }
+
+      .phase12a45-terminated-row td {
+        background: #fff7ed !important;
+      }
+
+      .phase12a45-terminated-row .phase12a45-terminated-label {
+        border-color: #f97316;
+        background: #ffedd5;
+        color: #9a3412;
+      }
+    `;
+
+    document.head.appendChild(style);
+  }
+
+  function boot() {
+    addStyles();
+    refresh();
+    setInterval(refresh, 1000);
+  }
+
+  if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', boot);
+  else boot();
+})();
+
+</script>
 </body></html>
