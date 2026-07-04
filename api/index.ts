@@ -1437,13 +1437,25 @@ function invoiceDateOnly(value: any) {
   if (Number.isNaN(d.getTime())) return '';
   return d.toISOString().slice(0, 10);
 }
+function invoicePreviousMonthStart() {
+  const now = new Date();
+  return `${now.getUTCFullYear()}-${String(now.getUTCMonth()).padStart(2, '0')}-01`;
+}
+function invoiceCurrentMonthStart() {
+  const now = new Date();
+  return `${now.getUTCFullYear()}-${String(now.getUTCMonth() + 1).padStart(2, '0')}-01`;
+}
 function invoiceMonthStart(value?: any) {
   const raw = String(value || '').trim();
-  const d = raw ? new Date(raw.length === 7 ? `${raw}-01T00:00:00Z` : raw) : new Date();
+
+  // PHASE12A53: invoices default to the previous service month.
+  // Example: invoice created in July 2026 should bill June 2026.
+  const d = raw ? new Date(raw.length === 7 ? `${raw}-01T00:00:00Z` : raw) : new Date(invoicePreviousMonthStart() + 'T00:00:00Z');
+
   if (Number.isNaN(d.getTime())) {
-    const now = new Date();
-    return `${now.getUTCFullYear()}-${String(now.getUTCMonth() + 1).padStart(2, '0')}-01`;
+    return invoicePreviousMonthStart();
   }
+
   return `${d.getUTCFullYear()}-${String(d.getUTCMonth() + 1).padStart(2, '0')}-01`;
 }
 function invoiceMonthLabel(value: any) {
@@ -1473,12 +1485,14 @@ function invoiceTotals(quantity: any, unitPrice: any, salesTaxRate: any) {
   return { quantity: qty, unitPrice: price, salesTaxRate: Number.isFinite(taxRate) ? taxRate : 0, subtotal, salesTax, total };
 }
 async function invoiceCurrentMvrCount(companyId: number) {
+  // PHASE12A53: invoice quantity must match the Monitoring page "On Monitoring" count.
+  // This uses monitorStatus='On', not mvrStatus='On'.
   const result = await query(
     `select count(*)::int as count
      from applicants
      where "companyId"=$1
        and coalesce("terminated", false)=false
-       and lower(trim(coalesce("mvrStatus", '')))='on'`,
+       and lower(trim(coalesce("monitorStatus", '')))='on'`,
     [companyId]
   );
   return Number(result.rows[0]?.count || 0);
@@ -1494,6 +1508,54 @@ async function getInvoiceById(id: number, companyId: number) {
   const result = await query(`${invoiceSelectSql()} where id=$1 and "companyId"=$2 limit 1`, [id, companyId]);
   return result.rows[0] || null;
 }
+async function correctCurrentMonthDraftToPreviousMonth(companyId: number) {
+  // PHASE12A53: If the first draft was accidentally created for the current month,
+  // move it to the previous service month as long as there is not already a previous-month invoice.
+  const currentMonth = invoiceCurrentMonthStart();
+  const previousMonth = invoicePreviousMonthStart();
+
+  const currentDraft = await query(
+    `${invoiceSelectSql()} where "companyId"=$1 and "invoiceMonth"=$2 and status='Draft' order by id desc limit 1`,
+    [companyId, currentMonth]
+  );
+
+  if (!currentDraft.rows[0]) return;
+
+  const previousExists = await query(
+    `${invoiceSelectSql()} where "companyId"=$1 and "invoiceMonth"=$2 limit 1`,
+    [companyId, previousMonth]
+  );
+
+  if (previousExists.rows[0]) return;
+
+  const quantity = await invoiceCurrentMvrCount(companyId);
+  const totals = invoiceTotals(quantity, currentDraft.rows[0].unitPrice, currentDraft.rows[0].salesTaxRate);
+
+  await query(
+    `update invoices
+     set "invoiceMonth"=$1,
+         "serviceMonthLabel"=$2,
+         "invoiceNumber"=$3,
+         quantity=$4,
+         subtotal=$5,
+         "salesTax"=$6,
+         total=$7,
+         "updatedAt"=now()
+     where id=$8 and "companyId"=$9`,
+    [
+      previousMonth,
+      invoiceMonthLabel(previousMonth),
+      invoiceDefaultNumber(companyId, previousMonth),
+      totals.quantity,
+      totals.subtotal,
+      totals.salesTax,
+      totals.total,
+      currentDraft.rows[0].id,
+      companyId
+    ]
+  );
+}
+
 async function ensureMonthlyInvoice(companyId: number, monthInput?: any) {
   const monthStart = invoiceMonthStart(monthInput);
   const existing = await query(`${invoiceSelectSql()} where "companyId"=$1 and "invoiceMonth"=$2 limit 1`, [companyId, monthStart]);
@@ -1549,10 +1611,11 @@ async function invoices(req: any, res: any, user: any) {
   const companyId = requestedCompanyId(req, user);
 
   if (req.method === 'GET') {
+    await correctCurrentMonthDraftToPreviousMonth(companyId);
     await ensureMonthlyInvoice(companyId);
     const list = await query(`${invoiceSelectSql()} where "companyId"=$1 order by "invoiceMonth" desc, id desc limit 36`, [companyId]);
     const currentCount = await invoiceCurrentMvrCount(companyId);
-    return json(res, 200, { status: 'ok', currentMvrOnCount: currentCount, invoices: list.rows });
+    return json(res, 200, { status: 'ok', currentMonitoringOnCount: currentCount, currentMvrOnCount: currentCount, invoices: list.rows });
   }
 
   if (req.method === 'POST') {
