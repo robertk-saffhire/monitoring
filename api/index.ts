@@ -1787,9 +1787,25 @@ async function invoicePdf(req: any, res: any, user: any) {
   page.drawText('Phone: 888-250-1033', { x: left, y, size: 12, font, color: dark });
 
   page.drawText('Invoice', { x: 264, y: 742, size: 18, font: bold, color: dark });
-  page.drawText('SAFF', { x: 404, y: 744, size: 24, font: bold, color: blue });
-  page.drawText('HIRE', { x: 465, y: 744, size: 24, font: bold, color: green });
-  page.drawText('BACKGROUND SCREENING', { x: 404, y: 728, size: 9, font: bold, color: blue });
+
+  // PHASE12A57: Use uploaded Saffhire logo in invoice PDF.
+  const invoiceLogoPath = path.join(process.cwd(), 'public', 'saffhire-logo-invoice.png');
+  if (fs.existsSync(invoiceLogoPath)) {
+    const logoBytes = fs.readFileSync(invoiceLogoPath);
+    const logo = await pdfDoc.embedPng(logoBytes);
+    const logoWidth = 220;
+    const logoHeight = logoWidth * (logo.height / logo.width);
+    page.drawImage(logo, {
+      x: right - logoWidth,
+      y: 704,
+      width: logoWidth,
+      height: logoHeight
+    });
+  } else {
+    page.drawText('SAFF', { x: 404, y: 744, size: 24, font: bold, color: blue });
+    page.drawText('HIRE', { x: 465, y: 744, size: 24, font: bold, color: green });
+    page.drawText('BACKGROUND SCREENING', { x: 404, y: 728, size: 9, font: bold, color: blue });
+  }
 
   y = 610;
   page.drawText('Bill To:', { x: left, y, size: 14, font: bold, color: gray });
@@ -1845,11 +1861,13 @@ async function invoicePdf(req: any, res: any, user: any) {
   page.drawLine({ start: { x: left, y }, end: { x: right, y }, thickness: 0.75, color: gray });
 
   y -= 36;
-  page.drawText('Sales Tax', { x: 452, y, size: 12, font, color: dark });
+  // PHASE12A57: Move total labels left to prevent overlap/crowding with amount values.
+  const totalsLabelX = 386;
+  page.drawText('Sales Tax', { x: totalsLabelX + 18, y, size: 12, font, color: dark });
   drawRight(page, moneyText(invoice.salesTax), right - 4, y, { size: 12, font: bold, color: dark });
   y -= 20;
-  page.drawLine({ start: { x: 416, y: y + 12 }, end: { x: right, y: y + 12 }, thickness: 0.5, color: gray });
-  page.drawText('Total Amount Due:', { x: 430, y, size: 12, font, color: dark });
+  page.drawLine({ start: { x: totalsLabelX, y: y + 12 }, end: { x: right, y: y + 12 }, thickness: 0.5, color: gray });
+  page.drawText('Total Amount Due:', { x: totalsLabelX, y, size: 12, font, color: dark });
   drawRight(page, moneyText(invoice.total), right - 4, y, { size: 12, font: bold, color: dark });
 
   y = 104;
