@@ -671,3 +671,340 @@
   else boot();
 })();
 
+
+
+
+// Phase 12A-46: Terminated Monitoring page for admin
+(function () {
+  const MVR_BASE = 'https://saffhiresecure.com/app/client/driverpipeline/mvr/';
+  let terminatedRows = [];
+  let allRows = [];
+  let loadedAt = 0;
+
+  function text(el) { return (el && el.textContent ? el.textContent : '').trim(); }
+  function mainPanel() { return document.querySelector('.main-panel') || document.querySelector('main') || document.body; }
+  function currentTitle() { return text(document.querySelector('.page-header h1')) || text(document.querySelector('.head h2')); }
+  function isAdminMonitoring() { return currentTitle() === 'Monitoring'; }
+  function isTerminatedPage() { return document.body.dataset.phase12a46TerminatedPage === '1'; }
+  function endpoint(path) { return '/api/index?path=' + encodeURIComponent(path); }
+
+  async function api(path, options) {
+    const res = await fetch(endpoint(path), Object.assign({ credentials: 'include' }, options || {}, {
+      headers: Object.assign({ 'Content-Type': 'application/json' }, (options && options.headers) || {})
+    }));
+    const raw = await res.text();
+    let data = {};
+    try { data = raw ? JSON.parse(raw) : {}; } catch {}
+    if (!res.ok) throw new Error(data.message || raw || 'Request failed');
+    return data;
+  }
+
+  function esc(value) {
+    return String(value ?? '').replaceAll('&','&amp;').replaceAll('<','&lt;').replaceAll('>','&gt;').replaceAll('"','&quot;').replaceAll("'","&#039;");
+  }
+
+  function fmt(value) {
+    if (!value) return '';
+    const d = new Date(value);
+    return Number.isNaN(d.getTime()) ? String(value) : d.toLocaleDateString();
+  }
+
+  async function loadRows(force) {
+    if (!force && Date.now() - loadedAt < 3500 && allRows.length) return;
+    loadedAt = Date.now();
+    const data = await api('applicants');
+    allRows = data.applicants || [];
+    terminatedRows = allRows.filter((row) => Boolean(row.terminated));
+  }
+
+  function addSidebarButton() {
+    if (document.getElementById('phase12a46-admin-terminated-nav')) return;
+
+    const monitoringButton = Array.from(document.querySelectorAll('button, a')).find((el) => text(el) === 'Monitoring');
+    const parent = monitoringButton ? monitoringButton.parentElement : (document.querySelector('aside') || document.querySelector('nav'));
+
+    if (!parent) return;
+
+    const button = document.createElement('button');
+    button.id = 'phase12a46-admin-terminated-nav';
+    button.type = 'button';
+    button.className = 'phase12a46-nav-button';
+    button.innerHTML = '<span>☑</span><span>Terminated</span>';
+    button.addEventListener('click', renderTerminatedPage);
+
+    if (monitoringButton && monitoringButton.nextSibling) parent.insertBefore(button, monitoringButton.nextSibling);
+    else parent.appendChild(button);
+  }
+
+  function monitoringFileFromRow(row) {
+    const cell = row.children[0];
+    const match = text(cell).match(/[0-9]+/);
+    return match ? match[0] : '';
+  }
+
+  async function hideTerminatedFromAdminMonitoring() {
+    if (!isAdminMonitoring() || isTerminatedPage()) return;
+    await loadRows(false);
+    const terminatedFiles = new Set(terminatedRows.map((row) => String(row.fileNumber)));
+
+    Array.from(document.querySelectorAll('table tbody tr')).forEach((row) => {
+      const file = monitoringFileFromRow(row);
+      if (!file) return;
+
+      const hidden = terminatedFiles.has(file);
+      row.toggleAttribute('data-phase12a46-monitoring-hidden', hidden);
+    });
+  }
+
+  function mvrButton(fileNumber) {
+    return `<a class="phase12a46-btn" href="${MVR_BASE}${encodeURIComponent(fileNumber || '')}" target="_blank" rel="noopener">Order MVR</a>`;
+  }
+
+  function terminatedTable(rows) {
+    if (!rows.length) return '<div class="phase12a46-empty">No terminated people found.</div>';
+
+    return `
+      <div class="phase12a46-table-wrap">
+        <table class="phase12a46-table">
+          <thead>
+            <tr>
+              <th>File #</th>
+              <th>Name</th>
+              <th>Order Date</th>
+              <th>Monitoring</th>
+              <th>Order MVR</th>
+              <th>Med Expire</th>
+              <th>Notes</th>
+              <th>Terminated</th>
+            </tr>
+          </thead>
+          <tbody>
+            ${rows.map((row) => `
+              <tr data-applicant-id="${esc(row.id)}">
+                <td><b>${esc(row.fileNumber)}</b></td>
+                <td>${esc(row.name)}</td>
+                <td>${esc(fmt(row.orderDate))}</td>
+                <td>${esc(row.monitorStatus)}</td>
+                <td>${mvrButton(row.fileNumber)}</td>
+                <td>${esc(row.medExpire || '')}</td>
+                <td>${esc(row.notes || '')}</td>
+                <td>
+                  <label class="phase12a46-check">
+                    <input type="checkbox" checked data-phase12a46-unterminate />
+                    <span>Terminated</span>
+                  </label>
+                </td>
+              </tr>
+            `).join('')}
+          </tbody>
+        </table>
+      </div>
+    `;
+  }
+
+  async function renderTerminatedPage() {
+    document.body.dataset.phase12a46TerminatedPage = '1';
+    const panel = mainPanel();
+    panel.innerHTML = `
+      <div class="page-header">
+        <div>
+          <h1>Terminated</h1>
+          <p>People removed from active Monitoring</p>
+        </div>
+        <button type="button" class="phase12a46-btn" id="phase12a46-refresh-terminated">Refresh</button>
+      </div>
+      <section class="card phase12a46-card">
+        <div class="phase12a46-toolbar">
+          <input id="phase12a46-search" type="search" placeholder="Search file number or name..." />
+          <span id="phase12a46-count"></span>
+        </div>
+        <div id="phase12a46-table">Loading terminated people...</div>
+      </section>
+    `;
+
+    document.getElementById('phase12a46-refresh-terminated').onclick = () => renderTerminatedPage();
+
+    await loadRows(true);
+    document.getElementById('phase12a46-table').innerHTML = terminatedTable(terminatedRows);
+    bindTerminatedPage();
+    filterTerminatedRows();
+  }
+
+  function bindTerminatedPage() {
+    document.getElementById('phase12a46-search')?.addEventListener('input', filterTerminatedRows);
+
+    Array.from(document.querySelectorAll('[data-phase12a46-unterminate]')).forEach((checkbox) => {
+      checkbox.addEventListener('change', async () => {
+        if (checkbox.checked) return;
+        const row = checkbox.closest('tr');
+        const id = Number(row?.dataset.applicantId || 0);
+        if (!id) return;
+
+        checkbox.disabled = true;
+        try {
+          await api('applicants', { method: 'PATCH', body: JSON.stringify({ id, terminated: false }) });
+          row.remove();
+          await loadRows(true);
+          filterTerminatedRows();
+        } catch (error) {
+          alert(error.message || 'Could not move person back to Monitoring');
+          checkbox.checked = true;
+          checkbox.disabled = false;
+        }
+      });
+    });
+  }
+
+  function filterTerminatedRows() {
+    const input = document.getElementById('phase12a46-search');
+    const q = String(input?.value || '').toLowerCase().trim();
+    let visible = 0;
+
+    Array.from(document.querySelectorAll('.phase12a46-table tbody tr')).forEach((row) => {
+      const haystack = `${text(row.children[0])} ${text(row.children[1])}`.toLowerCase();
+      const show = !q || haystack.includes(q);
+      row.style.display = show ? '' : 'none';
+      if (show) visible++;
+    });
+
+    const count = document.getElementById('phase12a46-count');
+    if (count) count.textContent = `${visible} visible`;
+  }
+
+  function watchTerminatedCheckboxes() {
+    if (!isAdminMonitoring()) return;
+
+    Array.from(document.querySelectorAll('[data-phase12a45-terminated]')).forEach((checkbox) => {
+      if (checkbox.dataset.phase12a46Bound === '1') return;
+      checkbox.dataset.phase12a46Bound = '1';
+
+      checkbox.addEventListener('change', () => {
+        if (!checkbox.checked) return;
+        const row = checkbox.closest('tr');
+        setTimeout(() => {
+          row?.setAttribute('data-phase12a46-monitoring-hidden', '');
+          loadRows(true);
+        }, 250);
+      });
+    });
+  }
+
+  function leaveTerminatedWhenOtherNavClicked() {
+    document.addEventListener('click', (event) => {
+      const target = event.target && event.target.closest ? event.target.closest('button, a') : null;
+      if (!target) return;
+      if (target.id === 'phase12a46-admin-terminated-nav') return;
+      if (['Dashboard','Monitoring','Safety Performance','Settings','Client View','Client Admin'].includes(text(target))) {
+        document.body.dataset.phase12a46TerminatedPage = '0';
+      }
+    }, true);
+  }
+
+  function addStyles() {
+    if (document.getElementById('phase12a46-style')) return;
+    const style = document.createElement('style');
+    style.id = 'phase12a46-style';
+    style.textContent = `
+      tr[data-phase12a46-monitoring-hidden] {
+        display: none !important;
+      }
+      .phase12a46-nav-button {
+        width: calc(100% - 24px);
+        margin: 4px 12px;
+        border: 0;
+        border-radius: 12px;
+        padding: 10px 12px;
+        background: transparent;
+        color: inherit;
+        display: flex;
+        gap: 10px;
+        align-items: center;
+        font-weight: 800;
+        cursor: pointer;
+        text-align: left;
+      }
+      .phase12a46-nav-button:hover {
+        background: rgba(31,255,0,.14);
+        box-shadow: inset 4px 0 0 #1fff00;
+      }
+      .phase12a46-card {
+        margin-top: 14px;
+      }
+      .phase12a46-toolbar {
+        display: flex;
+        align-items: center;
+        gap: 12px;
+        margin-bottom: 12px;
+      }
+      .phase12a46-toolbar input {
+        flex: 1;
+        min-width: 240px;
+        border: 1px solid #cbd5e1;
+        border-radius: 12px;
+        padding: 10px 12px;
+        font: inherit;
+      }
+      .phase12a46-table-wrap {
+        overflow: auto;
+        border: 1px solid #dbe3ef;
+        border-radius: 14px;
+      }
+      .phase12a46-table {
+        width: 100%;
+        border-collapse: collapse;
+        background: #fff;
+      }
+      .phase12a46-table th,
+      .phase12a46-table td {
+        padding: 10px;
+        border-bottom: 1px solid #e2e8f0;
+        text-align: left;
+      }
+      .phase12a46-table th {
+        background: #f8fafc;
+        color: #475569;
+        text-transform: uppercase;
+        font-size: 12px;
+      }
+      .phase12a46-btn {
+        border: 1px solid #16a34a;
+        background: #ecfdf5;
+        color: #166534;
+        border-radius: 999px;
+        padding: 8px 11px;
+        font-weight: 1000;
+        text-decoration: none;
+        cursor: pointer;
+        display: inline-flex;
+      }
+      .phase12a46-check {
+        display: inline-flex;
+        gap: 7px;
+        align-items: center;
+        font-weight: 900;
+      }
+      .phase12a46-empty {
+        color: #64748b;
+        font-weight: 900;
+        padding: 14px;
+      }
+    `;
+    document.head.appendChild(style);
+  }
+
+  function boot() {
+    addStyles();
+    addSidebarButton();
+    leaveTerminatedWhenOtherNavClicked();
+
+    setInterval(() => {
+      addSidebarButton();
+      hideTerminatedFromAdminMonitoring();
+      watchTerminatedCheckboxes();
+    }, 1000);
+  }
+
+  if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', boot);
+  else boot();
+})();
+

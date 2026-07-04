@@ -1266,4 +1266,200 @@
 })();
 
 </script>
+
+<script>
+// Phase 12A-46: Terminated page for client portal
+(function () {
+  function text(el) { return (el && el.textContent ? el.textContent : '').trim(); }
+  function esc(value) { return String(value ?? '').replaceAll('&','&amp;').replaceAll('<','&lt;').replaceAll('>','&gt;').replaceAll('"','&quot;').replaceAll("'","&#039;"); }
+  function fmt(value) { if (!value) return ''; const d = new Date(value); return Number.isNaN(d.getTime()) ? String(value) : d.toLocaleDateString(); }
+  function endpoint(path) { return '/api/index?path=' + encodeURIComponent(path); }
+  function app() { return document.getElementById('app'); }
+  let rows = [];
+
+  async function api(path, options) {
+    const res = await fetch(endpoint(path), Object.assign({ credentials: 'include' }, options || {}, {
+      headers: Object.assign({ 'Content-Type': 'application/json' }, (options && options.headers) || {})
+    }));
+    const raw = await res.text();
+    let data = {};
+    try { data = raw ? JSON.parse(raw) : {}; } catch {}
+    if (!res.ok) throw new Error(data.message || raw || 'Request failed');
+    return data;
+  }
+
+  function addNav() {
+    if (document.querySelector('[data-p="term"]')) return;
+    const nav = document.querySelector('nav');
+    if (!nav) return;
+    const button = document.createElement('button');
+    button.dataset.p = 'term';
+    button.textContent = 'Terminated';
+    button.addEventListener('click', renderTerminated);
+    nav.appendChild(button);
+  }
+
+  function hideTerminatedFromMonitoring() {
+    const active = document.querySelector('nav button.active');
+    if (!active || active.dataset.p !== 'mon') return;
+
+    const terminatedFiles = new Set(rows.filter((row) => row.terminated).map((row) => String(row.fileNumber)));
+
+    Array.from(document.querySelectorAll('table tbody tr')).forEach((tr) => {
+      const file = text(tr.children[0]);
+      const match = file.match(/[0-9]+/);
+      const fileNumber = match ? match[0] : '';
+      tr.toggleAttribute('data-phase12a46-client-monitoring-hidden', terminatedFiles.has(fileNumber));
+    });
+  }
+
+  async function loadRows() {
+    const data = await api('client-dashboard');
+    rows = data.recentApplicants || [];
+  }
+
+  function header() {
+    return `
+      <div class="head">
+        <div>
+          <h2>Terminated</h2>
+          <p>People removed from active Monitoring</p>
+        </div>
+        <div>
+          <button class="btn" id="term-refresh">Refresh</button>
+          <button class="btn danger" onclick="logout()">Logout</button>
+        </div>
+      </div>
+    `;
+  }
+
+  function tableHtml(list) {
+    if (!list.length) return '<section class="card">No terminated people found.</section>';
+
+    return `
+      <section class="card">
+        <div class="term-toolbar">
+          <input id="term-search" type="search" placeholder="Search file number or name..." />
+          <span id="term-count"></span>
+        </div>
+        <div class="table">
+          <table>
+            <thead>
+              <tr><th>File #</th><th>Name</th><th>Order Date</th><th>Monitoring</th><th>Med Expire</th><th>Notes</th><th>Terminated</th></tr>
+            </thead>
+            <tbody>
+              ${list.map((row) => `
+                <tr data-id="${esc(row.id)}">
+                  <td><b>${esc(row.fileNumber)}</b></td>
+                  <td>${esc(row.name)}</td>
+                  <td>${esc(fmt(row.orderDate))}</td>
+                  <td>${esc(row.monitorStatus)}</td>
+                  <td>${esc(row.medExpire || '')}</td>
+                  <td>${esc(row.notes || '')}</td>
+                  <td><label class="term-check"><input type="checkbox" checked data-unterm /><span>Terminated</span></label></td>
+                </tr>
+              `).join('')}
+            </tbody>
+          </table>
+        </div>
+      </section>
+    `;
+  }
+
+  async function renderTerminated() {
+    document.querySelectorAll('nav button').forEach((b) => b.classList.toggle('active', b.dataset.p === 'term'));
+    app().innerHTML = '<section class="card">Loading terminated people...</section>';
+
+    await loadRows();
+    const terminated = rows.filter((row) => row.terminated);
+
+    app().innerHTML = header() + tableHtml(terminated);
+    document.getElementById('term-refresh')?.addEventListener('click', renderTerminated);
+    document.getElementById('term-search')?.addEventListener('input', filterRows);
+
+    Array.from(document.querySelectorAll('[data-unterm]')).forEach((checkbox) => {
+      checkbox.addEventListener('change', async () => {
+        if (checkbox.checked) return;
+        const tr = checkbox.closest('tr');
+        const id = tr?.dataset.id;
+        checkbox.disabled = true;
+        try {
+          await api('client-applicant', { method: 'PATCH', body: JSON.stringify({ id, terminated: false }) });
+          tr.remove();
+          await loadRows();
+          filterRows();
+        } catch (error) {
+          alert(error.message || 'Could not move person back to Monitoring');
+          checkbox.checked = true;
+          checkbox.disabled = false;
+        }
+      });
+    });
+
+    filterRows();
+  }
+
+  function filterRows() {
+    const input = document.getElementById('term-search');
+    const q = String(input?.value || '').trim().toLowerCase();
+    let visible = 0;
+    Array.from(document.querySelectorAll('#app table tbody tr')).forEach((tr) => {
+      const haystack = `${text(tr.children[0])} ${text(tr.children[1])}`.toLowerCase();
+      const show = !q || haystack.includes(q);
+      tr.style.display = show ? '' : 'none';
+      if (show) visible++;
+    });
+    const count = document.getElementById('term-count');
+    if (count) count.textContent = `${visible} visible`;
+  }
+
+  function addStyles() {
+    if (document.getElementById('phase12a46-client-style')) return;
+    const style = document.createElement('style');
+    style.id = 'phase12a46-client-style';
+    style.textContent = `
+      tr[data-phase12a46-client-monitoring-hidden] {
+        display: none !important;
+      }
+      .term-toolbar {
+        display: flex;
+        align-items: center;
+        gap: 12px;
+        margin-bottom: 12px;
+      }
+      .term-toolbar input {
+        flex: 1;
+        min-width: 240px;
+        border: 1px solid #cbd5e1;
+        border-radius: 12px;
+        padding: 10px 12px;
+        font: inherit;
+      }
+      .term-check {
+        display: inline-flex;
+        align-items: center;
+        gap: 7px;
+        font-weight: 900;
+      }
+    `;
+    document.head.appendChild(style);
+  }
+
+  function boot() {
+    addStyles();
+    addNav();
+    setInterval(async () => {
+      addNav();
+      if (!rows.length) {
+        try { await loadRows(); } catch {}
+      }
+      hideTerminatedFromMonitoring();
+    }, 1000);
+  }
+
+  if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', boot);
+  else boot();
+})();
+</script>
+
 </body></html>
