@@ -379,12 +379,73 @@ function Dashboard({ company, applicants, reports, refresh }) {
 function Monitoring({ applicants, setApplicants, company, refresh }) {
   const [query, setQuery] = useState('');
   const [status, setStatus] = useState('All');
+  const [sort, setSort] = useState({ key: '', direction: 'asc' });
+
   const filtered = useMemo(() => applicants.filter((a) => {
     const term = query.toLowerCase();
-    const matches = !term || `${a.fileNumber} ${a.name} ${a.notes}`.toLowerCase().includes(term);
+    const matches = !term || `${a.fileNumber} ${a.name} ${a.orderDate} ${a.monitorStatus} ${a.mvrStatus} ${a.medExpire} ${a.notes}`.toLowerCase().includes(term);
     const statusOk = status === 'All' || a.monitorStatus === status;
     return matches && statusOk;
   }), [applicants, query, status]);
+
+  function sortValue(row, key) {
+    const value = row?.[key];
+
+    if (key === 'fileNumber') {
+      const numeric = Number(String(value || '').replace(/[^0-9.-]/g, ''));
+      return Number.isNaN(numeric) ? String(value || '').toLowerCase() : numeric;
+    }
+
+    if (key === 'orderDate' || key === 'medExpire') {
+      if (!value) return 0;
+      const date = new Date(value);
+      return Number.isNaN(date.getTime()) ? String(value || '').toLowerCase() : date.getTime();
+    }
+
+    return String(value || '').toLowerCase();
+  }
+
+  const sorted = useMemo(() => {
+    if (!sort.key) return filtered;
+
+    const direction = sort.direction === 'desc' ? -1 : 1;
+
+    return [...filtered].sort((a, b) => {
+      const av = sortValue(a, sort.key);
+      const bv = sortValue(b, sort.key);
+
+      if (typeof av === 'number' && typeof bv === 'number') {
+        return (av - bv) * direction;
+      }
+
+      return String(av).localeCompare(String(bv), undefined, { numeric: true, sensitivity: 'base' }) * direction;
+    });
+  }, [filtered, sort]);
+
+  function toggleSort(key) {
+    setSort((current) => {
+      if (current.key === key) {
+        return { key, direction: current.direction === 'asc' ? 'desc' : 'asc' };
+      }
+      return { key, direction: 'asc' };
+    });
+  }
+
+  function sortIcon(key) {
+    if (sort.key !== key) return '↕';
+    return sort.direction === 'asc' ? '↑' : '↓';
+  }
+
+  function SortHeader({ label, sortKey }) {
+    return (
+      <th>
+        <button type="button" className="sort-header-button" onClick={() => toggleSort(sortKey)} title={`Sort by ${label}`}>
+          <span>{label}</span>
+          <span className={sort.key === sortKey ? 'sort-icon active' : 'sort-icon'}>{sortIcon(sortKey)}</span>
+        </button>
+      </th>
+    );
+  }
 
   async function updateApplicant(applicant, patch) {
     const previous = applicants;
@@ -400,9 +461,9 @@ function Monitoring({ applicants, setApplicants, company, refresh }) {
 
   return (
     <>
-      <Header title="Monitoring" subtitle={`${company?.name || 'Driver Pipeline'} · ${filtered.length} records`} action={refresh} />
+      <Header title="Monitoring" subtitle={`${company?.name || 'Driver Pipeline'} · ${sorted.length} records`} action={refresh} />
       <section className="card toolbar"><div className="search-box"><Search size={17} /><input placeholder="Search file number, name, notes..." value={query} onChange={(e) => setQuery(e.target.value)} /></div><select value={status} onChange={(e) => setStatus(e.target.value)}><option>All</option><option>On</option><option>Off</option></select></section>
-      <section className="card table-card"><table><thead><tr><th>File #</th><th>Name</th><th>Order Date</th><th>Monitoring</th><th>MVR Status</th><th>Med Expire</th><th>Notes</th><th></th></tr></thead><tbody>{filtered.map((a) => <ApplicantRow key={a.id} applicant={a} onSave={updateApplicant} />)}</tbody></table>{!filtered.length ? <div className="empty">No applicants found. Import your CSV data into Supabase.</div> : null}</section>
+      <section className="card table-card"><table><thead><tr><SortHeader label="File #" sortKey="fileNumber" /><SortHeader label="Name" sortKey="name" /><SortHeader label="Order Date" sortKey="orderDate" /><SortHeader label="Monitoring" sortKey="monitorStatus" /><SortHeader label="MVR Status" sortKey="mvrStatus" /><SortHeader label="Med Expire" sortKey="medExpire" /><SortHeader label="Notes" sortKey="notes" /><th></th></tr></thead><tbody>{sorted.map((a) => <ApplicantRow key={a.id} applicant={a} onSave={updateApplicant} />)}</tbody></table>{!sorted.length ? <div className="empty">No applicants found. Import your CSV data into Supabase.</div> : null}</section>
     </>
   );
 }
