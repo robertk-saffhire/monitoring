@@ -1605,7 +1605,12 @@
 
   function downloadCsv(rows, filename) {
     const lines = [HEADERS.map(csvEscape).join(',')];
-    rows.forEach((row) => lines.push(rowValues(row).map(csvEscape).join(',')));
+    rows.forEach((row) => {
+      const values = rowValues(row);
+      const dobInput = document.querySelector(`[data-phase12a63-dob="${row.id}"]`);
+      if (dobInput) values[4] = dobInput.value || '';
+      lines.push(values.map(csvEscape).join(','));
+    });
 
     const blob = new Blob([lines.join('\n')], { type: 'text/csv;charset=utf-8' });
     const url = URL.createObjectURL(blob);
@@ -1628,6 +1633,45 @@
 
     alert(`Cleared ${data.cleared || 0} row(s).`);
     await renderPage(true);
+  }
+
+
+  async function saveDob(rowId, dob, button) {
+    if (!rowId) {
+      alert('Missing queue row id.');
+      return;
+    }
+
+    const originalText = button ? button.textContent : '';
+    if (button) {
+      button.disabled = true;
+      button.textContent = 'Saving...';
+    }
+
+    try {
+      await api('monitoring-on-off/update', {
+        method: 'PATCH',
+        body: JSON.stringify({ id: Number(rowId), dob: String(dob || '').trim() })
+      });
+
+      if (button) button.textContent = 'Saved';
+      setTimeout(() => {
+        if (button) {
+          button.textContent = originalText || 'Save DOB';
+          button.disabled = false;
+        }
+      }, 900);
+
+      const allRows = [...state.onRows, ...state.offRows];
+      const match = allRows.find((row) => Number(row.id) === Number(rowId));
+      if (match) match.DOB = String(dob || '').trim();
+    } catch (error) {
+      alert(error.message || 'Could not save DOB');
+      if (button) {
+        button.textContent = originalText || 'Save DOB';
+        button.disabled = false;
+      }
+    }
   }
 
   function sectionHtml(type, title, help, rows) {
@@ -1655,7 +1699,12 @@
             <tbody>
               ${rows.length ? rows.map((row) => `
                 <tr>
-                  ${rowValues(row).map((value) => `<td>${esc(value || '')}</td>`).join('')}
+                  ${rowValues(row).map((value, index) => {
+                    if (HEADERS[index] === 'DOB') {
+                      return `<td><div class="phase12a63-dob-edit"><input data-phase12a63-dob="${esc(row.id)}" value="${esc(value || '')}" placeholder="YYYY-MM-DD or MM/DD/YYYY" /><button type="button" data-phase12a63-save-dob="${esc(row.id)}">Save DOB</button></div></td>`;
+                    }
+                    return `<td>${esc(value || '')}</td>`;
+                  }).join('')}
                 </tr>
               `).join('') : `<tr><td colspan="${HEADERS.length}" class="phase12a60-empty">No rows waiting.</td></tr>`}
             </tbody>
@@ -1674,6 +1723,15 @@
         const rows = type === 'on' ? state.onRows : state.offRows;
         const filename = type === 'on' ? 'monitoring-turn-on.csv' : 'monitoring-turn-off.csv';
         downloadCsv(rows, filename);
+      });
+    });
+
+
+    document.querySelectorAll('[data-phase12a63-save-dob]').forEach((button) => {
+      button.addEventListener('click', () => {
+        const rowId = button.dataset.phase12a63SaveDob;
+        const input = document.querySelector(`[data-phase12a63-dob="${rowId}"]`);
+        saveDob(rowId, input ? input.value : '', button);
       });
     });
 
@@ -1870,6 +1928,33 @@
         font-weight: 800;
       }
 
+      .phase12a63-dob-edit {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        min-width: 260px;
+      }
+
+      .phase12a63-dob-edit input {
+        width: 140px;
+        border: 1px solid #cbd5e1;
+        border-radius: 10px;
+        padding: 7px 9px;
+        font: inherit;
+      }
+
+      .phase12a63-dob-edit button {
+        border: 1px solid #16a34a;
+        background: #ecfdf5;
+        color: #166534;
+        border-radius: 999px;
+        padding: 7px 9px;
+        font-size: 12px;
+        font-weight: 1000;
+        cursor: pointer;
+        white-space: nowrap;
+      }
+
       .phase12a60-error {
         color: #b91c1c;
         font-weight: 900;
@@ -1919,3 +2004,5 @@
   else boot();
 })();
 
+
+// Phase 12A-63 applied: editable DOB fields on Monitoring On/Off rows.
