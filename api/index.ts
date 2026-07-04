@@ -146,8 +146,8 @@ async function companies(req: any, res: any, user: any) {
 
 async function applicants(req: any, res: any, user: any) {
   const url = new URL(req.url || '/', 'https://local.test'); const companyId = requestedCompanyId(req, user);
-  if (req.method === 'GET') { const result = await query('select id, "fileNumber", "applicantName" as name, "orderDate", "monitorStatus", "mvrStatus", "medExpire", notes from applicants where "companyId"=$1 order by id desc limit 10000', [companyId]); return json(res, 200, { status: 'ok', applicants: result.rows }); }
-  if (req.method === 'PATCH') { const body = await readBody(req); const id = Number(body.id); if (!id) return json(res, 400, { status: 'error', message: 'Applicant id is required' }); const current = await query('select * from applicants where id=$1 and "companyId"=$2 limit 1', [id, companyId]); if (!current.rows[0]) return json(res, 404, { status: 'error', message: 'Applicant not found' }); const monitorStatus = normalizeMonitorStatus(body.monitorStatus ?? current.rows[0].monitorStatus); const medExpire = body.medExpire ?? current.rows[0].medExpire; const notes = body.notes ?? current.rows[0].notes; const result = await query('update applicants set "monitorStatus"=$1, "medExpire"=$2, "medExpireOverridden"=$3, notes=$4, "updatedAt"=now() where id=$5 and "companyId"=$6 returning id, "fileNumber", "applicantName" as name, "orderDate", "monitorStatus", "mvrStatus", "medExpire", notes', [monitorStatus, medExpire || null, Boolean(medExpire), String(notes || ''), id, companyId]); return json(res, 200, { status: 'ok', applicant: result.rows[0] }); }
+  if (req.method === 'GET') { const result = await query('select id, "fileNumber", "applicantName" as name, "orderDate", "monitorStatus", "mvrStatus", "medExpire", "terminated", notes from applicants where "companyId"=$1 order by id desc limit 10000', [companyId]); return json(res, 200, { status: 'ok', applicants: result.rows }); }
+  if (req.method === 'PATCH') { const body = await readBody(req); const id = Number(body.id); if (!id) return json(res, 400, { status: 'error', message: 'Applicant id is required' }); const current = await query('select * from applicants where id=$1 and "companyId"=$2 limit 1', [id, companyId]); if (!current.rows[0]) return json(res, 404, { status: 'error', message: 'Applicant not found' }); const monitorStatus = normalizeMonitorStatus(body.monitorStatus ?? current.rows[0].monitorStatus); const medExpire = body.medExpire ?? current.rows[0].medExpire; const notes = body.notes ?? current.rows[0].notes; const terminated = body.terminated === undefined ? Boolean(current.rows[0].terminated) : asBool(body.terminated); const result = await query('update applicants set "monitorStatus"=$1, "medExpire"=$2, "medExpireOverridden"=$3, notes=$4, "terminated"=$5, "updatedAt"=now() where id=$6 and "companyId"=$7 returning id, "fileNumber", "applicantName" as name, "orderDate", "monitorStatus", "mvrStatus", "medExpire", "terminated", notes', [monitorStatus, medExpire || null, Boolean(medExpire), String(notes || ''), terminated, id, companyId]); return json(res, 200, { status: 'ok', applicant: result.rows[0] }); }
   return json(res, 405, { status: 'error', message: 'Method not allowed' });
 }
 
@@ -286,7 +286,7 @@ async function clientApplicantUpdate(req: any, res: any, user: any) {
   if (!id) return json(res, 400, { status: 'error', message: 'Applicant id is required' });
 
   const current = await query(
-    'select id from applicants where id=$1 and "companyId"=$2 limit 1',
+    'select id, "terminated" from applicants where id=$1 and "companyId"=$2 limit 1',
     [id, companyId]
   );
 
@@ -296,15 +296,17 @@ async function clientApplicantUpdate(req: any, res: any, user: any) {
 
   const monitorStatus = normalizeMonitorStatus(body.monitorStatus);
   const notes = String(body.notes ?? '').trim();
+  const terminated = body.terminated === undefined ? Boolean(current.rows[0].terminated) : asBool(body.terminated);
 
   const result = await query(
     `update applicants
      set "monitorStatus"=$1,
          notes=$2,
+         "terminated"=$3,
          "updatedAt"=now()
-     where id=$3 and "companyId"=$4
-     returning id, "fileNumber", "applicantName" as name, "orderDate", "monitorStatus", "mvrStatus", "medExpire", notes`,
-    [monitorStatus, notes, id, companyId]
+     where id=$4 and "companyId"=$5
+     returning id, "fileNumber", "applicantName" as name, "orderDate", "monitorStatus", "mvrStatus", "medExpire", "terminated", notes`,
+    [monitorStatus, notes, terminated, id, companyId]
   );
 
   return json(res, 200, { status: 'ok', applicant: result.rows[0] });
@@ -337,7 +339,7 @@ async function clientDashboard(req: any, res: any, user: any) {
      from safety_reports where "companyId"=$1`, [companyId]);
 
   const recentApplicants = await query(
-    `select id, "fileNumber", "applicantName" as name, "orderDate", "monitorStatus", "mvrStatus", "medExpire", notes
+    `select id, "fileNumber", "applicantName" as name, "orderDate", "monitorStatus", "mvrStatus", "medExpire", "terminated", notes
      from applicants where "companyId"=$1 order by id desc limit 1000`, [companyId]);
 
   const recentSafety = await query(
