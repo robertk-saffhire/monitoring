@@ -1633,6 +1633,42 @@ function monitoringExportApplicantDob(row: any): string {
   return monitoringExportFindDobDeep(row);
 }
 
+function monitoringExportDetailsFromOrderDetail(payload: any) {
+  const base = monitoringExportDetailsFromPayload(payload);
+  const dob = base.dob || monitoringExportFindDobDeep(payload);
+
+  return {
+    dob,
+    dlNumber: base.dlNumber || '',
+    dlState: base.dlState || '',
+    rawFound: Boolean(dob || base.dlNumber || base.dlState || base.rawFound)
+  };
+}
+
+async function monitoringExportOrderDetailPayload(orderGuid: string) {
+  const e = tazEnv();
+  const encodedOrder = encodeURIComponent(String(orderGuid || '').trim());
+  if (!encodedOrder) return null;
+
+  // PHASE12A64: Best DOB source from TazWorks Order Detail.
+  // Another TazWorks implementation confirmed this endpoint returns the full DOB:
+  // /v1/clients/{clientGuid}/orders/{orderGuid}
+  const paths = [
+    `/v1/clients/${encodeURIComponent(e.clientGuid)}/orders/${encodedOrder}`,
+    `/tazworks/orders/${encodedOrder}?clientGuid=${encodeURIComponent(e.clientGuid)}`,
+    `/tazworks/orders/${encodedOrder}/detail?clientGuid=${encodeURIComponent(e.clientGuid)}`
+  ];
+
+  for (const path of paths) {
+    try {
+      const payload = await proxyGet(path);
+      if (payload) return payload;
+    } catch {}
+  }
+
+  return null;
+}
+
 function monitoringExportDetailsFromPayload(payload: any) {
   const context = monitoringExportLicenseContext(payload);
   if (!context) return { dob: '', dlNumber: '', dlState: '', rawFound: false };
@@ -1714,14 +1750,36 @@ async function monitoringExportTazworksDetails(companyId: number, fileNumber: st
     );
 
     const order = cached.rows[0];
+
     if (!order?.order_guid) {
-      const fromRaw = monitoringExportDetailsFromPayload(order?.raw_order || {});
-      return { ...blank, ...fromRaw, source: fromRaw.rawFound ? 'tazworks-order-cache' : 'not-found' };
+      const fromRaw = monitoringExportDetailsFromOrderDetail(order?.raw_order || {});
+      return {
+        ...blank,
+        ...fromRaw,
+        source: fromRaw.rawFound ? 'tazworks-order-cache-no-guid' : 'not-found'
+      };
     }
 
-    let details = monitoringExportDetailsFromPayload(order.raw_order || {});
-    if (details.rawFound && details.dob && details.dlNumber && details.dlState) {
-      return { dob: details.dob, dlNumber: details.dlNumber, dlState: details.dlState, source: 'tazworks-order-cache' };
+    let details = monitoringExportDetailsFromOrderDetail(order.raw_order || {});
+    let bestSource = details.rawFound ? 'tazworks-order-cache' : 'not-found';
+
+    // PHASE12A64: Try Order Detail before MVR/search result parsing.
+    // This is the best full DOB source when the MVR only shows a redacted DOB.
+    const orderDetail = await monitoringExportOrderDetailPayload(order.order_guid);
+    if (orderDetail) {
+      const orderDetails = monitoringExportDetailsFromOrderDetail(orderDetail);
+      details = monitoringExportMergeDetails(details, orderDetails);
+      if (orderDetails.rawFound) bestSource = 'tazworks-order-detail';
+    }
+
+    // If Order Detail gives DOB and cache gives DL fields, this is enough.
+    if (details.dob && details.dlNumber && details.dlState) {
+      return {
+        dob: monitoringExportFullDateOnly(details.dob),
+        dlNumber: details.dlNumber,
+        dlState: details.dlState,
+        source: bestSource
+      };
     }
 
     const e = tazEnv();
@@ -1732,21 +1790,32 @@ async function monitoringExportTazworksDetails(companyId: number, fileNumber: st
     const scan = candidates.length ? candidates : searches;
 
     for (const search of scan.slice(0, 6)) {
-      details = monitoringExportMergeDetails(details, monitoringExportDetailsFromPayload(search.raw));
+      const searchDetails = monitoringExportDetailsFromOrderDetail(search.raw);
+      details = monitoringExportMergeDetails(details, searchDetails);
+      if (searchDetails.rawFound && bestSource === 'not-found') bestSource = 'tazworks-search-row';
+
       if (details.dob && details.dlNumber && details.dlState) {
-        return { dob: details.dob, dlNumber: details.dlNumber, dlState: details.dlState, source: 'tazworks-search-row' };
+        return {
+          dob: monitoringExportFullDateOnly(details.dob),
+          dlNumber: details.dlNumber,
+          dlState: details.dlState,
+          source: bestSource === 'not-found' ? 'tazworks-search-row' : bestSource
+        };
       }
 
       for (const resultType of ['EDITOR', 'CLIENT', 'FINAL', null] as any[]) {
         try {
           const result = await tryResultVariant(order.order_guid, search.searchGuid, resultType);
-          details = monitoringExportMergeDetails(details, monitoringExportDetailsFromPayload(result));
+          const resultDetails = monitoringExportDetailsFromOrderDetail(result);
+          details = monitoringExportMergeDetails(details, resultDetails);
+          if (resultDetails.rawFound && bestSource === 'not-found') bestSource = `tazworks-result-${resultType || 'default'}`;
+
           if (details.dob && details.dlNumber && details.dlState) {
             return {
-              dob: details.dob,
+              dob: monitoringExportFullDateOnly(details.dob),
               dlNumber: details.dlNumber,
               dlState: details.dlState,
-              source: `tazworks-result-${resultType || 'default'}`
+              source: bestSource === 'not-found' ? `tazworks-result-${resultType || 'default'}` : bestSource
             };
           }
         } catch {}
@@ -1754,10 +1823,10 @@ async function monitoringExportTazworksDetails(companyId: number, fileNumber: st
     }
 
     return {
-      dob: details.dob || '',
+      dob: monitoringExportFullDateOnly(details.dob) || '',
       dlNumber: details.dlNumber || '',
       dlState: details.dlState || '',
-      source: details.rawFound ? 'tazworks-partial' : 'not-found'
+      source: details.rawFound ? bestSource : 'not-found'
     };
   } catch (error: any) {
     return { ...blank, source: `error: ${errorMessage(error)}`.slice(0, 240) };
@@ -1796,7 +1865,7 @@ async function logMonitoringOnOffChange(companyId: number, currentRow: any, newM
         nameParts.firstName,
         nameParts.middleName,
         nameParts.lastName,
-        taz.dob || '',
+        monitoringExportFullDateOnly(taz.dob) || fallbackDob || '',
         taz.dlNumber || '',
         taz.dlState || '',
         taz.source || '',
