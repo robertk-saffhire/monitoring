@@ -1130,7 +1130,7 @@
 
 // Phase 12A-52: Admin monthly invoices
 (function () {
-  let invoiceState = { invoices: [], currentMvrOnCount: 0, editingId: null };
+  let invoiceState = { invoices: [], currentMvrOnCount: 0, currentMonitoringOnCount: 0, editingId: null };
 
   function text(el) {
     return (el && el.textContent ? el.textContent : '').trim();
@@ -1200,7 +1200,8 @@
   async function loadInvoices() {
     const data = await api('invoices');
     invoiceState.invoices = data.invoices || [];
-    invoiceState.currentMvrOnCount = Number(data.currentMvrOnCount || 0);
+    invoiceState.currentMonitoringOnCount = Number(data.currentMonitoringOnCount ?? data.currentMvrOnCount ?? 0);
+    invoiceState.currentMvrOnCount = invoiceState.currentMonitoringOnCount;
     return data;
   }
 
@@ -1209,16 +1210,16 @@
       <div class="page-header phase12a52-header">
         <div>
           <h1>Invoices</h1>
-          <p>Monthly MVR continuous monitoring invoices</p>
+          <p>Monthly monitoring invoices</p>
         </div>
         <div class="phase12a52-header-actions">
-          <button type="button" class="phase12a52-btn" id="phase12a52-create-current">Create Current Month</button>
+          <button type="button" class="phase12a52-btn" id="phase12a52-create-current">Create Previous Month</button>
           <button type="button" class="phase12a52-btn" id="phase12a52-refresh">Refresh</button>
         </div>
       </div>
       <section class="card phase12a52-card">
         <div class="phase12a52-summary">
-          <div><b>${esc(invoiceState.currentMvrOnCount)}</b><span>Current MVR On Count</span></div>
+          <div><b>${esc(invoiceState.currentMvrOnCount)}</b><span>Current On Monitoring Count</span></div>
           <div><b>${esc(invoiceState.invoices.length)}</b><span>Invoices</span></div>
         </div>
         ${content}
@@ -1309,7 +1310,7 @@
             <span>Tax rate: <b>${esc(pct(invoice.salesTaxRate))}</b></span>
           </div>
           <div class="phase12a52-form-actions">
-            ${locked ? '' : '<button type="submit" class="phase12a52-btn">Save Draft</button><button type="button" class="phase12a52-btn" id="phase12a52-recalc">Use Current MVR Count</button>'}
+            ${locked ? '' : '<button type="submit" class="phase12a52-btn">Save Draft</button><button type="button" class="phase12a52-btn" id="phase12a52-recalc">Use Current On Monitoring Count</button>'}
             ${locked ? `<button type="button" class="phase12a52-btn" data-phase12a52-pdf="${esc(invoice.id)}">Download PDF</button>` : `<button type="button" class="phase12a52-btn" data-phase12a52-approve="${esc(invoice.id)}">Approve Invoice</button>`}
             <button type="button" class="phase12a52-btn secondary" id="phase12a52-close-editor">Close</button>
           </div>
