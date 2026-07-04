@@ -1820,22 +1820,23 @@ async function invoicePdf(req: any, res: any, user: any) {
     page.drawText(pdfText(invoice.billToPhone), { x: left, y, size: 12, font, color: dark });
   }
 
-  const labelX = 398;
+  // PHASE12A58: Move right-side invoice detail labels left so they do not overlap the values.
+  const labelX = 350;
   const valueX = 560;
   y = 610;
   page.drawText('Invoice #', { x: labelX, y, size: 14, font: bold, color: gray });
   drawRight(page, pdfText(invoice.invoiceNumber), valueX, y, { size: 14, font: bold, color: gray });
   y -= 22;
-  page.drawText('Invoice Date:', { x: labelX, y, size: 12, font, color: dark });
+  page.drawText('Invoice Date:', { x: labelX, y, size: 11, font, color: dark });
   drawRight(page, invoiceDateOnly(invoice.invoiceDate), valueX, y, { size: 12, font, color: dark });
   y -= 22;
-  page.drawText('Customer #:', { x: labelX, y, size: 12, font, color: dark });
+  page.drawText('Customer #:', { x: labelX, y, size: 11, font, color: dark });
   drawRight(page, `Company ${invoice.companyId}`, valueX, y, { size: 12, font, color: dark });
   y -= 22;
-  page.drawText('Representative:', { x: labelX, y, size: 12, font, color: dark });
+  page.drawText('Representative:', { x: labelX, y, size: 11, font, color: dark });
   drawRight(page, 'Robert Krebsbach', valueX, y, { size: 12, font, color: dark });
   y -= 22;
-  page.drawText('Date Due:', { x: labelX, y, size: 12, font, color: dark });
+  page.drawText('Date Due:', { x: labelX, y, size: 11, font, color: dark });
   drawRight(page, invoiceDateOnly(invoice.dueDate), valueX, y, { size: 12, font, color: dark });
 
   y = 456;
