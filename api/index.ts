@@ -1530,11 +1530,107 @@ function monitoringExportLicenseContext(payload: any) {
   return full.slice(0, 3000);
 }
 
-function monitoringExportDateFromContext(value: any) {
+function monitoringExportFullDateOnly(value: any) {
   const raw = String(value || '').trim();
   if (!raw) return '';
-  const d = dateFromText(raw);
-  return d || raw.slice(0, 20).trim();
+
+  // Reject redacted/partial DOB values like XXXX/06/21 or XX-06-21.
+  if (/x{2,}/i.test(raw)) return '';
+
+  const source = raw
+    .replace(/([A-Za-z]+)(\d{1,2}[\/-]\d{1,2}[\/-]\d{2,4})/g, '$1 $2')
+    .replace(/(\d{1,2}[\/-]\d{1,2}[\/-]\d{2,4})([A-Za-z]+)/g, '$1 $2');
+
+  let match = source.match(/\b(\d{4})[\/-](\d{1,2})[\/-](\d{1,2})\b/);
+  if (match) {
+    const y = Number(match[1]);
+    const m = Number(match[2]);
+    const d = Number(match[3]);
+    if (y >= 1900 && y <= 2100 && m >= 1 && m <= 12 && d >= 1 && d <= 31) {
+      return `${String(y).padStart(4, '0')}-${String(m).padStart(2, '0')}-${String(d).padStart(2, '0')}`;
+    }
+  }
+
+  match = source.match(/\b(\d{1,2})[\/-](\d{1,2})[\/-](\d{4})\b/);
+  if (match) {
+    const m = Number(match[1]);
+    const d = Number(match[2]);
+    const y = Number(match[3]);
+    if (y >= 1900 && y <= 2100 && m >= 1 && m <= 12 && d >= 1 && d <= 31) {
+      return `${String(y).padStart(4, '0')}-${String(m).padStart(2, '0')}-${String(d).padStart(2, '0')}`;
+    }
+  }
+
+  const d = dateFromText(source);
+  if (d && /^\d{4}-\d{2}-\d{2}$/.test(d)) return d;
+
+  return '';
+}
+
+function monitoringExportDateFromContext(value: any) {
+  // PHASE12A62: only return a complete DOB. Do not return partial/redacted DOB values.
+  return monitoringExportFullDateOnly(value);
+}
+
+function monitoringExportFindDobDeep(payload: any): string {
+  const seen = new Set<any>();
+
+  function scan(value: any, keyName = ''): string {
+    if (value === null || value === undefined) return '';
+
+    if (typeof value === 'string' || typeof value === 'number') {
+      const key = String(keyName || '').toLowerCase();
+      const raw = String(value || '');
+
+      if (/(dob|birth|dateofbirth|birthdate|date_of_birth)/i.test(key)) {
+        const direct = monitoringExportFullDateOnly(raw);
+        if (direct) return direct;
+      }
+
+      // Some flattened payloads contain DOBYYYY/MM/DD or DateOfBirthYYYY-MM-DD.
+      const labeled = monitoringExportValueAfterLabels(raw, [
+        'Date of Birth',
+        'DateOfBirth',
+        'Birth Date',
+        'BirthDate',
+        'Birthdate',
+        'DOB',
+        'D.O.B.'
+      ], 60);
+      const fromLabel = monitoringExportFullDateOnly(labeled);
+      if (fromLabel) return fromLabel;
+
+      const anyDate = monitoringExportFullDateOnly(raw);
+      if (anyDate && /(dob|birth|dateofbirth|birthdate)/i.test(raw)) return anyDate;
+
+      return '';
+    }
+
+    if (typeof value !== 'object') return '';
+    if (seen.has(value)) return '';
+    seen.add(value);
+
+    if (Array.isArray(value)) {
+      for (const item of value) {
+        const found = scan(item, keyName);
+        if (found) return found;
+      }
+      return '';
+    }
+
+    for (const [key, child] of Object.entries(value)) {
+      const found = scan(child, key);
+      if (found) return found;
+    }
+
+    return '';
+  }
+
+  return scan(payload);
+}
+
+function monitoringExportApplicantDob(row: any): string {
+  return monitoringExportFindDobDeep(row);
 }
 
 function monitoringExportDetailsFromPayload(payload: any) {
@@ -1543,11 +1639,13 @@ function monitoringExportDetailsFromPayload(payload: any) {
 
   const dobRaw = monitoringExportValueAfterLabels(context, [
     'Date of Birth',
+    'DateOfBirth',
     'Birth Date',
+    'BirthDate',
     'Birthdate',
     'DOB',
     'D.O.B.'
-  ], 40);
+  ], 60);
 
   let dlNumber = monitoringExportValueAfterLabels(context, [
     'Driver License Number',
@@ -1578,20 +1676,25 @@ function monitoringExportDetailsFromPayload(payload: any) {
   const stateMatch = String(dlState || '').toUpperCase().match(/\b[A-Z]{2}\b/);
   dlState = stateMatch ? stateMatch[0] : String(dlState || '').slice(0, 2).toUpperCase();
 
+  const dob = monitoringExportDateFromContext(dobRaw) || monitoringExportFindDobDeep(payload);
+
   return {
-    dob: monitoringExportDateFromContext(dobRaw),
+    dob,
     dlNumber,
     dlState,
-    rawFound: Boolean(dobRaw || dlNumber || dlState)
+    rawFound: Boolean(dob || dobRaw || dlNumber || dlState)
   };
 }
 
 function monitoringExportMergeDetails(base: any, candidate: any) {
+  const baseDob = monitoringExportFullDateOnly(base.dob);
+  const candidateDob = monitoringExportFullDateOnly(candidate.dob);
+
   return {
-    dob: base.dob || candidate.dob || '',
+    dob: baseDob || candidateDob || '',
     dlNumber: base.dlNumber || candidate.dlNumber || '',
     dlState: base.dlState || candidate.dlState || '',
-    rawFound: Boolean(base.rawFound || candidate.rawFound)
+    rawFound: Boolean(base.rawFound || candidate.rawFound || baseDob || candidateDob)
   };
 }
 
@@ -1673,6 +1776,7 @@ async function logMonitoringOnOffChange(companyId: number, currentRow: any, newM
 
     const nameParts = splitMonitoringExportName(currentRow?.applicantName || currentRow?.name || '');
     const taz = await monitoringExportTazworksDetails(companyId, fileNumber);
+    const fallbackDob = monitoringExportApplicantDob(currentRow);
 
     await query(
       `insert into monitoring_on_off_exports (
@@ -1751,6 +1855,54 @@ async function monitoringOnOffExportsClear(req: any, res: any, user: any) {
 
   return json(res, 200, { status: 'ok', cleared: result.rows.length });
 }
+
+async function monitoringOnOffExportsRepair(req: any, res: any, user: any) {
+  if (!requireAdmin(user, res)) return;
+  if (req.method !== 'POST') return json(res, 405, { status: 'error', message: 'Method not allowed' });
+
+  const companyId = requestedCompanyId(req, user);
+  const rows = await query(
+    `select id, "fileNumber", dob
+     from monitoring_on_off_exports
+     where "companyId"=$1 and "clearedAt" is null
+       and (dob='' or dob ilike '%xx%' or dob ilike '%address%' or dob !~ '^\\d{4}-\\d{2}-\\d{2}$')`,
+    [companyId]
+  );
+
+  let repaired = 0;
+
+  for (const row of rows.rows) {
+    let dob = '';
+
+    const applicant = await query(
+      `select *
+       from applicants
+       where "companyId"=$1 and "fileNumber"=$2
+       limit 1`,
+      [companyId, row.fileNumber]
+    );
+
+    dob = monitoringExportApplicantDob(applicant.rows[0]);
+
+    if (!dob) {
+      const details = await monitoringExportTazworksDetails(companyId, String(row.fileNumber || ''));
+      dob = monitoringExportFullDateOnly(details.dob);
+    }
+
+    if (dob) {
+      await query(
+        `update monitoring_on_off_exports
+         set dob=$1
+         where id=$2 and "companyId"=$3`,
+        [dob, row.id, companyId]
+      );
+      repaired++;
+    }
+  }
+
+  return json(res, 200, { status: 'ok', checked: rows.rows.length, repaired });
+}
+
 // PHASE12A60_MONITORING_ON_OFF_EXPORT_QUEUE END
 
 
@@ -2283,6 +2435,7 @@ export default async function handler(req: any, res: any) {
     if (route === 'invoices/pdf') return invoicePdf(req, res, user);
     if (route === 'monitoring-on-off') return monitoringOnOffExports(req, res, user);
     if (route === 'monitoring-on-off/clear') return monitoringOnOffExportsClear(req, res, user);
+    if (route === 'monitoring-on-off/repair') return monitoringOnOffExportsRepair(req, res, user);
     if (route === 'invoices/diagnostics') return invoiceDiagnostics(req, res, user);
     if (route === 'system-check') return systemCheck(req, res, user);
     return json(res, 404, { status: 'error', message: `Route not found: ${route}` });
