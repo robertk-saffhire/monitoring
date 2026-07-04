@@ -1717,6 +1717,28 @@
   function bindPage() {
     document.getElementById('phase12a60-refresh')?.addEventListener('click', () => renderPage(true));
 
+    document.getElementById('phase12a64-repair-dobs')?.addEventListener('click', async () => {
+      const button = document.getElementById('phase12a64-repair-dobs');
+      const oldText = button ? button.textContent : '';
+      if (button) {
+        button.disabled = true;
+        button.textContent = 'Repairing...';
+      }
+
+      try {
+        const result = await api('monitoring-on-off/repair', { method: 'POST', body: JSON.stringify({}) });
+        alert(`Checked ${result.checked || 0} row(s). Repaired ${result.repaired || 0} DOB(s).`);
+        await renderPage(true);
+      } catch (error) {
+        alert(error.message || 'Could not repair DOBs');
+      } finally {
+        if (button) {
+          button.disabled = false;
+          button.textContent = oldText || 'Repair Missing DOBs';
+        }
+      }
+    });
+
     document.querySelectorAll('[data-phase12a60-download]').forEach((button) => {
       button.addEventListener('click', () => {
         const type = button.dataset.phase12a60Download;
@@ -1764,9 +1786,9 @@
         <div class="page-header phase12a60-header">
           <div>
             <h1>Monitoring On/Off</h1>
-            <p>Export files that need monitoring turned on or turned off.</p>
+            <p>Export files that need monitoring turned on or turned off. DOB repair uses TazWorks Order Detail first.</p>
           </div>
-          <button type="button" class="phase12a60-primary" id="phase12a60-refresh">Refresh</button>
+          <div class="phase12a64-header-actions"><button type="button" class="phase12a60-primary" id="phase12a64-repair-dobs">Repair Missing DOBs</button><button type="button" class="phase12a60-primary" id="phase12a60-refresh">Refresh</button></div>
         </div>
         <div class="phase12a60-summary">
           <div><b>${esc(state.onRows.length)}</b><span>Turn On Rows</span></div>
@@ -1822,6 +1844,13 @@
 
       .phase12a60-header {
         align-items: center;
+      }
+
+      .phase12a64-header-actions {
+        display: flex;
+        gap: 8px;
+        flex-wrap: wrap;
+        justify-content: flex-end;
       }
 
       .phase12a60-primary,
