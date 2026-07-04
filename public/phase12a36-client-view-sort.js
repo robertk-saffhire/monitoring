@@ -1125,3 +1125,521 @@
   }, true);
 })();
 
+
+
+
+// Phase 12A-52: Admin monthly invoices
+(function () {
+  let invoiceState = { invoices: [], currentMvrOnCount: 0, editingId: null };
+
+  function text(el) {
+    return (el && el.textContent ? el.textContent : '').trim();
+  }
+
+  function mainPanel() {
+    return document.querySelector('.main-panel') || document.querySelector('main') || document.body;
+  }
+
+  function endpoint(path) {
+    return '/api/index?path=' + encodeURIComponent(path);
+  }
+
+  async function api(path, options) {
+    const res = await fetch(endpoint(path), Object.assign({ credentials: 'include' }, options || {}, {
+      headers: Object.assign({ 'Content-Type': 'application/json' }, (options && options.headers) || {})
+    }));
+    const raw = await res.text();
+    let data = {};
+    try { data = raw ? JSON.parse(raw) : {}; } catch {}
+    if (!res.ok) throw new Error(data.message || raw || 'Request failed');
+    return data;
+  }
+
+  function esc(value) {
+    return String(value ?? '')
+      .replaceAll('&','&amp;')
+      .replaceAll('<','&lt;')
+      .replaceAll('>','&gt;')
+      .replaceAll('"','&quot;')
+      .replaceAll("'","&#039;");
+  }
+
+  function dateOnly(value) {
+    const raw = String(value || '').trim();
+    return raw ? raw.slice(0, 10) : '';
+  }
+
+  function money(value) {
+    const n = Number(value || 0);
+    return '$' + (Number.isFinite(n) ? n : 0).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+  }
+
+  function pct(value) {
+    const n = Number(value || 0) * 100;
+    return (Number.isFinite(n) ? n : 0).toFixed(3).replace(/0+$/,'').replace(/\.$/,'') + '%';
+  }
+
+  function addNavButton() {
+    if (document.getElementById('phase12a52-invoices-nav')) return;
+
+    const monitoringButton = Array.from(document.querySelectorAll('button, a')).find((el) => text(el) === 'Monitoring');
+    const parent = monitoringButton ? monitoringButton.parentElement : (document.querySelector('aside') || document.querySelector('nav'));
+    if (!parent) return;
+
+    const button = document.createElement('button');
+    button.id = 'phase12a52-invoices-nav';
+    button.type = 'button';
+    button.className = 'phase12a52-nav-button';
+    button.innerHTML = '<span>$</span><span>Invoices</span>';
+    button.addEventListener('click', renderInvoicesPage);
+
+    if (monitoringButton && monitoringButton.nextSibling) parent.insertBefore(button, monitoringButton.nextSibling);
+    else parent.appendChild(button);
+  }
+
+  async function loadInvoices() {
+    const data = await api('invoices');
+    invoiceState.invoices = data.invoices || [];
+    invoiceState.currentMvrOnCount = Number(data.currentMvrOnCount || 0);
+    return data;
+  }
+
+  function pageShell(content) {
+    return `
+      <div class="page-header phase12a52-header">
+        <div>
+          <h1>Invoices</h1>
+          <p>Monthly MVR continuous monitoring invoices</p>
+        </div>
+        <div class="phase12a52-header-actions">
+          <button type="button" class="phase12a52-btn" id="phase12a52-create-current">Create Current Month</button>
+          <button type="button" class="phase12a52-btn" id="phase12a52-refresh">Refresh</button>
+        </div>
+      </div>
+      <section class="card phase12a52-card">
+        <div class="phase12a52-summary">
+          <div><b>${esc(invoiceState.currentMvrOnCount)}</b><span>Current MVR On Count</span></div>
+          <div><b>${esc(invoiceState.invoices.length)}</b><span>Invoices</span></div>
+        </div>
+        ${content}
+      </section>
+    `;
+  }
+
+  function listHtml() {
+    if (!invoiceState.invoices.length) {
+      return '<p class="phase12a52-muted">No invoices found.</p>';
+    }
+
+    return `
+      <div class="phase12a52-table-wrap">
+        <table class="phase12a52-table">
+          <thead>
+            <tr>
+              <th>Invoice #</th>
+              <th>Month</th>
+              <th>Status</th>
+              <th>Qty</th>
+              <th>Subtotal</th>
+              <th>Tax</th>
+              <th>Total</th>
+              <th>Due</th>
+              <th>Actions</th>
+            </tr>
+          </thead>
+          <tbody>
+            ${invoiceState.invoices.map((invoice) => `
+              <tr>
+                <td><b>${esc(invoice.invoiceNumber)}</b></td>
+                <td>${esc(invoice.serviceMonthLabel || dateOnly(invoice.invoiceMonth))}</td>
+                <td><span class="phase12a52-status ${invoice.status === 'Approved' ? 'approved' : 'draft'}">${esc(invoice.status)}</span></td>
+                <td>${esc(invoice.quantity)}</td>
+                <td>${esc(money(invoice.subtotal))}</td>
+                <td>${esc(money(invoice.salesTax))}</td>
+                <td><b>${esc(money(invoice.total))}</b></td>
+                <td>${esc(dateOnly(invoice.dueDate))}</td>
+                <td class="phase12a52-actions">
+                  <button type="button" data-phase12a52-edit="${esc(invoice.id)}">Edit</button>
+                  ${invoice.status === 'Approved'
+                    ? `<button type="button" data-phase12a52-pdf="${esc(invoice.id)}">Download PDF</button><button type="button" data-phase12a52-reopen="${esc(invoice.id)}">Reopen</button>`
+                    : `<button type="button" data-phase12a52-approve="${esc(invoice.id)}">Approve</button>`}
+                </td>
+              </tr>
+            `).join('')}
+          </tbody>
+        </table>
+      </div>
+    `;
+  }
+
+  function invoiceById(id) {
+    return invoiceState.invoices.find((invoice) => Number(invoice.id) === Number(id));
+  }
+
+  function editHtml(invoice) {
+    if (!invoice) return '';
+
+    const locked = invoice.status === 'Approved';
+
+    return `
+      <div class="phase12a52-editor">
+        <h3>${locked ? 'View Approved Invoice' : 'Edit Draft Invoice'}</h3>
+        ${locked ? '<p class="phase12a52-warn">Approved invoices are locked. Reopen before editing.</p>' : ''}
+        <form id="phase12a52-form">
+          <input type="hidden" name="id" value="${esc(invoice.id)}" />
+          <div class="phase12a52-grid">
+            <label>Invoice #<input name="invoiceNumber" value="${esc(invoice.invoiceNumber)}" ${locked ? 'disabled' : ''} /></label>
+            <label>Invoice Date<input type="date" name="invoiceDate" value="${esc(dateOnly(invoice.invoiceDate))}" ${locked ? 'disabled' : ''} /></label>
+            <label>Due Date<input type="date" name="dueDate" value="${esc(dateOnly(invoice.dueDate))}" ${locked ? 'disabled' : ''} /></label>
+            <label>Service Month<input name="serviceMonthLabel" value="${esc(invoice.serviceMonthLabel || '')}" ${locked ? 'disabled' : ''} /></label>
+            <label>Description<input name="description" value="${esc(invoice.description || 'MVR Continuous Monitoring')}" ${locked ? 'disabled' : ''} /></label>
+            <label>Quantity<input type="number" min="0" step="1" name="quantity" value="${esc(invoice.quantity)}" ${locked ? 'disabled' : ''} /></label>
+            <label>Unit Price<input type="number" min="0" step="0.01" name="unitPrice" value="${esc(invoice.unitPrice)}" ${locked ? 'disabled' : ''} /></label>
+            <label>Sales Tax Rate<input type="number" min="0" step="0.0001" name="salesTaxRate" value="${esc(invoice.salesTaxRate)}" ${locked ? 'disabled' : ''} /></label>
+            <label>Bill To Name<input name="billToName" value="${esc(invoice.billToName || '')}" ${locked ? 'disabled' : ''} /></label>
+            <label>Bill To Address 1<input name="billToAddress1" value="${esc(invoice.billToAddress1 || '')}" ${locked ? 'disabled' : ''} /></label>
+            <label>Bill To Address 2<input name="billToAddress2" value="${esc(invoice.billToAddress2 || '')}" ${locked ? 'disabled' : ''} /></label>
+            <label>Bill To Phone<input name="billToPhone" value="${esc(invoice.billToPhone || '')}" ${locked ? 'disabled' : ''} /></label>
+          </div>
+          <label class="phase12a52-wide">Internal Notes<textarea name="notes" ${locked ? 'disabled' : ''}>${esc(invoice.notes || '')}</textarea></label>
+          <div class="phase12a52-totals">
+            <span>Subtotal: <b>${esc(money(invoice.subtotal))}</b></span>
+            <span>Tax: <b>${esc(money(invoice.salesTax))}</b></span>
+            <span>Total: <b>${esc(money(invoice.total))}</b></span>
+            <span>Tax rate: <b>${esc(pct(invoice.salesTaxRate))}</b></span>
+          </div>
+          <div class="phase12a52-form-actions">
+            ${locked ? '' : '<button type="submit" class="phase12a52-btn">Save Draft</button><button type="button" class="phase12a52-btn" id="phase12a52-recalc">Use Current MVR Count</button>'}
+            ${locked ? `<button type="button" class="phase12a52-btn" data-phase12a52-pdf="${esc(invoice.id)}">Download PDF</button>` : `<button type="button" class="phase12a52-btn" data-phase12a52-approve="${esc(invoice.id)}">Approve Invoice</button>`}
+            <button type="button" class="phase12a52-btn secondary" id="phase12a52-close-editor">Close</button>
+          </div>
+        </form>
+      </div>
+    `;
+  }
+
+  function bindList() {
+    document.getElementById('phase12a52-create-current')?.addEventListener('click', async () => {
+      await api('invoices', { method: 'POST', body: JSON.stringify({ action: 'create-current' }) });
+      await renderInvoicesPage();
+    });
+
+    document.getElementById('phase12a52-refresh')?.addEventListener('click', renderInvoicesPage);
+
+    document.querySelectorAll('[data-phase12a52-edit]').forEach((button) => {
+      button.addEventListener('click', () => {
+        invoiceState.editingId = Number(button.dataset.phase12a52Edit);
+        renderInvoicesPage(false);
+      });
+    });
+
+    document.querySelectorAll('[data-phase12a52-approve]').forEach((button) => {
+      button.addEventListener('click', async () => {
+        if (!confirm('Approve this invoice and unlock PDF download?')) return;
+        await api('invoices', { method: 'POST', body: JSON.stringify({ action: 'approve', id: Number(button.dataset.phase12a52Approve) }) });
+        await renderInvoicesPage();
+      });
+    });
+
+    document.querySelectorAll('[data-phase12a52-reopen]').forEach((button) => {
+      button.addEventListener('click', async () => {
+        if (!confirm('Reopen this approved invoice for editing?')) return;
+        await api('invoices', { method: 'POST', body: JSON.stringify({ action: 'reopen', id: Number(button.dataset.phase12a52Reopen) }) });
+        await renderInvoicesPage();
+      });
+    });
+
+    document.querySelectorAll('[data-phase12a52-pdf]').forEach((button) => {
+      button.addEventListener('click', () => {
+        const id = Number(button.dataset.phase12a52Pdf);
+        window.open(endpoint('invoices/pdf') + '&id=' + encodeURIComponent(id), '_blank', 'noopener');
+      });
+    });
+
+    const close = document.getElementById('phase12a52-close-editor');
+    if (close) {
+      close.addEventListener('click', () => {
+        invoiceState.editingId = null;
+        renderInvoicesPage(false);
+      });
+    }
+
+    const form = document.getElementById('phase12a52-form');
+    if (form) {
+      form.addEventListener('submit', async (event) => {
+        event.preventDefault();
+        const fd = new FormData(form);
+        const payload = Object.fromEntries(fd.entries());
+        payload.id = Number(payload.id);
+        payload.quantity = Number(payload.quantity || 0);
+        payload.unitPrice = Number(payload.unitPrice || 0);
+        payload.salesTaxRate = Number(payload.salesTaxRate || 0);
+
+        await api('invoices', { method: 'PATCH', body: JSON.stringify(payload) });
+        invoiceState.editingId = payload.id;
+        await renderInvoicesPage();
+      });
+    }
+
+    const recalc = document.getElementById('phase12a52-recalc');
+    if (recalc && form) {
+      recalc.addEventListener('click', async () => {
+        const fd = new FormData(form);
+        const id = Number(fd.get('id') || 0);
+        await api('invoices', { method: 'POST', body: JSON.stringify({ action: 'recalculate-count', id }) });
+        invoiceState.editingId = id;
+        await renderInvoicesPage();
+      });
+    }
+  }
+
+  async function renderInvoicesPage(reload = true) {
+    document.body.dataset.phase12a52InvoicePage = '1';
+
+    const panel = mainPanel();
+    panel.innerHTML = `
+      <div class="page-header">
+        <div>
+          <h1>Invoices</h1>
+          <p>Loading monthly invoices...</p>
+        </div>
+      </div>
+      <section class="card">Loading...</section>
+    `;
+
+    try {
+      if (reload || !invoiceState.invoices.length) await loadInvoices();
+      const editor = invoiceState.editingId ? editHtml(invoiceById(invoiceState.editingId)) : '';
+      panel.innerHTML = pageShell(editor + listHtml());
+      bindList();
+    } catch (error) {
+      panel.innerHTML = `
+        <div class="page-header"><div><h1>Invoices</h1><p>Could not load invoices</p></div></div>
+        <section class="card"><p class="phase12a52-warn">${esc(error.message || 'Unknown error')}</p></section>
+      `;
+    }
+  }
+
+  function clearInvoicePageOnOtherNav() {
+    document.addEventListener('click', (event) => {
+      const target = event.target && event.target.closest ? event.target.closest('button, a') : null;
+      if (!target) return;
+      if (target.id === 'phase12a52-invoices-nav') return;
+      if (['Dashboard','Monitoring','Safety Performance','Settings','Client View','Client Admin','Terminated'].includes(text(target))) {
+        document.body.dataset.phase12a52InvoicePage = '0';
+      }
+    }, true);
+  }
+
+  function addStyles() {
+    if (document.getElementById('phase12a52-style')) return;
+
+    const style = document.createElement('style');
+    style.id = 'phase12a52-style';
+    style.textContent = `
+      .phase12a52-nav-button {
+        width: calc(100% - 24px);
+        margin: 4px 12px;
+        border: 0;
+        border-radius: 12px;
+        padding: 10px 12px;
+        background: transparent;
+        color: inherit;
+        display: flex;
+        gap: 10px;
+        align-items: center;
+        font-weight: 800;
+        cursor: pointer;
+        text-align: left;
+      }
+
+      .phase12a52-nav-button:hover {
+        background: rgba(31,255,0,.14);
+        box-shadow: inset 4px 0 0 #1fff00;
+      }
+
+      .phase12a52-header-actions,
+      .phase12a52-actions,
+      .phase12a52-form-actions {
+        display: flex;
+        gap: 8px;
+        flex-wrap: wrap;
+      }
+
+      .phase12a52-btn,
+      .phase12a52-actions button {
+        border: 1px solid #16a34a;
+        background: #ecfdf5;
+        color: #166534;
+        border-radius: 999px;
+        padding: 8px 11px;
+        font-weight: 1000;
+        cursor: pointer;
+        text-decoration: none;
+      }
+
+      .phase12a52-btn.secondary {
+        border-color: #cbd5e1;
+        background: #fff;
+        color: #475569;
+      }
+
+      .phase12a52-summary {
+        display: grid;
+        grid-template-columns: repeat(2, minmax(180px, 1fr));
+        gap: 10px;
+        margin-bottom: 14px;
+      }
+
+      .phase12a52-summary div {
+        border: 1px solid #dbe3ef;
+        border-radius: 14px;
+        padding: 12px;
+        background: #fff;
+      }
+
+      .phase12a52-summary b {
+        display: block;
+        font-size: 28px;
+        line-height: 1;
+      }
+
+      .phase12a52-summary span {
+        display: block;
+        margin-top: 5px;
+        color: #475569;
+        font-weight: 900;
+      }
+
+      .phase12a52-table-wrap {
+        overflow: auto;
+        border: 1px solid #dbe3ef;
+        border-radius: 14px;
+      }
+
+      .phase12a52-table {
+        width: 100%;
+        border-collapse: collapse;
+        background: #fff;
+      }
+
+      .phase12a52-table th,
+      .phase12a52-table td {
+        padding: 10px;
+        border-bottom: 1px solid #e2e8f0;
+        text-align: left;
+        white-space: nowrap;
+      }
+
+      .phase12a52-table th {
+        background: #f8fafc;
+        color: #475569;
+        text-transform: uppercase;
+        font-size: 12px;
+      }
+
+      .phase12a52-status {
+        border-radius: 999px;
+        padding: 5px 8px;
+        font-size: 12px;
+        font-weight: 1000;
+      }
+
+      .phase12a52-status.approved {
+        background: #dcfce7;
+        color: #166534;
+      }
+
+      .phase12a52-status.draft {
+        background: #fef3c7;
+        color: #92400e;
+      }
+
+      .phase12a52-editor {
+        border: 1px solid #dbe3ef;
+        border-radius: 16px;
+        padding: 14px;
+        margin-bottom: 14px;
+        background: #f8fafc;
+      }
+
+      .phase12a52-grid {
+        display: grid;
+        grid-template-columns: repeat(4, minmax(160px, 1fr));
+        gap: 10px;
+      }
+
+      .phase12a52-grid label,
+      .phase12a52-wide {
+        display: flex;
+        flex-direction: column;
+        gap: 5px;
+        font-size: 12px;
+        font-weight: 900;
+        color: #475569;
+      }
+
+      .phase12a52-grid input,
+      .phase12a52-wide textarea {
+        border: 1px solid #cbd5e1;
+        border-radius: 12px;
+        padding: 9px 10px;
+        font: inherit;
+        background: #fff;
+        color: #0f172a;
+      }
+
+      .phase12a52-wide {
+        margin-top: 10px;
+      }
+
+      .phase12a52-wide textarea {
+        min-height: 70px;
+      }
+
+      .phase12a52-totals {
+        display: flex;
+        gap: 14px;
+        flex-wrap: wrap;
+        margin: 12px 0;
+      }
+
+      .phase12a52-muted {
+        color: #64748b;
+        font-weight: 800;
+      }
+
+      .phase12a52-warn {
+        color: #b45309;
+        font-weight: 900;
+      }
+
+      @media(max-width: 1000px) {
+        .phase12a52-grid {
+          grid-template-columns: repeat(2, minmax(160px, 1fr));
+        }
+      }
+
+      @media(max-width: 700px) {
+        .phase12a52-grid,
+        .phase12a52-summary {
+          grid-template-columns: 1fr;
+        }
+      }
+    `;
+
+    document.head.appendChild(style);
+  }
+
+  function boot() {
+    addStyles();
+    addNavButton();
+    clearInvoicePageOnOtherNav();
+
+    setInterval(addNavButton, 1000);
+  }
+
+  if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', boot);
+  else boot();
+})();
+
