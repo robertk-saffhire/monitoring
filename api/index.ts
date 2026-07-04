@@ -143,7 +143,7 @@ async function companies(req: any, res: any, user: any) {
 
 async function applicants(req: any, res: any, user: any) {
   const url = new URL(req.url || '/', 'https://local.test'); const companyId = requestedCompanyId(req, user);
-  if (req.method === 'GET') { const result = await query('select id, "fileNumber", "applicantName" as name, "orderDate", "monitorStatus", "mvrStatus", "medExpire", notes from applicants where "companyId"=$1 order by id desc limit 1000', [companyId]); return json(res, 200, { status: 'ok', applicants: result.rows }); }
+  if (req.method === 'GET') { const result = await query('select id, "fileNumber", "applicantName" as name, "orderDate", "monitorStatus", "mvrStatus", "medExpire", notes from applicants where "companyId"=$1 order by id desc limit 10000', [companyId]); return json(res, 200, { status: 'ok', applicants: result.rows }); }
   if (req.method === 'PATCH') { const body = await readBody(req); const id = Number(body.id); if (!id) return json(res, 400, { status: 'error', message: 'Applicant id is required' }); const current = await query('select * from applicants where id=$1 and "companyId"=$2 limit 1', [id, companyId]); if (!current.rows[0]) return json(res, 404, { status: 'error', message: 'Applicant not found' }); const monitorStatus = normalizeMonitorStatus(body.monitorStatus ?? current.rows[0].monitorStatus); const medExpire = body.medExpire ?? current.rows[0].medExpire; const notes = body.notes ?? current.rows[0].notes; const result = await query('update applicants set "monitorStatus"=$1, "medExpire"=$2, "medExpireOverridden"=$3, notes=$4, "updatedAt"=now() where id=$5 and "companyId"=$6 returning id, "fileNumber", "applicantName" as name, "orderDate", "monitorStatus", "mvrStatus", "medExpire", notes', [monitorStatus, medExpire || null, Boolean(medExpire), String(notes || ''), id, companyId]); return json(res, 200, { status: 'ok', applicant: result.rows[0] }); }
   return json(res, 405, { status: 'error', message: 'Method not allowed' });
 }
@@ -197,10 +197,10 @@ function safetyCsvToReport(row: any) {
 async function safetyReports(req: any, res: any, user: any) {
   const url = new URL(req.url || '/', 'https://local.test'); const companyId = requestedCompanyId(req, user);
   if (req.method === 'GET') {
-    let r = await query('select * from safety_reports where "companyId"=$1 order by id desc limit 500', [companyId]);
+    let r = await query('select * from safety_reports where "companyId"=$1 order by id desc limit 1000', [companyId]);
     let source = 'selected_company';
     if (r.rows.length === 0 && user.role === 'admin') {
-      const fallback = await query('select * from safety_reports order by id desc limit 500');
+      const fallback = await query('select * from safety_reports order by id desc limit 1000');
       if (fallback.rows.length > 0) { r = fallback; source = 'all_companies_fallback'; }
     }
     return json(res, 200, { status: 'ok', reports: r.rows, source, requestedCompanyId: companyId });
@@ -308,6 +308,7 @@ async function clientApplicantUpdate(req: any, res: any, user: any) {
 }
 
 
+// PHASE12A39_CLIENT_MONITORING_LIMIT: client dashboard returns up to 1000 monitoring records to match admin scale.
 async function clientDashboard(req: any, res: any, user: any) {
   if (req.method !== 'GET') return json(res, 405, { status: 'error', message: 'Method not allowed' });
   if (!requireCompanyScope(user, res)) return;
@@ -334,11 +335,11 @@ async function clientDashboard(req: any, res: any, user: any) {
 
   const recentApplicants = await query(
     `select id, "fileNumber", "applicantName" as name, "orderDate", "monitorStatus", "mvrStatus", "medExpire", notes
-     from applicants where "companyId"=$1 order by id desc limit 100`, [companyId]);
+     from applicants where "companyId"=$1 order by id desc limit 1000`, [companyId]);
 
   const recentSafety = await query(
     `select id, "fileNumber", "applicantName", created, status, "followUpDate", "prevEmployerName", notes
-     from safety_reports where "companyId"=$1 order by id desc limit 500`, [companyId]);
+     from safety_reports where "companyId"=$1 order by id desc limit 1000`, [companyId]);
 
   const clientUsers = await query(
     `select id, username, "displayName", role, "companyId", "isActive", "mustChangePassword", "lastSignedIn"
@@ -1150,7 +1151,7 @@ async function tazworksSyncClear(req: any, res: any, user: any) {
 async function tazworksSyncRuns(req: any, res: any, user: any) {
   if (req.method !== 'GET') return json(res, 405, { status: 'error', message: 'Method not allowed' });
   if (!requireAdmin(user, res)) return;
-  const result = await query('select * from tazworks_sync_runs order by started_at desc limit 500');
+  const result = await query('select * from tazworks_sync_runs order by started_at desc limit 1000');
   return json(res, 200, { status: 'ok', runs: result.rows });
 }
 
