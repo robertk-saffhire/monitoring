@@ -1439,7 +1439,8 @@ function invoiceDateOnly(value: any) {
 }
 function invoicePreviousMonthStart() {
   const now = new Date();
-  return `${now.getUTCFullYear()}-${String(now.getUTCMonth()).padStart(2, '0')}-01`;
+  const d = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth() - 1, 1));
+  return `${d.getUTCFullYear()}-${String(d.getUTCMonth() + 1).padStart(2, '0')}-01`;
 }
 function invoiceCurrentMonthStart() {
   const now = new Date();
@@ -1485,8 +1486,7 @@ function invoiceTotals(quantity: any, unitPrice: any, salesTaxRate: any) {
   return { quantity: qty, unitPrice: price, salesTaxRate: Number.isFinite(taxRate) ? taxRate : 0, subtotal, salesTax, total };
 }
 async function invoiceCurrentMvrCount(companyId: number) {
-  // PHASE12A53: invoice quantity must match the Monitoring page "On Monitoring" count.
-  // This uses monitorStatus='On', not mvrStatus='On'.
+  // PHASE12A54: invoice quantity must match Monitoring page "On Monitoring" count.
   const result = await query(
     `select count(*)::int as count
      from applicants
@@ -1611,7 +1611,7 @@ async function invoices(req: any, res: any, user: any) {
   const companyId = requestedCompanyId(req, user);
 
   if (req.method === 'GET') {
-    await correctCurrentMonthDraftToPreviousMonth(companyId);
+    try { await correctCurrentMonthDraftToPreviousMonth(companyId); } catch (error) { console.error('invoice draft correction failed', error); }
     await ensureMonthlyInvoice(companyId);
     const list = await query(`${invoiceSelectSql()} where "companyId"=$1 order by "invoiceMonth" desc, id desc limit 36`, [companyId]);
     const currentCount = await invoiceCurrentMvrCount(companyId);
