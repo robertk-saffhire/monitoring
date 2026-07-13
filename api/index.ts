@@ -2511,8 +2511,40 @@ async function invoiceDiagnostics(req: any, res: any, user: any) {
 // PHASE12A11_TAZWORKS_SYNC END
 
 
+
+// PHASE12A65_SUPABASE_KEEPALIVE START
+async function keepalive(req: any, res: any) {
+  const url = new URL(req.url || '/', 'https://local.test');
+  const providedSecret = String(url.searchParams.get('secret') || req.headers['x-cron-secret'] || '').trim();
+  const expectedSecret = String(process.env.CRON_SECRET || '').trim();
+
+  if (!expectedSecret) {
+    return json(res, 500, {
+      status: 'error',
+      message: 'CRON_SECRET is missing in Vercel environment variables'
+    });
+  }
+
+  if (providedSecret !== expectedSecret) {
+    return json(res, 401, {
+      status: 'error',
+      message: 'Unauthorized keepalive request'
+    });
+  }
+
+  const result = await query('select 1 as ok');
+  return json(res, 200, {
+    status: 'ok',
+    keepalive: true,
+    db: result.rows[0]?.ok === 1,
+    checkedAt: new Date().toISOString()
+  });
+}
+// PHASE12A65_SUPABASE_KEEPALIVE END
+
 export default async function handler(req: any, res: any) {
   const route = getRoute(req);
+  if (route === 'keepalive') return keepalive(req, res);
   try {
     const clientAuthResult = await clientAuth(req, res, route);
     if (clientAuthResult !== false) return;
