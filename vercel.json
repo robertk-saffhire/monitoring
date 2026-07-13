@@ -1,44 +1,8 @@
 {
-  "rewrites": [
+  "crons": [
     {
-      "source": "/api/auth/:path*",
-      "destination": "/api/index?path=auth/:path*"
-    },
-    {
-      "source": "/api/companies",
-      "destination": "/api/index?path=companies"
-    },
-    {
-      "source": "/api/applicants",
-      "destination": "/api/index?path=applicants"
-    },
-    {
-      "source": "/api/safety-reports",
-      "destination": "/api/index?path=safety-reports"
-    },
-    {
-      "source": "/api/import-safety-reports",
-      "destination": "/api/index?path=import-safety-reports"
-    },
-    {
-      "source": "/api/users",
-      "destination": "/api/index?path=users"
-    },
-    {
-      "source": "/api/notification-emails",
-      "destination": "/api/index?path=notification-emails"
-    },
-    {
-      "source": "/api/import-applicants",
-      "destination": "/api/index?path=import-applicants"
-    },
-    {
-      "source": "/api/change-password",
-      "destination": "/api/index?path=change-password"
-    },
-    {
-      "source": "/api/system-check",
-      "destination": "/api/index?path=system-check"
+      "path": "/api/index?path=keepalive&secret=${CRON_SECRET}",
+      "schedule": "0 11 * * *"
     }
   ]
 }
