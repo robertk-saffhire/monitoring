@@ -4,5 +4,15 @@
       "path": "/api/index?path=keepalive&secret=${CRON_SECRET}",
       "schedule": "0 11 * * *"
     }
+  ],
+  "rewrites": [
+    {
+      "source": "/api/safety-response-link",
+      "destination": "/api/index?path=safety-response-link"
+    },
+    {
+      "source": "/api/safety-response",
+      "destination": "/api/index?path=safety-response"
+    }
   ]
 }
