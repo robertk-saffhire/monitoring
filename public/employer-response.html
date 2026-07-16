@@ -3,99 +3,256 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>Safety Performance Response</title>
+  <title>Safety Performance Submission</title>
   <style>
-    :root { color-scheme: light; font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; }
-    body { margin: 0; background: #f8fafc; color: #0f172a; }
-    .wrap { max-width: 920px; margin: 0 auto; padding: 28px 16px 46px; }
-    .card { background: #fff; border: 1px solid #dbe3ef; border-radius: 18px; box-shadow: 0 18px 48px rgba(15,23,42,.08); padding: 20px; }
-    h1 { margin: 0 0 6px; font-size: 28px; }
-    p { color: #475569; line-height: 1.5; }
-    .grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 14px; }
-    label { display: flex; flex-direction: column; gap: 6px; font-size: 13px; font-weight: 900; color: #334155; }
-    input, select, textarea { border: 1px solid #cbd5e1; border-radius: 12px; padding: 10px 12px; font: inherit; color: #0f172a; background: #fff; }
-    textarea { min-height: 88px; }
+    :root {
+      color-scheme: light;
+      font-family: Arial, Helvetica, sans-serif;
+      --blue: #0d6efd;
+      --header-blue: #cfe3ff;
+      --header-text: #003b73;
+      --border: #d6dde6;
+      --muted: #6b7280;
+      --ink: #1f2933;
+      --panel: #ffffff;
+      --dark-footer: #172023;
+    }
+
+    * { box-sizing: border-box; }
+    body { margin: 0; background: #ffffff; color: var(--ink); font-size: 14px; }
+    .page-shell { min-height: 100vh; background: linear-gradient(#ffffff 0%, #ffffff calc(100% - 44px), var(--dark-footer) calc(100% - 44px)); }
+    .page { max-width: 960px; padding: 0 18px 44px; }
+    h1 { margin: 0 0 22px; padding-top: 0; font-size: 36px; line-height: 1.05; font-weight: 800; color: #20272f; letter-spacing: -0.04em; }
+    .outer-card { border: 1px solid #ccd4df; border-radius: 6px; background: #fff; padding: 16px; margin-left: 10px; }
+    .message { margin: 0 0 14px; }
+    .alert { border-radius: 6px; padding: 12px 14px; border: 1px solid; font-weight: 600; }
+    .alert.ok { background: #f0fdf4; border-color: #bbf7d0; color: #166534; }
+    .alert.error { background: #fef2f2; border-color: #fecaca; color: #991b1b; }
+
+    .section { border: 1px solid var(--border); border-radius: 5px; background: var(--panel); margin: 0 0 16px; overflow: hidden; }
+    .section-header { background: var(--header-blue); color: #003b73; padding: 14px 20px; font-size: 14px; font-weight: 500; display: flex; justify-content: space-between; align-items: center; }
+    .section-body { padding: 28px 20px 26px; }
+    .chevron { color: #003b73; font-size: 22px; line-height: 1; font-weight: 300; }
+    .subhead { font-weight: 700; margin: 0 0 18px; color: #20272f; }
+    .subhead.spaced { margin-top: 34px; }
+    .signature-title { font-weight: 700; margin: 30px 0 6px; }
+
+    .grid { display: grid; gap: 20px; align-items: end; }
+    .grid.three { grid-template-columns: 1fr 1fr 1fr; }
+    .grid.two { grid-template-columns: 1fr 1fr; }
+    .grid.prev-address { grid-template-columns: 1.55fr .72fr .72fr; }
+    .grid.employer-contact { grid-template-columns: .9fr .9fr .9fr; }
+    .grid.section-two { grid-template-columns: 1fr .45fr .45fr; gap: 22px; }
+    .grid.dot-grid { grid-template-columns: 1fr 1.1fr; gap: 34px; align-items: start; }
     .wide { grid-column: 1 / -1; }
-    .checks { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; margin-top: 6px; }
-    .check { display: flex; align-items: center; gap: 8px; border: 1px solid #dbe3ef; border-radius: 12px; padding: 10px; font-weight: 800; color: #334155; }
-    .check input { width: auto; }
-    button { border: 0; border-radius: 14px; padding: 12px 16px; background: #16a34a; color: #fff; font-weight: 1000; cursor: pointer; }
-    .error { background: #fef2f2; color: #991b1b; border: 1px solid #fecaca; padding: 12px; border-radius: 12px; margin: 14px 0; }
-    .ok { background: #f0fdf4; color: #166534; border: 1px solid #bbf7d0; padding: 12px; border-radius: 12px; margin: 14px 0; }
-    @media (max-width: 720px) { .grid { grid-template-columns: 1fr; } .checks { grid-template-columns: 1fr; } }
+    .full-width { width: 100%; }
+
+    label.field { display: flex; flex-direction: column; gap: 6px; margin: 0; font-size: 14px; font-weight: 400; color: #151b23; }
+    .required { color: #d12b2b; }
+    input, select, textarea { width: 100%; border: 1px solid var(--border); border-radius: 5px; background: #fff; color: #171c22; font: inherit; padding: 8px 12px; min-height: 36px; }
+    input[readonly], textarea[readonly], select:disabled { background: #fff; color: #1f2933; opacity: 1; }
+    textarea { min-height: 128px; resize: vertical; line-height: 1.45; }
+    .notes-large { min-height: 128px; }
+    .other-accidents { min-height: 128px; max-width: 430px; }
+    select { appearance: auto; }
+    .btn-bar { margin: 28px 0 22px; }
+    .btn-row { display: flex; gap: 16px; margin-top: 14px; }
+    button { border: 0; border-radius: 5px; cursor: pointer; font: inherit; font-weight: 700; }
+    .primary-btn { background: #0d6efd; color: white; min-height: 36px; padding: 8px 20px; }
+    .primary-btn.full { width: 100%; }
+    .secondary-btn { background: #646d76; color: #fff; min-height: 36px; padding: 8px 18px; }
+    button:disabled { opacity: .65; cursor: not-allowed; }
+
+    .check-line { display: flex; gap: 8px; align-items: center; margin: 7px 0; font-size: 14px; font-weight: 400; }
+    .check-line input { width: 14px; height: 14px; min-height: auto; padding: 0; margin: 0; }
+    .vehicle-box { margin-top: 6px; }
+    .vehicle-title, .dot-title { font-weight: 700; margin: 0 0 8px; }
+
+    .accident-table-wrap { margin-top: 26px; max-width: 880px; overflow-x: auto; }
+    table { width: 100%; border-collapse: collapse; }
+    th, td { border: 1px solid #c9d0d8; padding: 10px 12px; text-align: left; vertical-align: middle; }
+    th { background: #f6f7f9; font-weight: 700; }
+    td input { min-width: 120px; }
+    td:first-child input { min-width: 142px; }
+    .small-muted { color: var(--muted); font-size: 12px; margin-top: 6px; }
+
+    @media (max-width: 820px) {
+      .page { max-width: none; padding: 0 10px 44px; }
+      h1 { font-size: 30px; }
+      .outer-card { margin-left: 0; padding: 12px; }
+      .grid, .grid.three, .grid.two, .grid.prev-address, .grid.employer-contact, .grid.section-two, .grid.dot-grid { grid-template-columns: 1fr; }
+      .section-body { padding: 20px 16px 22px; }
+      .other-accidents { max-width: none; }
+      .btn-row { flex-wrap: wrap; gap: 10px; }
+    }
   </style>
 </head>
 <body>
-  <main class="wrap">
-    <section class="card">
-      <h1>Safety Performance Response</h1>
-      <p>Please complete the information below. This secure form saves directly back to SaffHire.</p>
-      <div id="message"></div>
-      <form id="form" style="display:none;">
-        <div class="grid">
-          <label>File Number<input name="fileNumber" readonly /></label>
-          <label>Applicant<input name="applicantName" readonly /></label>
-          <label>Previous Employer<input name="prevEmployerName" readonly /></label>
-          <label>Was applicant employed by your company?
-            <select name="employedByCompany"><option></option><option>Yes</option><option>No</option></select>
-          </label>
-          <label>Job Title<input name="jobTitle" /></label>
-          <label>From Date<input name="fromDate" type="date" /></label>
-          <label>To Date<input name="toDate" type="date" /></label>
-          <label>Did they drive a motor vehicle?
-            <select name="droveMotorVehicle"><option></option><option>Yes</option><option>No</option></select>
-          </label>
-          <div class="wide">
-            <b>Vehicle Type</b>
-            <div class="checks">
-              <label class="check"><input type="checkbox" name="vehicleStraightTruck" /> Straight Truck</label>
-              <label class="check"><input type="checkbox" name="vehicleTractorSemitrailer" /> Tractor/Semitrailer</label>
-              <label class="check"><input type="checkbox" name="vehicleBus" /> Bus</label>
-              <label class="check"><input type="checkbox" name="vehicleCargoTank" /> Cargo Tank</label>
-              <label class="check"><input type="checkbox" name="vehicleDoublesTriples" /> Doubles/Triples</label>
-              <label class="check"><input type="checkbox" name="vehicleOther" /> Other</label>
+  <main class="page-shell">
+    <div class="page">
+      <h1>Safety Performance Submission</h1>
+      <section class="outer-card">
+        <div id="message" class="message"></div>
+
+        <form id="form" style="display:none;">
+          <section class="section">
+            <div class="section-header"><span>SECTION 1: To be Completed by Prospective Employee</span><span class="chevron">⌃</span></div>
+            <div class="section-body">
+              <div class="grid three">
+                <label class="field">Applicant Name <span class="required">*</span><input name="applicantName" readonly /></label>
+                <label class="field">File Number<input name="fileNumber" readonly /></label>
+                <label class="field">Status<select name="status" disabled><option></option><option>S1 Complete</option><option>Emp Sent</option><option>Emp Complete</option><option>Completed</option></select></label>
+              </div>
+
+              <div class="grid two" style="margin-top:18px;">
+                <label class="field wide">Follow Up Date<input name="followUpDate" type="date" readonly /></label>
+              </div>
+
+              <label class="field wide" style="margin-top:28px;">Notes<textarea name="notes" class="notes-large" readonly></textarea></label>
+
+              <div class="btn-bar"><button type="submit" class="primary-btn full">Save Form</button></div>
+
+              <p class="subhead">Previous Employer</p>
+              <div class="grid two">
+                <label class="field">Name<input name="prevEmployerName" readonly /></label>
+                <label class="field">Email<input name="prevEmployerEmail" readonly /></label>
+              </div>
+
+              <div class="grid prev-address" style="margin-top:34px;">
+                <label class="field">Previous Employer Street<input name="prevEmployerStreet" readonly /></label>
+                <label class="field">Previous Employer Phone<input name="prevEmployerPhone" readonly /></label>
+                <label class="field">Previous Employer Fax<input name="prevEmployerFax" readonly /></label>
+              </div>
+
+              <div class="grid two" style="margin-top:34px;">
+                <label class="field">Previous Employer City/State/Zip<input name="prevEmployerCityStateZip" readonly /></label>
+              </div>
+
+              <p class="subhead spaced">Prospective Employer</p>
+              <div class="grid two">
+                <label class="field">Name<input name="employerName" readonly /></label>
+                <label class="field">Attention<input name="employerAttention" readonly /></label>
+              </div>
+
+              <div class="grid two" style="margin-top:34px;">
+                <label class="field">Street<input name="employerStreet" readonly /></label>
+                <label class="field">City/State/Zip<input name="employerCityStateZip" readonly /></label>
+              </div>
+
+              <div class="grid employer-contact" style="margin-top:34px;">
+                <label class="field">Phone<input name="employerPhone" readonly /></label>
+                <label class="field">Fax<input name="employerFax" readonly /></label>
+                <label class="field">Employer Email<input name="employerEmail" readonly /></label>
+              </div>
+
+              <div class="grid two" style="margin-top:34px;">
+                <label class="field">Confidential Fax<input name="confFax" readonly /></label>
+                <label class="field">Confidential Email<input name="confEmail" readonly /></label>
+              </div>
+
+              <p class="signature-title">Check this box to verify your name above as your signature.</p>
+              <label class="check-line"><input type="checkbox" name="signatureConfirmed" /> I verify the name above as my signature for this document.</label>
             </div>
-          </div>
-          <label class="wide">Accident History
-            <select name="accidentHistory"><option></option><option>No accidents reported</option><option>Accidents reported below</option></select>
-          </label>
-          <label>Accident Date 1<input name="accidentDate1" type="date" /></label>
-          <label>Accident Location 1<input name="accidentLocation1" /></label>
-          <label>Injuries 1<input name="accidentInjuries1" /></label>
-          <label>Fatalities 1<input name="accidentFatalities1" /></label>
-          <label>Accident Date 2<input name="accidentDate2" type="date" /></label>
-          <label>Accident Location 2<input name="accidentLocation2" /></label>
-          <label>Injuries 2<input name="accidentInjuries2" /></label>
-          <label>Fatalities 2<input name="accidentFatalities2" /></label>
-          <label>Accident Date 3<input name="accidentDate3" type="date" /></label>
-          <label>Accident Location 3<input name="accidentLocation3" /></label>
-          <label>Injuries 3<input name="accidentInjuries3" /></label>
-          <label>Fatalities 3<input name="accidentFatalities3" /></label>
-          <label class="wide">Other Accident Details<textarea name="otherAccidents"></textarea></label>
-          <div class="wide">
-            <b>DOT Drug/Alcohol History</b>
-            <div class="checks">
-              <label class="check"><input type="checkbox" name="dotAlcoholTestPositive" /> Alcohol test positive</label>
-              <label class="check"><input type="checkbox" name="dotDrugTestPositive" /> Drug test positive</label>
-              <label class="check"><input type="checkbox" name="dotRefusedTest" /> Refused test</label>
-              <label class="check"><input type="checkbox" name="dotOtherViolations" /> Other DOT violation</label>
+          </section>
+
+          <section class="section">
+            <div class="section-header"><span>SECTION 2: To be Completed by Previous Employer</span><span class="chevron">⌃</span></div>
+            <div class="section-body">
+              <p class="subhead">To Be Completed By Previous Employer</p>
+              <label class="field" style="max-width:430px;">Was the applicant employed or used by your company?
+                <select name="employedByCompany"><option value=""></option><option>Yes</option><option>No</option></select>
+              </label>
+
+              <div class="grid section-two" style="margin-top:34px;">
+                <label class="field">Job Title<input name="jobTitle" /></label>
+                <label class="field">From Date<input name="fromDate" type="date" /></label>
+                <label class="field">To Date<input name="toDate" type="date" /></label>
+              </div>
+
+              <div class="grid dot-grid" style="margin-top:34px;">
+                <label class="field">Did they drive a motor vehicle?
+                  <select name="droveMotorVehicle"><option value=""></option><option>Yes</option><option>No</option></select>
+                </label>
+                <div class="vehicle-box">
+                  <p class="vehicle-title">Types of Vehicles Operated</p>
+                  <label class="check-line"><input type="checkbox" name="vehicleStraightTruck" /> Straight Truck</label>
+                  <label class="check-line"><input type="checkbox" name="vehicleTractorSemitrailer" /> Tractor-Semitrailer</label>
+                  <label class="check-line"><input type="checkbox" name="vehicleBus" /> Bus</label>
+                  <label class="check-line"><input type="checkbox" name="vehicleCargoTank" /> Cargo Tank</label>
+                  <label class="check-line"><input type="checkbox" name="vehicleDoublesTriples" /> Doubles/Triples</label>
+                  <label class="check-line"><input type="checkbox" name="vehicleOther" /> Other</label>
+                </div>
+              </div>
             </div>
+          </section>
+
+          <section class="section">
+            <div class="section-header"><span>SECTION 3: Accident History (Previous Employer)</span><span class="chevron">⌃</span></div>
+            <div class="section-body">
+              <label class="field" style="max-width:430px;">Is there accident history for this driver?
+                <select name="accidentHistory"><option value=""></option><option>No accidents reported</option><option>Accidents reported</option><option>Accidents reported below</option></select>
+              </label>
+
+              <div class="accident-table-wrap">
+                <table>
+                  <thead><tr><th>Date</th><th>Location</th><th>Injuries</th><th>Fatalities</th><th>Hazmat Spill</th></tr></thead>
+                  <tbody>
+                    <tr><td><input name="accidentDate1" type="date" /></td><td><input name="accidentLocation1" /></td><td><input name="accidentInjuries1" /></td><td><input name="accidentFatalities1" /></td><td><input name="accidentHazmat1" /></td></tr>
+                    <tr><td><input name="accidentDate2" type="date" /></td><td><input name="accidentLocation2" /></td><td><input name="accidentInjuries2" /></td><td><input name="accidentFatalities2" /></td><td><input name="accidentHazmat2" /></td></tr>
+                    <tr><td><input name="accidentDate3" type="date" /></td><td><input name="accidentLocation3" /></td><td><input name="accidentInjuries3" /></td><td><input name="accidentFatalities3" /></td><td><input name="accidentHazmat3" /></td></tr>
+                  </tbody>
+                </table>
+              </div>
+
+              <label class="field" style="margin-top:28px;">Other accidents (reported to agencies or insurers)<textarea name="otherAccidents" class="other-accidents"></textarea></label>
+            </div>
+          </section>
+
+          <section class="section">
+            <div class="section-header"><span>SECTION 4: DOT Release of Information — Previous Employer</span><span class="chevron">⌃</span></div>
+            <div class="section-body">
+              <div class="grid dot-grid">
+                <label class="field">Is your company subject to DOT-regulated testing?
+                  <select name="dotSubjectToTesting"><option value=""></option><option>Yes</option><option>No</option><option>Not sure</option></select>
+                </label>
+                <div>
+                  <p class="dot-title">In the past 2 or 3 years, has the employee:</p>
+                  <label class="check-line"><input type="checkbox" name="dotAlcoholTestPositive" /> Alcohol test result ≥ 0.04</label>
+                  <label class="check-line"><input type="checkbox" name="dotDrugTestPositive" /> Verified positive drug test</label>
+                  <label class="check-line"><input type="checkbox" name="dotRefusedTest" /> Refused to be tested</label>
+                  <label class="check-line"><input type="checkbox" name="dotOtherViolations" /> Other DOT violations</label>
+                  <label class="check-line"><input type="checkbox" name="dotPriorReportedViolation" /> Prior employer reported violation</label>
+                  <label class="check-line"><input type="checkbox" name="dotCompletedReturnToDuty" /> Completed return-to-duty process</label>
+                </div>
+              </div>
+            </div>
+          </section>
+
+          <section class="section">
+            <div class="section-header"><span>SECTION 5: Information Received</span><span class="chevron">⌃</span></div>
+            <div class="section-body">
+              <label class="field full-width">Information Received From<input name="infoReceivedFrom" /></label>
+              <label class="field full-width" style="margin-top:18px;">Information Received Date<input name="infoReceivedDate" type="date" /></label>
+            </div>
+          </section>
+
+          <div class="btn-row">
+            <button type="submit" class="primary-btn">Save</button>
+            <button type="submit" class="secondary-btn">Email / Fax / Send</button>
           </div>
-          <label>Completed By<input name="infoReceivedFrom" /></label>
-          <label>Date Completed<input name="infoReceivedDate" type="date" /></label>
-          <label class="wide">Notes<textarea name="notes"></textarea></label>
-        </div>
-        <p><button type="submit">Submit Response</button></p>
-      </form>
-    </section>
+        </form>
+      </section>
+    </div>
   </main>
+
   <script>
     const token = new URLSearchParams(location.search).get('token') || '';
     const message = document.getElementById('message');
     const form = document.getElementById('form');
 
-    function setMessage(html, cls) {
-      message.innerHTML = '<div class="' + cls + '">' + html + '</div>';
+    function setMessage(text, cls) {
+      if (!text) { message.innerHTML = ''; return; }
+      message.innerHTML = '<div class="alert ' + cls + '">' + text + '</div>';
     }
 
     async function api(url, options) {
@@ -129,20 +286,28 @@
 
     async function load() {
       if (!token) throw new Error('Missing secure form token.');
+      setMessage('Loading secure form...', 'ok');
       const data = await apiSafety('&token=' + encodeURIComponent(token));
       fillForm(data.report || {});
       form.style.display = '';
-      setMessage('Form loaded. Please complete and submit below.', 'ok');
+      setMessage('', 'ok');
     }
 
     form.addEventListener('submit', async (event) => {
       event.preventDefault();
-      const body = { token };
-      Array.from(new FormData(form).entries()).forEach(([key, value]) => body[key] = value);
-      Array.from(form.querySelectorAll('input[type="checkbox"]')).forEach((input) => body[input.name] = input.checked);
-      await apiSafety('', { method: 'POST', body: JSON.stringify(body) });
-      form.style.display = 'none';
-      setMessage('Thank you. Your response has been submitted.', 'ok');
+      const submitButtons = form.querySelectorAll('button[type="submit"]');
+      submitButtons.forEach((button) => button.disabled = true);
+      try {
+        const body = { token };
+        Array.from(new FormData(form).entries()).forEach(([key, value]) => body[key] = value);
+        Array.from(form.querySelectorAll('input[type="checkbox"]')).forEach((input) => body[input.name] = input.checked);
+        await apiSafety('', { method: 'POST', body: JSON.stringify(body) });
+        form.style.display = 'none';
+        setMessage('Thank you. Your response has been submitted.', 'ok');
+      } catch (error) {
+        setMessage(error.message || 'Could not submit this form.', 'error');
+        submitButtons.forEach((button) => button.disabled = false);
+      }
     });
 
     load().catch((error) => {
