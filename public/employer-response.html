@@ -242,9 +242,8 @@
                   <label class="check-line"><input type="checkbox" name="dotDrugTestPositive" data-role="employer" /> Verified positive drug test</label>
                   <label class="check-line"><input type="checkbox" name="dotRefusedTest" data-role="employer" /> Refused to be tested</label>
                   <label class="check-line"><input type="checkbox" name="dotOtherViolations" data-role="employer" /> Other DOT violations</label>
-                  <label class="check-line"><input type="checkbox" disabled /> Prior employer reported violation</label>
-                  <label class="check-line"><input type="checkbox" disabled /> Completed return-to-duty process</label>
-                  <div class="small-muted">The last two visual items are shown for document clarity. They are not saved unless database fields are added later.</div>
+                  <label class="check-line"><input type="checkbox" name="dotPriorEmployerReportedViolation" data-role="employer" /> Prior employer reported violation</label>
+                  <label class="check-line"><input type="checkbox" name="dotCompletedReturnToDutyProcess" data-role="employer" /> Completed return-to-duty process</label>
                 </div>
               </div>
             </div>
@@ -275,7 +274,7 @@
     const form = document.getElementById('form');
     const message = document.getElementById('message');
     const modeBanner = document.getElementById('modeBanner');
-    const boolFields = new Set(['vehicleStraightTruck','vehicleTractorSemitrailer','vehicleBus','vehicleCargoTank','vehicleDoublesTriples','vehicleOther','dotAlcoholTestPositive','dotDrugTestPositive','dotRefusedTest','dotOtherViolations']);
+    const boolFields = new Set(['vehicleStraightTruck','vehicleTractorSemitrailer','vehicleBus','vehicleCargoTank','vehicleDoublesTriples','vehicleOther','dotAlcoholTestPositive','dotDrugTestPositive','dotRefusedTest','dotOtherViolations','dotPriorEmployerReportedViolation','dotCompletedReturnToDutyProcess']);
     const dateFields = new Set(['followUpDate','fromDate','toDate','accidentDate1','accidentDate2','accidentDate3','infoReceivedDate']);
     let responseRole = 'employer';
 
