@@ -2617,27 +2617,37 @@ async function safetyResponseLink(req: any, res: any, user: any) {
 
   const body = await readBody(req);
   const companyId = Number(body.companyId || user.companyId || 1);
-  const fileNumber = String(body.fileNumber || '').trim();
+  const fileNumber = String(body.fileNumber || body.referenceId || body.ReferenceId || '').trim();
+  const reportId = Number(body.reportId || body.id || 0);
 
-  if (!fileNumber) {
-    return json(res, 400, { status: 'error', message: 'File number is required' });
+  let report;
+  if (reportId) {
+    report = await query(
+      `select id, "companyId", "fileNumber", "applicantName", "prevEmployerName"
+       from safety_reports
+       where "companyId"=$1 and id=$2
+       limit 1`,
+      [companyId, reportId]
+    );
+  } else if (fileNumber) {
+    report = await query(
+      `select id, "companyId", "fileNumber", "applicantName", "prevEmployerName"
+       from safety_reports
+       where "companyId"=$1 and trim("fileNumber"::text)=trim($2)
+       order by id desc
+       limit 1`,
+      [companyId, fileNumber]
+    );
+  } else {
+    return json(res, 400, { status: 'error', message: 'File number or report id is required' });
   }
-
-  const report = await query(
-    `select id, "companyId", "fileNumber", "applicantName", "prevEmployerName"
-     from safety_reports
-     where "companyId"=$1 and "fileNumber"=$2
-     order by id asc
-     limit 1`,
-    [companyId, fileNumber]
-  );
 
   const row = report.rows[0];
 
   if (!row) {
     return json(res, 404, {
       status: 'error',
-      message: `Safety report not found for file ${fileNumber}`
+      message: reportId ? `Safety report not found for report id ${reportId}` : `Safety report not found for file ${fileNumber}`
     });
   }
 
@@ -2746,6 +2756,47 @@ async function safetyResponsePublic(req: any, res: any) {
 
   return json(res, 405, { status: 'error', message: 'Method not allowed' });
 }
+
+async function safetyResponseDiagnostics(req: any, res: any, user: any) {
+  if (!requireAdmin(user, res)) return;
+
+  const companyId = requestedCompanyId(req, user);
+  const url = new URL(req.url || '/', 'https://local.test');
+  const fileNumber = String(url.searchParams.get('fileNumber') || '').trim();
+
+  const checks: any[] = [];
+
+  async function check(name: string, fn: any) {
+    try {
+      checks.push({ name, ok: true, value: await fn() });
+    } catch (error: any) {
+      checks.push({ name, ok: false, error: errorMessage(error) });
+    }
+  }
+
+  await check('safety_reports table', async () => {
+    const r = await query("select exists (select 1 from information_schema.tables where table_name='safety_reports') as exists");
+    return r.rows[0]?.exists;
+  });
+
+  await check('safety_reports count', async () => {
+    const r = await query('select count(*)::int as count from safety_reports where "companyId"=$1', [companyId]);
+    return r.rows[0]?.count;
+  });
+
+  if (fileNumber) {
+    await check('matching file number', async () => {
+      const r = await query(
+        'select id, "fileNumber", "applicantName", status from safety_reports where "companyId"=$1 and trim("fileNumber"::text)=trim($2) order by id desc limit 3',
+        [companyId, fileNumber]
+      );
+      return r.rows;
+    });
+  }
+
+  return json(res, 200, { status: 'ok', checks });
+}
+
 // PHASE12A66_SAFETY_RESPONSE_LINK_FIX END
 
 
@@ -2782,7 +2833,7 @@ async function keepalive(req: any, res: any) {
 export default async function handler(req: any, res: any) {
   const route = getRoute(req);
   if (route === 'keepalive') return keepalive(req, res);
-  if (route === 'safety-response') return safetyResponsePublic(req, res);
+  if (route === 'safety-response') { try { return await safetyResponsePublic(req, res); } catch (error: any) { return json(res, 500, { status: 'error', message: errorMessage(error) || 'Could not load safety response form' }); } }
   try {
     const clientAuthResult = await clientAuth(req, res, route);
     if (clientAuthResult !== false) return;
@@ -2794,6 +2845,7 @@ export default async function handler(req: any, res: any) {
     if (route === 'applicants') return applicants(req, res, user);
     if (route === 'safety-reports') return safetyReports(req, res, user);
     if (route === 'safety-response-link') return safetyResponseLink(req, res, user);
+    if (route === 'safety-response-diagnostics') return safetyResponseDiagnostics(req, res, user);
     if (route === 'import-safety-reports') return importSafetyReports(req, res, user);
     if (route === 'users') return users(req, res, user);
     if (route === 'notification-emails') return notificationEmails(req, res, user);
