@@ -15,8 +15,25 @@
     return (el && el.textContent ? el.textContent : '').trim();
   }
 
+  function isCurrentResponseLinkUi(el) {
+    if (!el || !el.closest) return false;
+
+    // PHASE12A68_RESPONSE_LINK_MODAL_EXEMPTION:
+    // Do not remove the current working Response Link UI.
+    // This cleanup file is only supposed to remove the old leaked rogue panel.
+    return Boolean(
+      el.closest('#phase6-modal') ||
+      el.closest('.phase6-modal') ||
+      el.closest('.phase6-modal-card') ||
+      el.closest('#phase6-panel') ||
+      el.closest('.phase6-panel')
+    );
+  }
+
   function looksLikeRogueEmployerPanel(el) {
     if (!el || el === document.body || el === document.documentElement) return false;
+    if (isCurrentResponseLinkUi(el)) return false;
+
 
     const t = text(el);
     if (!t) return false;
@@ -54,6 +71,7 @@
     // Extra cleanup for the exact bottom page leak. It often appears as raw elements after the app root.
     Array.from(document.body.children).forEach((child) => {
       if (child.id === 'root') return;
+      if (isCurrentResponseLinkUi(child)) return;
       if (looksLikeRogueEmployerPanel(child)) child.remove();
     });
   }

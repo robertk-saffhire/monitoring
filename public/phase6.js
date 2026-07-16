@@ -181,6 +181,7 @@
     };
   }
 
+  // PHASE12A68_RESPONSE_LINK_MODAL_EXEMPTION
   function getModal() {
     let modal = document.getElementById('phase6-modal');
     if (modal) return modal;
@@ -190,11 +191,11 @@
     modal.innerHTML = `
       <div class="phase6-modal-card">
         <div class="phase6-modal-head">
-          <h2>Employer Response Form Link</h2>
+          <h2>Secure Employer Response Link</h2>
           <button type="button" data-phase6-close>×</button>
         </div>
         <div class="phase6-link-box">
-          <span>Secure Form Link</span>
+          <span>Secure response URL</span>
           <textarea data-phase6-link rows="3" readonly></textarea>
         </div>
         <div class="phase6-link-meta" data-phase6-meta></div>
