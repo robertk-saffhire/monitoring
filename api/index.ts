@@ -2512,6 +2512,243 @@ async function invoiceDiagnostics(req: any, res: any, user: any) {
 
 
 
+
+// PHASE12A66_SAFETY_RESPONSE_LINK_FIX START
+const SAFETY_RESPONSE_BOOL_FIELDS = new Set([
+  'vehicleStraightTruck',
+  'vehicleTractorSemitrailer',
+  'vehicleBus',
+  'vehicleCargoTank',
+  'vehicleDoublesTriples',
+  'vehicleOther',
+  'dotAlcoholTestPositive',
+  'dotDrugTestPositive',
+  'dotRefusedTest',
+  'dotOtherViolations'
+]);
+
+const SAFETY_RESPONSE_TEXT_FIELDS = [
+  'employedByCompany',
+  'jobTitle',
+  'fromDate',
+  'toDate',
+  'droveMotorVehicle',
+  'accidentHistory',
+  'accidentDate1',
+  'accidentLocation1',
+  'accidentInjuries1',
+  'accidentFatalities1',
+  'accidentDate2',
+  'accidentLocation2',
+  'accidentInjuries2',
+  'accidentFatalities2',
+  'accidentDate3',
+  'accidentLocation3',
+  'accidentInjuries3',
+  'accidentFatalities3',
+  'otherAccidents',
+  'infoReceivedFrom',
+  'infoReceivedDate'
+];
+
+function safetyResponseClean(value: any) {
+  return String(value ?? '').trim();
+}
+
+function safetyResponseBool(value: any) {
+  const raw = String(value || '').toLowerCase();
+  return value === true || raw === 'true' || raw === 'on' || raw === 'yes' || raw === '1';
+}
+
+async function verifySafetyResponseToken(token: string) {
+  const { payload } = await jwtVerify(token, secret());
+  if (payload.type !== 'safety_response') throw new Error('Invalid response link');
+  return payload as any;
+}
+
+function publicSafetyResponseReport(row: any) {
+  const allowed = [
+    'id',
+    'fileNumber',
+    'applicantName',
+    'prevEmployerName',
+    'employedByCompany',
+    'jobTitle',
+    'fromDate',
+    'toDate',
+    'droveMotorVehicle',
+    'vehicleStraightTruck',
+    'vehicleTractorSemitrailer',
+    'vehicleBus',
+    'vehicleCargoTank',
+    'vehicleDoublesTriples',
+    'vehicleOther',
+    'accidentHistory',
+    'accidentDate1',
+    'accidentLocation1',
+    'accidentInjuries1',
+    'accidentFatalities1',
+    'accidentDate2',
+    'accidentLocation2',
+    'accidentInjuries2',
+    'accidentFatalities2',
+    'accidentDate3',
+    'accidentLocation3',
+    'accidentInjuries3',
+    'accidentFatalities3',
+    'otherAccidents',
+    'dotAlcoholTestPositive',
+    'dotDrugTestPositive',
+    'dotRefusedTest',
+    'dotOtherViolations',
+    'infoReceivedFrom',
+    'infoReceivedDate'
+  ];
+
+  const out: any = {};
+  allowed.forEach((key) => out[key] = row[key]);
+  return out;
+}
+
+async function safetyResponseLink(req: any, res: any, user: any) {
+  if (req.method !== 'POST') {
+    return json(res, 405, { status: 'error', message: 'Method not allowed' });
+  }
+
+  const body = await readBody(req);
+  const companyId = Number(body.companyId || user.companyId || 1);
+  const fileNumber = String(body.fileNumber || '').trim();
+
+  if (!fileNumber) {
+    return json(res, 400, { status: 'error', message: 'File number is required' });
+  }
+
+  const report = await query(
+    `select id, "companyId", "fileNumber", "applicantName", "prevEmployerName"
+     from safety_reports
+     where "companyId"=$1 and "fileNumber"=$2
+     order by id asc
+     limit 1`,
+    [companyId, fileNumber]
+  );
+
+  const row = report.rows[0];
+
+  if (!row) {
+    return json(res, 404, {
+      status: 'error',
+      message: `Safety report not found for file ${fileNumber}`
+    });
+  }
+
+  const expiresAt = new Date(Date.now() + 14 * 24 * 60 * 60 * 1000);
+
+  const token = await new SignJWT({
+    type: 'safety_response',
+    reportId: row.id,
+    companyId: row.companyId,
+    fileNumber: row.fileNumber
+  })
+    .setProtectedHeader({ alg: 'HS256' })
+    .setIssuedAt()
+    .setExpirationTime('14d')
+    .sign(secret());
+
+  const origin = req.headers.origin || `https://${req.headers.host}`;
+  const formUrl = `${origin}/employer-response.html?token=${encodeURIComponent(token)}`;
+
+  return json(res, 200, {
+    status: 'ok',
+    formUrl,
+    expiresAt: expiresAt.toISOString(),
+    report: row
+  });
+}
+
+async function safetyResponsePublic(req: any, res: any) {
+  const url = new URL(req.url || '/', 'https://local.test');
+
+  if (req.method === 'GET') {
+    const token = String(url.searchParams.get('token') || '');
+    if (!token) return json(res, 400, { status: 'error', message: 'Missing response token' });
+
+    const payload = await verifySafetyResponseToken(token);
+
+    const result = await query(
+      'select * from safety_reports where id=$1 and "companyId"=$2 limit 1',
+      [Number(payload.reportId), Number(payload.companyId)]
+    );
+
+    const row = result.rows[0];
+    if (!row) return json(res, 404, { status: 'error', message: 'Safety report not found' });
+
+    return json(res, 200, {
+      status: 'ok',
+      report: publicSafetyResponseReport(row)
+    });
+  }
+
+  if (req.method === 'POST') {
+    const body = await readBody(req);
+    const token = String(body.token || '');
+
+    if (!token) return json(res, 400, { status: 'error', message: 'Missing response token' });
+
+    const payload = await verifySafetyResponseToken(token);
+
+    const values: any[] = [];
+    const assignments: string[] = [];
+
+    SAFETY_RESPONSE_TEXT_FIELDS.forEach((field) => {
+      values.push(safetyResponseClean(body[field]));
+      assignments.push(`"${field}"=$${values.length}`);
+    });
+
+    SAFETY_RESPONSE_BOOL_FIELDS.forEach((field) => {
+      values.push(safetyResponseBool(body[field]));
+      assignments.push(`"${field}"=$${values.length}`);
+    });
+
+    const extraNotes = safetyResponseClean(body.notes);
+    const completedBy = safetyResponseClean(body.infoReceivedFrom);
+    const completedDate = safetyResponseClean(body.infoReceivedDate) || new Date().toISOString().slice(0, 10);
+
+    values.push(`Employer response form submitted ${completedDate}${completedBy ? ` by ${completedBy}` : ''}.${extraNotes ? ` Notes: ${extraNotes}` : ''}`);
+    const noteParam = values.length;
+
+    values.push(Number(payload.reportId));
+    const reportParam = values.length;
+
+    values.push(Number(payload.companyId));
+    const companyParam = values.length;
+
+    const sql = `
+      update safety_reports
+      set ${assignments.join(',')},
+          status='Emp Complete',
+          "followUpDate"='',
+          notes=trim(both E'\n' from concat(coalesce(notes,''), E'\n', $${noteParam})),
+          "updatedAt"=now()
+      where id=$${reportParam} and "companyId"=$${companyParam}
+      returning *
+    `;
+
+    const result = await query(sql, values);
+    const row = result.rows[0];
+
+    if (!row) return json(res, 404, { status: 'error', message: 'Safety report not found' });
+
+    return json(res, 200, {
+      status: 'ok',
+      saved: true
+    });
+  }
+
+  return json(res, 405, { status: 'error', message: 'Method not allowed' });
+}
+// PHASE12A66_SAFETY_RESPONSE_LINK_FIX END
+
+
 // PHASE12A65_SUPABASE_KEEPALIVE START
 async function keepalive(req: any, res: any) {
   const url = new URL(req.url || '/', 'https://local.test');
@@ -2545,6 +2782,7 @@ async function keepalive(req: any, res: any) {
 export default async function handler(req: any, res: any) {
   const route = getRoute(req);
   if (route === 'keepalive') return keepalive(req, res);
+  if (route === 'safety-response') return safetyResponsePublic(req, res);
   try {
     const clientAuthResult = await clientAuth(req, res, route);
     if (clientAuthResult !== false) return;
@@ -2555,6 +2793,7 @@ export default async function handler(req: any, res: any) {
     if (route === 'companies') return companies(req, res, user);
     if (route === 'applicants') return applicants(req, res, user);
     if (route === 'safety-reports') return safetyReports(req, res, user);
+    if (route === 'safety-response-link') return safetyResponseLink(req, res, user);
     if (route === 'import-safety-reports') return importSafetyReports(req, res, user);
     if (route === 'users') return users(req, res, user);
     if (route === 'notification-emails') return notificationEmails(req, res, user);
