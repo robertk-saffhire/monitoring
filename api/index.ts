@@ -877,17 +877,20 @@ function mvrMedicalPreview(payload: any) {
 }
 
 function orderFrom(row: any) {
+  const subject = row?.subject || row?.applicant || row?.candidate || {};
+  const applicantName = row.applicantName || row.subjectName || row.name || subject.fullName || subject.name || row.candidateName || [subject.lastName, subject.firstName].filter(Boolean).join(', ');
+  const fileNumber = row.fileNumber || row.fileNo || row.file_number || row.orderNumber || row.orderNo || row.referenceId || row.ReferenceId || row.referenceID || row.referenceNumber || row.clientReference || row.clientReferenceId || row.customerReference || row.customerReferenceId || row.externalId || row.externalOrderId || row.orderReference || row.order?.fileNumber || row.order?.referenceId || '';
   return {
-    orderGuid: row.orderGuid || row.guid || row.id || '',
-    fileNumber: row.fileNumber || row.fileNo || row.orderNumber || '',
+    orderGuid: row.orderGuid || row.orderGUID || row.guid || row.order?.orderGuid || row.order?.guid || row.id || '',
+    fileNumber,
     orderStatus: row.orderStatus || row.status || '',
     orderType: row.orderType || row.type || '',
-    orderedDate: iso(row.orderedDate || row.orderDate),
-    completedDate: iso(row.completedDate),
-    applicantName: row.applicantName || row.subjectName || row.name || '',
-    clientName: row.clientName || '',
-    clientCode: row.clientCode || '',
-    productName: row.productName || row.packageName || '',
+    orderedDate: iso(row.orderedDate || row.orderDate || row.createdDate || row.createdAt),
+    completedDate: iso(row.completedDate || row.completedAt),
+    applicantName,
+    clientName: row.clientName || row.client?.name || '',
+    clientCode: row.clientCode || row.client?.code || '',
+    productName: row.productName || row.packageName || row.package?.name || '',
     requestedBy: row.requestedBy || row.requestor || '',
     searchFlagged: Boolean(row.searchFlagged || row.flagged),
     createdDate: iso(row.createdDate || row.createdAt),
@@ -2534,10 +2537,18 @@ function safetyCleanText(value: any) {
 function safetyArray(value: any): any[] {
   if (!value) return [];
   if (Array.isArray(value)) return value;
+  if (Array.isArray(value.content)) return value.content;
+  if (Array.isArray(value.orders)) return value.orders;
   if (Array.isArray(value.data)) return value.data;
   if (Array.isArray(value.items)) return value.items;
   if (Array.isArray(value.results)) return value.results;
   if (Array.isArray(value.searches)) return value.searches;
+  if (Array.isArray(value?.response?.content)) return value.response.content;
+  if (Array.isArray(value?.response?.data)) return value.response.data;
+  if (Array.isArray(value?.response?.results)) return value.response.results;
+  if (Array.isArray(value?._embedded?.content)) return value._embedded.content;
+  if (Array.isArray(value?._embedded?.orders)) return value._embedded.orders;
+  if (Array.isArray(value?._embedded?.searches)) return value._embedded.searches;
   if (value.result && Array.isArray(value.result)) return value.result;
   return [];
 }
@@ -2591,20 +2602,87 @@ function safetyExtractLivePayload(search: any) {
   return extracted;
 }
 
-async function safetyAllSearchResults(orderGuid: string, clientGuid: string, host: string) {
-  const encodedOrder = encodeURIComponent(orderGuid);
-  const encodedClient = encodeURIComponent(clientGuid);
-  const hostParam = host ? `&host=${encodeURIComponent(host)}` : '';
-  const hostOnlyParam = host ? `?host=${encodeURIComponent(host)}` : '';
+function safetyNormalizeHost(value: any) {
+  return safetyCleanText(value)
+    .replace(/^https?:\/\//i, '')
+    .replace(/^\/+/g, '')
+    .replace(/\/v1\/?$/i, '')
+    .replace(/\/+$/g, '');
+}
 
-  const paths = [
-    `/tazworks/clients/${encodedClient}/orders/${encodedOrder}/searches/results${hostOnlyParam}`,
-    `/tazworks/orders/${encodedOrder}/searches/results?clientGuid=${encodedClient}${hostParam}`,
-    `/tazworks/orders/${encodedOrder}/results?clientGuid=${encodedClient}${hostParam}`
+function safetyQuery(path: string, params: Record<string, any>) {
+  const pairs = Object.entries(params)
+    .filter(([, value]) => value !== undefined && value !== null && String(value).trim() !== '')
+    .map(([key, value]) => `${encodeURIComponent(key)}=${encodeURIComponent(String(value))}`);
+  if (!pairs.length) return path;
+  return `${path}${path.includes('?') ? '&' : '?'}${pairs.join('&')}`;
+}
+
+function safetyMergeSearchWithResult(search: any, resultPayload: any) {
+  if (Array.isArray(search?.results?.records)) return search;
+  const merged: any = { ...(search || {}) };
+  if (Array.isArray(resultPayload?.records)) merged.results = { records: resultPayload.records };
+  else if (Array.isArray(resultPayload?.results?.records)) merged.results = resultPayload.results;
+  else if (Array.isArray(resultPayload?.data?.records)) merged.results = { records: resultPayload.data.records };
+  else if (Array.isArray(resultPayload?.response?.records)) merged.results = { records: resultPayload.response.records };
+  else if (Array.isArray(resultPayload?.response?.results?.records)) merged.results = resultPayload.response.results;
+  else {
+    const list = safetyArray(resultPayload);
+    const match = list.find((row: any) => Array.isArray(row?.results?.records) || Array.isArray(row?.records));
+    if (match?.results?.records) merged.results = match.results;
+    else if (match?.records) merged.results = { records: match.records };
+    else merged.results = resultPayload?.results || resultPayload;
+  }
+  return merged;
+}
+
+async function safetyPullSearchResultPayload(orderGuid: string, searchGuid: string, clientGuid: string, host: string) {
+  const encodedOrder = encodeURIComponent(orderGuid);
+  const encodedSearch = encodeURIComponent(searchGuid);
+  const encodedClient = encodeURIComponent(clientGuid);
+  const normalizedHost = safetyNormalizeHost(host);
+  const resultTypes: Array<string | null> = ['EDITOR', null, 'CLIENT', 'HTML', 'RAW', 'JSON', 'FULL'];
+  const basePaths = [
+    `/tazworks/clients/${encodedClient}/orders/${encodedOrder}/searches/${encodedSearch}/results`,
+    `/tazworks/v1/clients/${encodedClient}/orders/${encodedOrder}/searches/${encodedSearch}/results`,
+    `/tazworks/orders/${encodedOrder}/searches/${encodedSearch}/results`
   ];
 
   let lastError: any = null;
-  for (const path of paths) {
+  for (const basePath of basePaths) {
+    for (const resultType of resultTypes) {
+      try {
+        const path = safetyQuery(basePath, {
+          clientGuid: basePath.includes('/orders/') && !basePath.includes('/clients/') ? clientGuid : '',
+          host: normalizedHost,
+          resultType: resultType || ''
+        });
+        return await proxyGet(path);
+      } catch (error: any) {
+        lastError = error;
+      }
+    }
+  }
+  throw lastError || new Error('Could not pull Safety Performance search result.');
+}
+
+async function safetyAllSearchResults(orderGuid: string, clientGuid: string, host: string) {
+  const encodedOrder = encodeURIComponent(orderGuid);
+  const encodedClient = encodeURIComponent(clientGuid);
+  const normalizedHost = safetyNormalizeHost(host);
+
+  const allSearchPaths = [
+    `/tazworks/clients/${encodedClient}/orders/${encodedOrder}/searches/results`,
+    `/tazworks/v1/clients/${encodedClient}/orders/${encodedOrder}/searches/results`,
+    `/tazworks/orders/${encodedOrder}/searches/results`,
+    `/tazworks/orders/${encodedOrder}/results`
+  ].map((path) => safetyQuery(path, {
+    clientGuid: path.includes('/orders/') && !path.includes('/clients/') ? clientGuid : '',
+    host: normalizedHost
+  }));
+
+  let lastError: any = null;
+  for (const path of allSearchPaths) {
     try {
       const payload = await proxyGet(path);
       return { payload, sourcePath: path };
@@ -2612,7 +2690,34 @@ async function safetyAllSearchResults(orderGuid: string, clientGuid: string, hos
       lastError = error;
     }
   }
-  throw lastError || new Error('Could not pull TazWorks All Search Results');
+
+  const searchListPaths = [
+    `/tazworks/clients/${encodedClient}/orders/${encodedOrder}/searches`,
+    `/tazworks/v1/clients/${encodedClient}/orders/${encodedOrder}/searches`,
+    `/tazworks/orders/${encodedOrder}/searches`
+  ].map((path) => safetyQuery(path, {
+    clientGuid: path.includes('/orders/') && !path.includes('/clients/') ? clientGuid : '',
+    host: normalizedHost
+  }));
+
+  for (const path of searchListPaths) {
+    try {
+      const searchPayload = await proxyGet(path);
+      const safetySearch = safetyFindPerformanceSearch(searchPayload);
+      if (!safetySearch) return { payload: searchPayload, sourcePath: path };
+
+      const searchGuid = searchGuidFrom(safetySearch, orderGuid);
+      if (!searchGuid) return { payload: [safetySearch], sourcePath: path };
+
+      const resultPayload = await safetyPullSearchResultPayload(orderGuid, searchGuid, clientGuid, normalizedHost);
+      const mergedSearch = safetyMergeSearchWithResult(safetySearch, resultPayload);
+      return { payload: [mergedSearch], sourcePath: `${path} -> search result ${searchGuid}` };
+    } catch (error: any) {
+      lastError = error;
+    }
+  }
+
+  throw lastError || new Error('Could not pull TazWorks All Search Results.');
 }
 
 async function safetyReportsLivePull(req: any, res: any, user: any) {
@@ -2908,11 +3013,11 @@ async function safetyReportsLiveDiscover(req: any, res: any, user: any) {
 
   const body = await readBody(req);
   const companyId = requestedCompanyId(req, user);
-  const host = safetyCleanText(body.host || body.tazworksHost || '');
+  const host = safetyNormalizeHost(body.host || body.tazworksHost || '');
   const clientGuid = safetyCleanText(body.clientGuid || body.tazworksClientGuid || process.env.TAZWORKS_CLIENT_GUID || '');
   const minFileNumber = Number(body.minFileNumber || 6184);
-  const pageSize = Math.max(5, Math.min(50, Number(body.pageSize || 25)));
-  const maxPages = Math.max(1, Math.min(40, Number(body.maxPages || 20)));
+  const pageSize = Math.max(10, Math.min(50, Number(body.pageSize || 50)));
+  const maxPages = Math.max(1, Math.min(200, Number(body.maxPages || 100)));
   const stopAtMinFileNumber = body.stopAtMinFileNumber !== false;
 
   if (!clientGuid) return json(res, 400, { status: 'error', message: 'Client GUID is required or TAZWORKS_CLIENT_GUID must be set in Vercel.' });
@@ -2932,6 +3037,7 @@ async function safetyReportsLiveDiscover(req: any, res: any, user: any) {
     stoppedAtMinFileNumber: false,
     stoppedAtFileNumber: '',
     skippedNoOrderGuid: 0,
+    skippedNoFileNumber: 0,
     errorsCount: 0,
     samples: [],
     errors: []
@@ -2940,11 +3046,17 @@ async function safetyReportsLiveDiscover(req: any, res: any, user: any) {
   const seen = new Set<string>();
 
   for (let page = 0; page < maxPages; page++) {
-    const payload = await proxyGet(`/tazworks/orders?page=${page}&size=${pageSize}&clientGuid=${encodeURIComponent(clientGuid)}`);
+    const payload = await proxyGet(safetyQuery('/tazworks/orders', { page, size: pageSize, clientGuid, host }));
     const list = arr(payload);
     summary.pagesChecked++;
     summary.ordersPulled += list.length;
-    let pageHitMinBoundary = false;
+
+    const pageNumbers = list.map((row: any) => safetyNumericFileNumber(orderFrom(row).fileNumber)).filter((n: number) => n > 0);
+    if (stopAtMinFileNumber && pageNumbers.length && Math.max(...pageNumbers) <= minFileNumber) {
+      summary.stoppedAtMinFileNumber = true;
+      summary.stoppedAtFileNumber = String(Math.max(...pageNumbers));
+      break;
+    }
 
     for (const row of list) {
       const order = orderFrom(row);
@@ -2960,14 +3072,13 @@ async function safetyReportsLiveDiscover(req: any, res: any, user: any) {
         continue;
       }
 
-      if (!numericFile || numericFile <= minFileNumber) {
+      if (!numericFile) {
+        summary.skippedNoFileNumber++;
+        continue;
+      }
+
+      if (numericFile <= minFileNumber) {
         summary.skippedLowFileNumber++;
-        if (stopAtMinFileNumber && numericFile && numericFile <= minFileNumber) {
-          summary.stoppedAtMinFileNumber = true;
-          summary.stoppedAtFileNumber = fileNumber;
-          pageHitMinBoundary = true;
-          break;
-        }
         continue;
       }
 
@@ -2999,7 +3110,8 @@ async function safetyReportsLiveDiscover(req: any, res: any, user: any) {
             applicantName: result.report?.applicantName || extracted.applicantName || order.applicantName || '',
             previousEmployer: result.report?.prevEmployerName || extracted.prevEmployerName || '',
             orderGuid,
-            orderSearchGuid: extracted.orderSearchGuid || ''
+            orderSearchGuid: extracted.orderSearchGuid || '',
+            sourcePath: pulled.sourcePath || ''
           });
         }
       } catch (error: any) {
@@ -3008,12 +3120,12 @@ async function safetyReportsLiveDiscover(req: any, res: any, user: any) {
       }
     }
 
-    if (pageHitMinBoundary) break;
     if (list.length < pageSize) break;
   }
 
-  const stopMessage = summary.stoppedAtMinFileNumber ? ` Stopped at file/order ${summary.stoppedAtFileNumber || minFileNumber}.` : '';
-  const message = `Safety refresh completed. Created ${summary.created} new report(s), updated ${summary.updated}, no Safety Performance search on ${summary.noSafetySearch}.${stopMessage}`;
+  const stopMessage = summary.stoppedAtMinFileNumber ? ` Stopped when the remaining page was at/below file ${summary.stoppedAtFileNumber || minFileNumber}.` : '';
+  const errorMessagePart = summary.errors.length ? ` First error: ${summary.errors[0]}` : '';
+  const message = `Safety refresh completed. Created ${summary.created} new report(s), updated ${summary.updated}, no Safety Performance search on ${summary.noSafetySearch}.${stopMessage}${errorMessagePart}`;
   return json(res, 200, { status: 'ok', message, summary });
 }
 // PHASE12A72_AUTO_CREATE_NEW_SAFETY_REPORTS END
