@@ -518,7 +518,7 @@ async function buildCompletedSafetyPdf(report: any) {
   pdfSetText(form, 'Telephone_3', report.prevEmployerPhone);
   pdfSetText(form, 'Date_2', report.infoReceivedDate || pdfShortDate(report.created));
 
-  const noSafetyHistory = pdfSame(report.accidentHistory, 'No accidents reported') && !report.dotAlcoholTestPositive && !report.dotDrugTestPositive && !report.dotRefusedTest && !report.dotOtherViolations;
+  const noSafetyHistory = pdfSame(report.accidentHistory, 'No accidents reported') && !report.dotAlcoholTestPositive && !report.dotDrugTestPositive && !report.dotRefusedTest && !report.dotOtherViolations && !report.dotPriorEmployerReportedViolation && !report.dotCompletedReturnToDutyProcess;
   pdfCheck(form, 'If there is no safety performance history to report check here', noSafetyHistory);
 
   pdfSetText(form, 'Employee Name', report.applicantName);
@@ -526,7 +526,7 @@ async function buildCompletedSafetyPdf(report: any) {
   pdfCheck(form, '3 years prior to the application date shown on SIDE 1 or check here', pdfSame(report.accidentHistory, 'No accidents reported'));
   pdfSetAccidentRows(form, report);
 
-  const anyDotViolation = Boolean(report.dotAlcoholTestPositive || report.dotDrugTestPositive || report.dotRefusedTest || report.dotOtherViolations);
+  const anyDotViolation = Boolean(report.dotAlcoholTestPositive || report.dotDrugTestPositive || report.dotRefusedTest || report.dotOtherViolations || report.dotPriorEmployerReportedViolation || report.dotCompletedReturnToDutyProcess);
   pdfCheck(form, 'Yes', anyDotViolation);
   pdfSetText(form, 'to', report.fromDate);
   pdfSetText(form, 'undefined', report.toDate);
@@ -2524,7 +2524,9 @@ const SAFETY_RESPONSE_BOOL_FIELDS = new Set([
   'dotAlcoholTestPositive',
   'dotDrugTestPositive',
   'dotRefusedTest',
-  'dotOtherViolations'
+  'dotOtherViolations',
+  'dotPriorEmployerReportedViolation',
+  'dotCompletedReturnToDutyProcess'
 ]);
 
 const SAFETY_RESPONSE_TEXT_FIELDS = [
@@ -2665,6 +2667,8 @@ function publicSafetyResponseReport(row: any) {
     'dotDrugTestPositive',
     'dotRefusedTest',
     'dotOtherViolations',
+    'dotPriorEmployerReportedViolation',
+    'dotCompletedReturnToDutyProcess',
     'infoReceivedFrom',
     'infoReceivedDate'
   ];
