@@ -2513,7 +2513,7 @@ async function invoiceDiagnostics(req: any, res: any, user: any) {
 
 
 
-// PHASE12A66_SAFETY_RESPONSE_LINK_FIX START
+// PHASE12A70_DUAL_APPLICANT_EMPLOYER_RESPONSE_LINKS START
 const SAFETY_RESPONSE_BOOL_FIELDS = new Set([
   'vehicleStraightTruck',
   'vehicleTractorSemitrailer',
@@ -2554,6 +2554,25 @@ const SAFETY_RESPONSE_TEXT_FIELDS = [
   'infoReceivedDate'
 ];
 
+const SAFETY_APPLICANT_TEXT_FIELDS = [
+  'applicantName',
+  'prevEmployerName',
+  'prevEmployerEmail',
+  'prevEmployerStreet',
+  'prevEmployerPhone',
+  'prevEmployerFax',
+  'prevEmployerCityStateZip',
+  'employerName',
+  'employerAttention',
+  'employerStreet',
+  'employerCityStateZip',
+  'employerPhone',
+  'employerFax',
+  'employerEmail',
+  'confFax',
+  'confEmail'
+];
+
 function safetyResponseClean(value: any) {
   return String(value ?? '').trim();
 }
@@ -2563,10 +2582,31 @@ function safetyResponseBool(value: any) {
   return value === true || raw === 'true' || raw === 'on' || raw === 'yes' || raw === '1';
 }
 
+function safetyResponseRole(value: any) {
+  const role = String(value || '').trim().toLowerCase();
+  return role === 'applicant' ? 'applicant' : 'employer';
+}
+
 async function verifySafetyResponseToken(token: string) {
   const { payload } = await jwtVerify(token, secret());
   if (payload.type !== 'safety_response') throw new Error('Invalid response link');
-  return payload as any;
+  const role = safetyResponseRole((payload as any).responseRole || (payload as any).role || 'employer');
+  return { ...(payload as any), responseRole: role };
+}
+
+function parseApplicantSignature(notes: any) {
+  const text = String(notes || '');
+  const re = /\[Applicant Electronic Signature\]\s*Name:\s*([^\n|]+?)\s*\|\s*Date:\s*([^\n|]+)(?:\s*\|\s*IP:\s*([^\n]+))?/g;
+  let match: RegExpExecArray | null;
+  let last: any = null;
+  while ((match = re.exec(text)) !== null) {
+    last = {
+      name: String(match[1] || '').trim(),
+      signedAt: String(match[2] || '').trim(),
+      ip: String(match[3] || '').trim()
+    };
+  }
+  return last || { name: '', signedAt: '', ip: '' };
 }
 
 function publicSafetyResponseReport(row: any) {
@@ -2631,6 +2671,7 @@ function publicSafetyResponseReport(row: any) {
 
   const out: any = {};
   allowed.forEach((key) => out[key] = row[key]);
+  out.applicantSignature = parseApplicantSignature(row.notes);
   return out;
 }
 
@@ -2643,11 +2684,12 @@ async function safetyResponseLink(req: any, res: any, user: any) {
   const companyId = Number(body.companyId || user.companyId || 1);
   const fileNumber = String(body.fileNumber || body.referenceId || body.ReferenceId || '').trim();
   const reportId = Number(body.reportId || body.id || 0);
+  const responseRole = safetyResponseRole(body.responseRole || body.role || body.linkType || 'employer');
 
   let report;
   if (reportId) {
     report = await query(
-      `select id, "companyId", "fileNumber", "applicantName", "prevEmployerName"
+      `select id, "companyId", "fileNumber", "applicantName", "prevEmployerName", "prevEmployerEmail"
        from safety_reports
        where "companyId"=$1 and id=$2
        limit 1`,
@@ -2655,7 +2697,7 @@ async function safetyResponseLink(req: any, res: any, user: any) {
     );
   } else if (fileNumber) {
     report = await query(
-      `select id, "companyId", "fileNumber", "applicantName", "prevEmployerName"
+      `select id, "companyId", "fileNumber", "applicantName", "prevEmployerName", "prevEmployerEmail"
        from safety_reports
        where "companyId"=$1 and trim("fileNumber"::text)=trim($2)
        order by id desc
@@ -2679,6 +2721,7 @@ async function safetyResponseLink(req: any, res: any, user: any) {
 
   const token = await new SignJWT({
     type: 'safety_response',
+    responseRole,
     reportId: row.id,
     companyId: row.companyId,
     fileNumber: row.fileNumber
@@ -2694,6 +2737,8 @@ async function safetyResponseLink(req: any, res: any, user: any) {
   return json(res, 200, {
     status: 'ok',
     formUrl,
+    responseRole,
+    linkLabel: responseRole === 'applicant' ? 'Applicant verification link' : 'Employer response link',
     expiresAt: expiresAt.toISOString(),
     report: row
   });
@@ -2718,6 +2763,7 @@ async function safetyResponsePublic(req: any, res: any) {
 
     return json(res, 200, {
       status: 'ok',
+      responseRole: payload.responseRole,
       report: publicSafetyResponseReport(row)
     });
   }
@@ -2729,6 +2775,51 @@ async function safetyResponsePublic(req: any, res: any) {
     if (!token) return json(res, 400, { status: 'error', message: 'Missing response token' });
 
     const payload = await verifySafetyResponseToken(token);
+
+    if (payload.responseRole === 'applicant') {
+      const signatureName = safetyResponseClean(body.signatureName);
+      if (!signatureName) return json(res, 400, { status: 'error', message: 'Electronic signature is required' });
+
+      const values: any[] = [];
+      const assignments: string[] = [];
+
+      SAFETY_APPLICANT_TEXT_FIELDS.forEach((field) => {
+        values.push(safetyResponseClean(body[field]));
+        assignments.push(`"${field}"=$${values.length}`);
+      });
+
+      const signedAt = new Date().toISOString();
+      const ip = String(req.headers['x-forwarded-for'] || req.headers['x-real-ip'] || '').split(',')[0].trim();
+      values.push(`[Applicant Electronic Signature] Name: ${signatureName} | Date: ${signedAt}${ip ? ` | IP: ${ip}` : ''}`);
+      const noteParam = values.length;
+
+      values.push(Number(payload.reportId));
+      const reportParam = values.length;
+
+      values.push(Number(payload.companyId));
+      const companyParam = values.length;
+
+      const sql = `
+        update safety_reports
+        set ${assignments.join(',')},
+            status='S1 Complete',
+            notes=trim(both E'\n' from concat(coalesce(notes,''), E'\n', $${noteParam})),
+            "updatedAt"=now()
+        where id=$${reportParam} and "companyId"=$${companyParam}
+        returning *
+      `;
+
+      const result = await query(sql, values);
+      const row = result.rows[0];
+
+      if (!row) return json(res, 404, { status: 'error', message: 'Safety report not found' });
+
+      return json(res, 200, {
+        status: 'ok',
+        saved: true,
+        responseRole: payload.responseRole
+      });
+    }
 
     const values: any[] = [];
     const assignments: string[] = [];
@@ -2774,7 +2865,8 @@ async function safetyResponsePublic(req: any, res: any) {
 
     return json(res, 200, {
       status: 'ok',
-      saved: true
+      saved: true,
+      responseRole: payload.responseRole
     });
   }
 
@@ -2821,7 +2913,7 @@ async function safetyResponseDiagnostics(req: any, res: any, user: any) {
   return json(res, 200, { status: 'ok', checks });
 }
 
-// PHASE12A66_SAFETY_RESPONSE_LINK_FIX END
+// PHASE12A70_DUAL_APPLICANT_EMPLOYER_RESPONSE_LINKS END
 
 
 // PHASE12A65_SUPABASE_KEEPALIVE START
