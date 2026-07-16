@@ -30,6 +30,11 @@
     .alert.error { background: #fef2f2; border-color: #fecaca; color: #991b1b; }
     .mode-banner { border-radius: 6px; padding: 10px 12px; background: #eff6ff; border: 1px solid #bfdbfe; color: #1e3a8a; margin-bottom: 14px; line-height: 1.4; }
 
+    .thank-you-panel { display: none; border: 1px solid #bbf7d0; background: #f0fdf4; color: #14532d; border-radius: 8px; padding: 34px 28px; text-align: center; margin: 8px 0 0; }
+    .thank-you-panel h2 { margin: 0 0 10px; font-size: 28px; line-height: 1.2; }
+    .thank-you-panel p { margin: 8px 0 0; font-size: 16px; line-height: 1.45; }
+    .thank-you-panel .close-note { color: #166534; font-weight: 700; }
+
     .section { border: 1px solid var(--border); border-radius: 5px; background: var(--panel); margin: 0 0 16px; overflow: hidden; }
     .section-header { background: var(--header-blue); color: #003b73; padding: 14px 20px; font-size: 14px; font-weight: 500; display: flex; justify-content: space-between; align-items: center; }
     .section-body { padding: 28px 20px 26px; }
@@ -102,6 +107,12 @@
       <section class="outer-card">
         <div id="message" class="message"></div>
         <div id="modeBanner" class="mode-banner" style="display:none;"></div>
+
+        <div id="thankYouPanel" class="thank-you-panel">
+          <h2>Thank you.</h2>
+          <p>Your information has been submitted.</p>
+          <p class="close-note">You can close this tab now.</p>
+        </div>
 
         <form id="form" style="display:none;">
           <section id="section1" class="section">
@@ -274,12 +285,22 @@
     const form = document.getElementById('form');
     const message = document.getElementById('message');
     const modeBanner = document.getElementById('modeBanner');
+    const thankYouPanel = document.getElementById('thankYouPanel');
     const boolFields = new Set(['vehicleStraightTruck','vehicleTractorSemitrailer','vehicleBus','vehicleCargoTank','vehicleDoublesTriples','vehicleOther','dotAlcoholTestPositive','dotDrugTestPositive','dotRefusedTest','dotOtherViolations','dotPriorEmployerReportedViolation','dotCompletedReturnToDutyProcess']);
     const dateFields = new Set(['followUpDate','fromDate','toDate','accidentDate1','accidentDate2','accidentDate3','infoReceivedDate']);
     let responseRole = 'employer';
 
     function show(type, text) {
       message.innerHTML = text ? `<div class="alert ${type}">${text}</div>` : '';
+    }
+
+
+    function showThankYou() {
+      message.innerHTML = '';
+      modeBanner.style.display = 'none';
+      form.style.display = 'none';
+      thankYouPanel.style.display = 'block';
+      window.scrollTo({ top: 0, behavior: 'smooth' });
     }
 
     function apiPath(pathSuffix) {
@@ -391,7 +412,7 @@
       try {
         show('ok', 'Saving...');
         await request('POST', payload);
-        show('ok', responseRole === 'applicant' ? 'Applicant section saved and electronically signed. SaffHire can now send the employer response link.' : 'Employer response saved. Thank you.');
+        showThankYou();
       } catch (error) {
         show('error', error.message || 'Could not save this form.');
       }
