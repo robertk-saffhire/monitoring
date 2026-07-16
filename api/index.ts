@@ -12,6 +12,7 @@ const USER_ROLES = new Set(['admin', 'user', 'viewer', 'client_admin', 'client_u
 const BOOL_REPORT_FIELDS = new Set([
   'vehicleStraightTruck', 'vehicleTractorSemitrailer', 'vehicleBus', 'vehicleCargoTank', 'vehicleDoublesTriples', 'vehicleOther',
   'dotAlcoholTestPositive', 'dotDrugTestPositive', 'dotRefusedTest', 'dotOtherViolations',
+  'dotPriorEmployerReportedViolation', 'dotCompletedReturnToDutyProcess',
 ]);
 const REPORT_FIELDS = [
   'applicantName', 'fileNumber', 'created', 'status', 'followUpDate', 'notes',
@@ -23,6 +24,7 @@ const REPORT_FIELDS = [
   'accidentDate2', 'accidentLocation2', 'accidentInjuries2', 'accidentFatalities2', 'accidentHazmat2',
   'accidentDate3', 'accidentLocation3', 'accidentInjuries3', 'accidentFatalities3', 'accidentHazmat3', 'otherAccidents',
   'dotCompany', 'dotEmployee', 'dotAlcoholTestPositive', 'dotDrugTestPositive', 'dotRefusedTest', 'dotOtherViolations',
+  'dotPriorEmployerReportedViolation', 'dotCompletedReturnToDutyProcess',
   'infoReceivedFrom', 'infoReceivedDate',
 ];
 const reportCols = ['"companyId"', ...REPORT_FIELDS.map((field) => `"${field}"`).map((col) => col === '"created"' || col === '"status"' || col === '"notes"' ? col.replaceAll('"', '') : col)];
@@ -2513,6 +2515,250 @@ async function invoiceDiagnostics(req: any, res: any, user: any) {
 
 
 
+
+// PHASE12A71_LIVE_SAFETY_PERFORMANCE_PULL START
+function safetyDecodeHtml(value: any) {
+  return String(value ?? '')
+    .replace(/&amp;/g, '&')
+    .replace(/&lt;/g, '<')
+    .replace(/&gt;/g, '>')
+    .replace(/&quot;/g, '"')
+    .replace(/&#39;/g, "'")
+    .trim();
+}
+
+function safetyCleanText(value: any) {
+  return safetyDecodeHtml(value).replace(/\s+/g, ' ').trim();
+}
+
+function safetyArray(value: any): any[] {
+  if (!value) return [];
+  if (Array.isArray(value)) return value;
+  if (Array.isArray(value.data)) return value.data;
+  if (Array.isArray(value.items)) return value.items;
+  if (Array.isArray(value.results)) return value.results;
+  if (Array.isArray(value.searches)) return value.searches;
+  if (value.result && Array.isArray(value.result)) return value.result;
+  return [];
+}
+
+function safetyCityStateZip(address: any) {
+  const city = safetyCleanText(address?.city);
+  const state = safetyCleanText(address?.stateOrProvince || address?.state);
+  const zip = safetyCleanText(address?.postalCode || address?.zip);
+  return [city, [state, zip].filter(Boolean).join(' ')].filter(Boolean).join(', ');
+}
+
+function safetyPhone(contactInfo: any) {
+  const phones = contactInfo?.phoneNumbers;
+  if (Array.isArray(phones) && phones.length) return safetyCleanText(phones[0]);
+  return safetyCleanText(contactInfo?.phone || contactInfo?.phoneNumber || '');
+}
+
+function safetyFindPerformanceSearch(payload: any) {
+  const searches = safetyArray(payload);
+  const employment = searches.filter((row: any) => String(row?.type || '').toUpperCase() === 'EMPLOYMENT_VERIFICATION');
+  const safety = employment.find((row: any) => /safety\s*performance|dot\s*verification|safety\s*performance\s*and\s*dot/i.test(`${row?.displayName || ''} ${row?.displayValue || ''}`));
+  return safety || employment[0] || null;
+}
+
+function safetyExtractLivePayload(search: any) {
+  const record = Array.isArray(search?.results?.records) ? search.results.records[0] : null;
+  if (!record) return null;
+
+  const employer = record.employer || {};
+  const address = employer.address || {};
+  const contactInfo = employer.contactInfo || {};
+  const subjectProvided = record.subjectProvidedInfo || {};
+
+  const extracted: any = {
+    applicantName: safetyCleanText(record.subject?.fullName || ''),
+    prevEmployerName: safetyCleanText(employer.name || search.displayValue || ''),
+    prevEmployerEmail: safetyCleanText(contactInfo.email || ''),
+    prevEmployerStreet: safetyCleanText(address.streetOne || address.street1 || ''),
+    prevEmployerPhone: safetyPhone(contactInfo),
+    prevEmployerCityStateZip: safetyCityStateZip(address),
+    jobTitle: safetyCleanText(subjectProvided.position || ''),
+    fromDate: safetyCleanText(subjectProvided.hireDate || ''),
+    orderSearchGuid: safetyCleanText(search.orderSearchGuid || ''),
+    searchDisplayName: safetyCleanText(search.displayName || ''),
+    searchDisplayValue: safetyCleanText(search.displayValue || ''),
+    verificationResponse: safetyCleanText(record.verificationResponse || ''),
+    employerType: safetyCleanText(subjectProvided.employerType || ''),
+    supervisor: safetyCleanText(record.supervisor || '')
+  };
+
+  return extracted;
+}
+
+async function safetyAllSearchResults(orderGuid: string, clientGuid: string, host: string) {
+  const encodedOrder = encodeURIComponent(orderGuid);
+  const encodedClient = encodeURIComponent(clientGuid);
+  const hostParam = host ? `&host=${encodeURIComponent(host)}` : '';
+  const hostOnlyParam = host ? `?host=${encodeURIComponent(host)}` : '';
+
+  const paths = [
+    `/tazworks/clients/${encodedClient}/orders/${encodedOrder}/searches/results${hostOnlyParam}`,
+    `/tazworks/orders/${encodedOrder}/searches/results?clientGuid=${encodedClient}${hostParam}`,
+    `/tazworks/orders/${encodedOrder}/results?clientGuid=${encodedClient}${hostParam}`
+  ];
+
+  let lastError: any = null;
+  for (const path of paths) {
+    try {
+      const payload = await proxyGet(path);
+      return { payload, sourcePath: path };
+    } catch (error: any) {
+      lastError = error;
+    }
+  }
+  throw lastError || new Error('Could not pull TazWorks All Search Results');
+}
+
+async function safetyReportsLivePull(req: any, res: any, user: any) {
+  if (!requireAdmin(user, res)) return;
+  if (req.method !== 'POST') return json(res, 405, { status: 'error', message: 'Method not allowed' });
+
+  const body = await readBody(req);
+  const companyId = requestedCompanyId(req, user);
+  const reportId = Number(body.reportId || body.id || 0);
+  const fileNumber = safetyCleanText(body.fileNumber || body.referenceId || '');
+  const host = safetyCleanText(body.host || body.tazworksHost || '');
+  const clientGuid = safetyCleanText(body.clientGuid || body.tazworksClientGuid || process.env.TAZWORKS_CLIENT_GUID || '');
+  let orderGuid = safetyCleanText(body.orderGuid || body.tazworksOrderGuid || '');
+
+  if (!clientGuid) return json(res, 400, { status: 'error', message: 'Client GUID is required or TAZWORKS_CLIENT_GUID must be set in Vercel.' });
+
+  let reportResult;
+  if (reportId) {
+    reportResult = await query('select * from safety_reports where id=$1 and "companyId"=$2 limit 1', [reportId, companyId]);
+  } else if (fileNumber) {
+    reportResult = await query('select * from safety_reports where trim("fileNumber"::text)=trim($1) and "companyId"=$2 order by id desc limit 1', [fileNumber, companyId]);
+  } else {
+    return json(res, 400, { status: 'error', message: 'File number or report id is required.' });
+  }
+
+  const report = reportResult.rows[0];
+  if (!report) return json(res, 404, { status: 'error', message: 'Safety report not found.' });
+
+  if (!orderGuid) {
+    const cached = await query(
+      `select order_guid from tazworks_order_cache
+       where company_id=$1 and trim(file_number::text)=trim($2)
+       order by last_seen_at desc nulls last, id desc
+       limit 1`,
+      [companyId, report.fileNumber]
+    );
+    orderGuid = safetyCleanText(cached.rows[0]?.order_guid || '');
+  }
+
+  if (!orderGuid) {
+    return json(res, 400, { status: 'error', message: 'Order GUID is required. Paste the order-guid from Postman, or run TazWorks sync first so the app can use the cached order GUID.' });
+  }
+
+  const pulled = await safetyAllSearchResults(orderGuid, clientGuid, host);
+  const safetySearch = safetyFindPerformanceSearch(pulled.payload);
+
+  if (!safetySearch) {
+    await query(
+      `update safety_reports
+       set "tazworksHost"=$1, "tazworksClientGuid"=$2, "tazworksOrderGuid"=$3,
+           "lastLiveSafetySyncAt"=now(), "lastLiveSafetySyncStatus"='no_safety_search',
+           "lastLiveSafetySyncMessage"=$4, "updatedAt"=now()
+       where id=$5 and "companyId"=$6`,
+      [host, clientGuid, orderGuid, 'No Safety Performance and DOT Verification search was found on this order.', report.id, companyId]
+    );
+    return json(res, 200, {
+      status: 'ok',
+      found: false,
+      message: 'No Safety Performance and DOT Verification search was found on this order.',
+      orderGuid
+    });
+  }
+
+  const extracted = safetyExtractLivePayload(safetySearch);
+  if (!extracted) {
+    await query(
+      `update safety_reports
+       set "tazworksHost"=$1, "tazworksClientGuid"=$2, "tazworksOrderGuid"=$3,
+           "tazworksOrderSearchGuid"=$4, "lastLiveSafetySyncAt"=now(),
+           "lastLiveSafetySyncStatus"='no_records', "lastLiveSafetySyncMessage"=$5, "updatedAt"=now()
+       where id=$6 and "companyId"=$7`,
+      [host, clientGuid, orderGuid, safetyCleanText(safetySearch.orderSearchGuid || ''), 'Safety Performance search was found, but it did not include records.', report.id, companyId]
+    );
+    return json(res, 200, {
+      status: 'ok',
+      found: false,
+      message: 'Safety Performance search was found, but it did not include records.',
+      orderGuid,
+      orderSearchGuid: safetySearch.orderSearchGuid || ''
+    });
+  }
+
+  const liveNoteParts = [
+    extracted.searchDisplayName || 'Safety Performance and DOT Verification',
+    extracted.verificationResponse ? `Verification Response: ${extracted.verificationResponse}` : '',
+    extracted.employerType ? `Employer Type: ${extracted.employerType}` : '',
+    extracted.supervisor ? `Supervisor: ${extracted.supervisor}` : ''
+  ].filter(Boolean);
+
+  const liveMessage = `Live Safety Pull: ${liveNoteParts.join(' | ')}`;
+
+  const update = await query(
+    `update safety_reports
+     set "applicantName"=coalesce(nullif($1,''), "applicantName"),
+         "prevEmployerName"=coalesce(nullif($2,''), "prevEmployerName"),
+         "prevEmployerEmail"=coalesce(nullif($3,''), "prevEmployerEmail"),
+         "prevEmployerStreet"=coalesce(nullif($4,''), "prevEmployerStreet"),
+         "prevEmployerPhone"=coalesce(nullif($5,''), "prevEmployerPhone"),
+         "prevEmployerCityStateZip"=coalesce(nullif($6,''), "prevEmployerCityStateZip"),
+         "jobTitle"=coalesce(nullif($7,''), "jobTitle"),
+         "fromDate"=coalesce(nullif($8,''), "fromDate"),
+         status=case when status in ('Completed','Emp Complete') then status else 'S1 Complete' end,
+         "tazworksHost"=$9,
+         "tazworksClientGuid"=$10,
+         "tazworksOrderGuid"=$11,
+         "tazworksOrderSearchGuid"=$12,
+         "lastLiveSafetySyncAt"=now(),
+         "lastLiveSafetySyncStatus"='updated',
+         "lastLiveSafetySyncMessage"=$13,
+         "liveSafetyRaw"=$14::jsonb,
+         notes=case when position($13 in coalesce(notes,'')) > 0 then notes else trim(both E'\n' from concat(coalesce(notes,''), E'\n', $13::text)) end,
+         "updatedAt"=now()
+     where id=$15 and "companyId"=$16
+     returning *`,
+    [
+      extracted.applicantName,
+      extracted.prevEmployerName,
+      extracted.prevEmployerEmail,
+      extracted.prevEmployerStreet,
+      extracted.prevEmployerPhone,
+      extracted.prevEmployerCityStateZip,
+      extracted.jobTitle,
+      extracted.fromDate,
+      host,
+      clientGuid,
+      orderGuid,
+      extracted.orderSearchGuid,
+      liveMessage,
+      JSON.stringify(safetySearch || {}),
+      report.id,
+      companyId
+    ]
+  );
+
+  return json(res, 200, {
+    status: 'ok',
+    found: true,
+    message: 'Live Safety Performance information pulled and saved.',
+    orderGuid,
+    orderSearchGuid: extracted.orderSearchGuid,
+    extracted,
+    report: update.rows[0]
+  });
+}
+// PHASE12A71_LIVE_SAFETY_PERFORMANCE_PULL END
+
 // PHASE12A70_DUAL_APPLICANT_EMPLOYER_RESPONSE_LINKS START
 const SAFETY_RESPONSE_BOOL_FIELDS = new Set([
   'vehicleStraightTruck',
@@ -2964,6 +3210,7 @@ export default async function handler(req: any, res: any) {
     if (route === 'companies') return companies(req, res, user);
     if (route === 'applicants') return applicants(req, res, user);
     if (route === 'safety-reports') return safetyReports(req, res, user);
+    if (route === 'safety-reports/live-pull') return safetyReportsLivePull(req, res, user);
     if (route === 'safety-response-link') return safetyResponseLink(req, res, user);
     if (route === 'safety-response-diagnostics') return safetyResponseDiagnostics(req, res, user);
     if (route === 'import-safety-reports') return importSafetyReports(req, res, user);
