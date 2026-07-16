@@ -189,6 +189,10 @@
 
 
 
+  function normalizeHostInput(value) {
+    return String(value || '').trim().replace(/^https?:\/\//i, '').replace(/^\/+/, '').replace(/\/v1\/?$/i, '').replace(/\/+$/, '');
+  }
+
   async function discoverNewSafetyReports(options) {
     const opts = options || {};
     const automatic = opts.automatic === true;
@@ -197,29 +201,43 @@
     let host = savedHost;
     let clientGuid = savedClientGuid;
     let minFileNumber = Number(opts.minFileNumber || 6184) || 6184;
-    let maxPages = Number(opts.maxPages || 40) || 40;
+    let maxPages = Number(opts.maxPages || 100) || 100;
+
+    if (!host) {
+      const enteredHost = window.prompt('TazWorks host is needed for the live Safety Performance refresh. Paste only the host from Postman, or paste the full URL and I will clean it up.', savedHost);
+      if (enteredHost === null) return;
+      host = normalizeHostInput(enteredHost);
+      localStorage.setItem('phase12a71-taz-host', host);
+    } else {
+      host = normalizeHostInput(host);
+      localStorage.setItem('phase12a71-taz-host', host);
+    }
 
     if (!automatic) {
-      const enteredHost = window.prompt('TazWorks host from Postman URL. Leave blank if your proxy already has the host configured.', savedHost);
+      const enteredHost = window.prompt('TazWorks host from Postman URL.', host);
       if (enteredHost === null) return;
-      host = enteredHost.trim();
+      host = normalizeHostInput(enteredHost);
       localStorage.setItem('phase12a71-taz-host', host);
+    }
 
+    if (!clientGuid && !automatic) {
       const enteredClientGuid = window.prompt('Client GUID. Leave blank to use Vercel ENV TAZWORKS_CLIENT_GUID.', savedClientGuid);
       if (enteredClientGuid === null) return;
       clientGuid = enteredClientGuid.trim();
       localStorage.setItem('phase12a71-client-guid', clientGuid);
+    }
 
-      const minFileNumberRaw = window.prompt('Pull Safety Performance orders greater than this file number:', String(minFileNumber));
+    if (!automatic) {
+      const minFileNumberRaw = window.prompt('Create/update Safety Performance reports for file numbers greater than:', String(minFileNumber));
       if (minFileNumberRaw === null) return;
       minFileNumber = Number(minFileNumberRaw || minFileNumber) || minFileNumber;
 
-      const maxPagesRaw = window.prompt('Maximum TazWorks order pages to check. The scan stops early once it reaches file/order 6184.', String(maxPages));
+      const maxPagesRaw = window.prompt('Maximum TazWorks order pages to check. The app skips files at/below 6184 and only stops when a whole page is below that number.', String(maxPages));
       if (maxPagesRaw === null) return;
       maxPages = Number(maxPagesRaw || maxPages) || maxPages;
     }
 
-    toast(`Refreshing live Safety Performance reports from TazWorks. Scanning new orders and stopping at ${minFileNumber}...`);
+    toast(`Refreshing live Safety Performance reports from TazWorks. Looking for file numbers greater than ${minFileNumber}...`);
 
     const result = await apiWithFallback('safety-reports/live-discover', {
       method: 'POST',
@@ -228,7 +246,7 @@
         host: String(host || '').trim(),
         clientGuid: String(clientGuid || '').trim(),
         minFileNumber,
-        pageSize: 25,
+        pageSize: 50,
         maxPages,
         stopAtMinFileNumber: true
       })
@@ -236,9 +254,10 @@
 
     const summary = result.summary || {};
     const message = result.message || `Created ${summary.created || 0}, updated ${summary.updated || 0}.`;
-    const detail = ` Checked ${summary.ordersPulled || 0} orders; created ${summary.created || 0}; updated ${summary.updated || 0}; no Safety Performance search: ${summary.noSafetySearch || 0}; errors: ${summary.errorsCount || 0}.`;
+    const errorPreview = Array.isArray(summary.errors) && summary.errors.length ? ` First error: ${summary.errors[0]}` : '';
+    const detail = ` Checked ${summary.ordersPulled || 0} orders; candidates > ${minFileNumber}: ${summary.candidatesGreaterThanMin || 0}; created ${summary.created || 0}; updated ${summary.updated || 0}; no Safety Performance search: ${summary.noSafetySearch || 0}; no records: ${summary.noRecords || 0}; errors: ${summary.errorsCount || 0}.${errorPreview}`;
     toast(message + detail, Number(summary.errorsCount || 0) > 0);
-    setTimeout(() => window.location.reload(), 1800);
+    setTimeout(() => window.location.reload(), 2200);
   }
 
   function safetyRefreshButton() {
@@ -251,12 +270,12 @@
     const button = safetyRefreshButton();
     if (!button) return;
     button.dataset.phase6RefreshHooked = '1';
-    button.title = 'Refresh from TazWorks and auto-create new Safety Performance reports, stopping at order/file 6184.';
+    button.title = 'Refresh from TazWorks and auto-create/update Safety Performance reports for files greater than 6184.';
     button.addEventListener('click', function (event) {
       event.preventDefault();
       event.stopPropagation();
       if (typeof event.stopImmediatePropagation === 'function') event.stopImmediatePropagation();
-      discoverNewSafetyReports({ automatic: true, minFileNumber: 6184, maxPages: 40 })
+      discoverNewSafetyReports({ automatic: true, minFileNumber: 6184, maxPages: 100 })
         .catch((error) => toast(error.message || 'Could not refresh live Safety Performance reports.', true));
     }, true);
   }
@@ -445,7 +464,7 @@
     panel.className = 'card wide-card phase6-panel';
     panel.innerHTML = `
       <h2>Applicant + Employer Response Forms</h2>
-      <p>The page <b>Refresh</b> button now checks live TazWorks orders, stops at order/file <b>6184</b>, and automatically creates or updates Safety Performance reports when Safety Performance and DOT Verification information is found.</p>
+      <p>The page <b>Refresh</b> button now checks live TazWorks orders, looks for file numbers greater than <b>6184</b>, and automatically creates or updates Safety Performance reports when Safety Performance and DOT Verification information is found.</p>
       <p>Each report keeps the same workflow: send the <b>Applicant Link</b> first so the applicant can verify Section 1 and sign electronically. Then send the <b>Employer Link</b> to the previous employer so they can complete Sections 2–5.</p>
     `;
     if (after) after.insertAdjacentElement('afterend', panel);
