@@ -2803,7 +2803,7 @@ async function safetyResponsePublic(req: any, res: any) {
         update safety_reports
         set ${assignments.join(',')},
             status='S1 Complete',
-            notes=trim(both E'\n' from concat(coalesce(notes,''), E'\n', $${noteParam})),
+            notes=trim(both E'\n' from concat(coalesce(notes,''), E'\n', $${noteParam}::text)),
             "updatedAt"=now()
         where id=$${reportParam} and "companyId"=$${companyParam}
         returning *
@@ -2852,7 +2852,7 @@ async function safetyResponsePublic(req: any, res: any) {
       set ${assignments.join(',')},
           status='Emp Complete',
           "followUpDate"='',
-          notes=trim(both E'\n' from concat(coalesce(notes,''), E'\n', $${noteParam})),
+          notes=trim(both E'\n' from concat(coalesce(notes,''), E'\n', $${noteParam}::text)),
           "updatedAt"=now()
       where id=$${reportParam} and "companyId"=$${companyParam}
       returning *
