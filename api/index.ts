@@ -683,6 +683,31 @@ function pdfSplitText(value: any, maxLen = 82, maxLines = 4) {
   while (lines.length < maxLines) lines.push('');
   return lines;
 }
+function pdfSignatureDate(value: any) {
+  const raw = pdfClean(value);
+  if (!raw) return '';
+  const date = new Date(raw);
+  if (!Number.isNaN(date.getTime())) {
+    const month = String(date.getMonth() + 1).padStart(2, '0');
+    const day = String(date.getDate()).padStart(2, '0');
+    const year = date.getFullYear();
+    return `${month}/${day}/${year}`;
+  }
+  return raw.slice(0, 10);
+}
+function pdfDrawText(page: any, text: any, x: number, y: number, options: any = {}) {
+  const value = pdfClean(text);
+  if (!value) return;
+  try {
+    page.drawText(value.slice(0, options.maxChars || 90), {
+      x,
+      y,
+      size: options.size || 10,
+      font: options.font,
+      color: options.color
+    });
+  } catch {}
+}
 function pdfSetText(form: any, name: string, value: any) {
   try { form.getTextField(name).setText(pdfClean(value)); } catch {}
 }
@@ -715,12 +740,16 @@ function pdfSetAccidentRows(form: any, report: any) {
   pdfSetText(form, 'to government agencies or insurers or retained under internal company policies 3', lines[3]);
 }
 async function buildCompletedSafetyPdf(report: any) {
-  const { PDFDocument } = await import('pdf-lib');
+  const { PDFDocument, StandardFonts, rgb } = await import('pdf-lib');
   const templatePath = path.join(process.cwd(), 'public', 'fmcsa-safety-performance-template.pdf');
   if (!fs.existsSync(templatePath)) throw new Error('FMCSA PDF template is missing from public/fmcsa-safety-performance-template.pdf');
   const templateBytes = fs.readFileSync(templatePath);
   const pdfDoc = await PDFDocument.load(templateBytes);
   const form = pdfDoc.getForm();
+  const pages = pdfDoc.getPages();
+  const applicantSignature = parseApplicantSignature(report.notes);
+  const applicantSignatureName = pdfClean(applicantSignature?.name);
+  const applicantSignatureDate = pdfSignatureDate(applicantSignature?.signedAt);
 
   pdfSetText(form, 'I Print Name', report.applicantName);
   pdfSetText(form, 'Previous Employer 1', report.prevEmployerName);
@@ -737,7 +766,7 @@ async function buildCompletedSafetyPdf(report: any) {
   pdfSetText(form, 'City State Zip_2', report.employerCityStateZip);
   pdfSetText(form, 'Prospective employers confidential fax number', report.confFax || report.employerFax);
   pdfSetText(form, 'Prospective employers confidential email address', report.confEmail || report.employerEmail);
-  pdfSetText(form, 'Date', pdfShortDate(report.created));
+  pdfSetText(form, 'Date', applicantSignatureDate || pdfShortDate(report.created));
 
   pdfCheck(form, 'The applicant named above was or is employed or used by us Yes', pdfSame(report.employedByCompany, 'Yes'));
   pdfSetText(form, 'Employed as job title', report.jobTitle);
@@ -783,6 +812,18 @@ async function buildCompletedSafetyPdf(report: any) {
   pdfSetText(form, 'undefined_8', report.infoReceivedDate || pdfShortDate(report.created));
 
   form.flatten();
+
+  // PHASE12A91: show applicant electronic signature and signature date on FMCSA PDF.
+  // The FMCSA template uses a PDF signature widget for the applicant signature line,
+  // so we draw the saved electronic signature text onto the flattened PDF page.
+  if (applicantSignatureName || applicantSignatureDate) {
+    const signaturePage = pages[0];
+    const signatureFont = await pdfDoc.embedFont(StandardFonts.HelveticaOblique);
+    const signatureColor = rgb(0, 0, 0);
+    pdfDrawText(signaturePage, applicantSignatureName || report.applicantName, 42, 315, { size: 10, font: signatureFont, color: signatureColor, maxChars: 70 });
+    pdfDrawText(signaturePage, applicantSignatureDate, 455, 315, { size: 10, font: signatureFont, color: signatureColor, maxChars: 20 });
+  }
+
   return await pdfDoc.save();
 }
 async function clientSafetyPdf(req: any, res: any, user: any) {
