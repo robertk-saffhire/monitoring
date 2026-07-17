@@ -760,6 +760,40 @@
     });
   }
 
+  let phase12a83LegacyButtonObserverStarted = false;
+  let phase12a83LegacyCleanupQueued = false;
+
+  function queueLegacyButtonCleanup() {
+    if (phase12a83LegacyCleanupQueued) return;
+    phase12a83LegacyCleanupQueued = true;
+    window.requestAnimationFrame(() => {
+      phase12a83LegacyCleanupQueued = false;
+      if (!isSafetyPage() || phase12a80EmailSettingsActive) return;
+      removeLegacySafetyButtons();
+    });
+  }
+
+  function startLegacyButtonObserver() {
+    if (phase12a83LegacyButtonObserverStarted || !document.body) return;
+    phase12a83LegacyButtonObserverStarted = true;
+    const labelsToCatch = /(^|\s)(pdf|email|copy)(\s|$)|open gmail|final packet|copy client draft/i;
+    const observer = new MutationObserver((mutations) => {
+      if (!isSafetyPage() || phase12a80EmailSettingsActive) return;
+      for (const mutation of mutations) {
+        for (const node of mutation.addedNodes) {
+          if (!node || node.nodeType !== 1) continue;
+          const nodeText = text(node).replace(/\s+/g, ' ').trim();
+          if (labelsToCatch.test(nodeText)) {
+            queueLegacyButtonCleanup();
+            return;
+          }
+        }
+      }
+    });
+    observer.observe(document.body, { childList: true, subtree: true });
+    queueLegacyButtonCleanup();
+  }
+
   function addButtons() {
     safetyTables().forEach((table) => {
       const actionIndex = ensureActionColumn(table);
@@ -1148,6 +1182,7 @@
       return;
     }
     if (!isSafetyPage()) return;
+    startLegacyButtonObserver();
     addPanel();
     removeLegacySafetyButtons();
     addButtons();
