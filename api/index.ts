@@ -29,6 +29,44 @@ const REPORT_FIELDS = [
 ];
 const reportCols = ['"companyId"', ...REPORT_FIELDS.map((field) => `"${field}"`).map((col) => col === '"created"' || col === '"status"' || col === '"notes"' ? col.replaceAll('"', '') : col)];
 
+let safetyStatusEnumChecked = false;
+let safetyReportColumnCache: string[] | null = null;
+
+async function ensureSafetyStatusEnumValues() {
+  if (safetyStatusEnumChecked) return;
+  try {
+    const typeCheck = await query("select exists (select 1 from pg_type where typname='safety_report_status') as exists");
+    if (typeCheck.rows[0]?.exists) {
+      await query("alter type safety_report_status add value if not exists 'Consent Needed'");
+      await query("alter type safety_report_status add value if not exists 'Consent Given'");
+    }
+  } catch (error: any) {
+    throw new Error(`Safety report status setup failed. Run the Phase 12A-86 SQL migration in Supabase, then try again. Details: ${errorMessage(error)}`);
+  }
+  safetyStatusEnumChecked = true;
+}
+
+async function getSafetyReportColumns() {
+  if (safetyReportColumnCache) return safetyReportColumnCache;
+  const r = await query(
+    "select column_name from information_schema.columns where table_schema='public' and table_name='safety_reports'"
+  );
+  safetyReportColumnCache = r.rows.map((row: any) => String(row.column_name));
+  return safetyReportColumnCache;
+}
+
+async function safetyWritableColumns() {
+  const existing = new Set(await getSafetyReportColumns());
+  const fields = REPORT_FIELDS.filter((field) => existing.has(field));
+  const cols = ['"companyId"', ...fields.map((field) => `"${field}"`).map((col) => col === '"created"' || col === '"status"' || col === '"notes"' ? col.replaceAll('"', '') : col)];
+  return { fields, cols };
+}
+
+function reportValuesForFields(v: any, fields: string[]) {
+  return ['companyId', ...fields].map((field) => v[field]);
+}
+
+
 function json(res: any, statusCode: number, payload: any) {
   res.statusCode = statusCode;
   res.setHeader('Content-Type', 'application/json; charset=utf-8');
@@ -209,8 +247,8 @@ async function safetyReports(req: any, res: any, user: any) {
     }
     return json(res, 200, { status: 'ok', reports: r.rows, source, requestedCompanyId: companyId });
   }
-  if (req.method === 'POST') { const v = cleanReport(await readBody(req), companyId); v.status = 'Consent Needed'; if (!v.fileNumber && !v.applicantName) return json(res, 400, { status: 'error', message: 'File number or applicant name is required' }); const placeholders = reportCols.map((_, i) => `$${i + 1}`).join(','); const r = await query(`insert into safety_reports (${reportCols.join(',')}) values (${placeholders}) returning *`, reportValues(v)); return json(res, 200, { status: 'ok', report: r.rows[0] }); }
-  if (req.method === 'PATCH') { const body = await readBody(req); const id = Number(body.id); if (!id) return json(res, 400, { status: 'error', message: 'Report id is required' }); const v = cleanReport(body, companyId); const assignments = reportCols.slice(1).map((col, i) => `${col}=$${i + 1}`).join(','); const params = reportValues(v).slice(1); params.push(id, companyId); const r = await query(`update safety_reports set ${assignments}, "updatedAt"=now() where id=$${params.length - 1} and "companyId"=$${params.length} returning *`, params); return json(res, 200, { status: 'ok', report: r.rows[0] }); }
+  if (req.method === 'POST') { await ensureSafetyStatusEnumValues(); const v = cleanReport(await readBody(req), companyId); v.status = 'Consent Needed'; if (!v.fileNumber && !v.applicantName) return json(res, 400, { status: 'error', message: 'File number or applicant name is required' }); const writable = await safetyWritableColumns(); const placeholders = writable.cols.map((_, i) => `$${i + 1}`).join(','); const r = await query(`insert into safety_reports (${writable.cols.join(',')}) values (${placeholders}) returning *`, reportValuesForFields(v, writable.fields)); return json(res, 200, { status: 'ok', report: r.rows[0] }); }
+  if (req.method === 'PATCH') { await ensureSafetyStatusEnumValues(); const body = await readBody(req); const id = Number(body.id); if (!id) return json(res, 400, { status: 'error', message: 'Report id is required' }); const v = cleanReport(body, companyId); const writable = await safetyWritableColumns(); const assignments = writable.cols.slice(1).map((col, i) => `${col}=$${i + 1}`).join(','); const params = reportValuesForFields(v, writable.fields).slice(1); params.push(id, companyId); const r = await query(`update safety_reports set ${assignments}, "updatedAt"=now() where id=$${params.length - 1} and "companyId"=$${params.length} returning *`, params); return json(res, 200, { status: 'ok', report: r.rows[0] }); }
   if (req.method === 'DELETE') { const id = Number(url.searchParams.get('id')); await query('delete from safety_reports where id=$1 and "companyId"=$2', [id, companyId]); return json(res, 200, { status: 'ok', success: true }); }
   return json(res, 405, { status: 'error', message: 'Method not allowed' });
 }
@@ -227,13 +265,15 @@ async function importSafetyReports(req: any, res: any, user: any) {
     if (!v.fileNumber && !v.applicantName) { skipped++; continue; }
     const existing = v.fileNumber ? await query('select id from safety_reports where "companyId"=$1 and "fileNumber"=$2 order by id asc limit 1', [companyId, v.fileNumber]) : { rows: [] };
     if (existing.rows[0]?.id) {
-      const assignments = reportCols.slice(1).map((col, i) => `${col}=$${i + 1}`).join(',');
-      const params = reportValues(v).slice(1); params.push(existing.rows[0].id, companyId);
+      const writable = await safetyWritableColumns();
+      const assignments = writable.cols.slice(1).map((col, i) => `${col}=$${i + 1}`).join(',');
+      const params = reportValuesForFields(v, writable.fields).slice(1); params.push(existing.rows[0].id, companyId);
       await query(`update safety_reports set ${assignments}, "updatedAt"=now() where id=$${params.length - 1} and "companyId"=$${params.length}`, params);
       updated++;
     } else {
-      const placeholders = reportCols.map((_, i) => `$${i + 1}`).join(',');
-      await query(`insert into safety_reports (${reportCols.join(',')}) values (${placeholders})`, reportValues(v));
+      const writable = await safetyWritableColumns();
+      const placeholders = writable.cols.map((_, i) => `$${i + 1}`).join(',');
+      await query(`insert into safety_reports (${writable.cols.join(',')}) values (${placeholders})`, reportValuesForFields(v, writable.fields));
       imported++;
     }
   }
@@ -3685,6 +3725,7 @@ async function safetyResponsePublic(req: any, res: any) {
     const payload = await verifySafetyResponseToken(token);
 
     if (payload.responseRole === 'applicant') {
+      await ensureSafetyStatusEnumValues();
       const signatureName = safetyResponseClean(body.signatureName);
       if (!signatureName) return json(res, 400, { status: 'error', message: 'Electronic signature is required' });
 
@@ -3729,6 +3770,7 @@ async function safetyResponsePublic(req: any, res: any) {
       });
     }
 
+    await ensureSafetyStatusEnumValues();
     const values: any[] = [];
     const assignments: string[] = [];
 
