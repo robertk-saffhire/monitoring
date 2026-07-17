@@ -1,13 +1,13 @@
-Phase 12A-88 - Remove Safety Follow Up Column
+Phase 12A-89 — Safety Links Cleanup + Delete Notes
 
-Upload only:
-public/phase6.js
+Upload only this file:
+- public/phase6.js
 
-Changes:
-- Removes the Follow Up column from the Safety Performance Reports table.
-- Removes the Follow Up values from each report row.
-- Keeps manual sorting on File #, Applicant, Created, Status, and Previous Employer.
-- Hides the Follow Up Date field on the Safety Performance edit form.
+What changed:
+- Safety Performance action header is renamed to Links.
+- Link buttons are grouped by color and stabilized so duplicates are removed.
+- Duplicate Client Gmail / Mark Completed / FMCSA PDF buttons are consolidated into one group.
+- Report notes can now be deleted from the Edit Notes modal.
 
-No SQL migration needed.
-No Vercel ENV changes needed.
+SQL: none
+Vercel ENV: none
