@@ -29,6 +29,14 @@
     return titles.some((title) => /^settings$/i.test(title));
   }
 
+
+  function isSafetyEditPage() {
+    const titles = Array.from(document.querySelectorAll('.page-header h1, h1, .head h2'))
+      .map((el) => text(el))
+      .filter(Boolean);
+    return titles.some((title) => /safety\s+performance\s+submission/i.test(title));
+  }
+
   function safetyTables() {
     if (!isSafetyPage()) return [];
 
@@ -1064,11 +1072,190 @@
   }
   // PHASE12A79_EMAIL_TEMPLATE_SETTINGS_UI END
 
+
+
+  // PHASE12A85_EDIT_FORM_LAYOUT_AND_SIGNATURE_STATUS START
+  function phase12a85FindField(labelText) {
+    const wanted = String(labelText || '').trim().toLowerCase();
+    return Array.from(document.querySelectorAll('.form-card .field, form .field, form label')).find((label) => {
+      const span = label.querySelector('span');
+      const labelValue = (span ? text(span) : text(label)).trim().toLowerCase();
+      return labelValue === wanted || labelValue.startsWith(wanted);
+    }) || null;
+  }
+
+  function phase12a85FindInput(labelText) {
+    const field = phase12a85FindField(labelText);
+    if (!field) return null;
+    return field.querySelector('input, textarea, select');
+  }
+
+  function phase12a85ParseSignature(value) {
+    const raw = String(value || '');
+    const re = /\[Applicant Electronic Signature\]\s*Name:\s*([^\n|]+?)\s*\|\s*Date:\s*([^\n|]+)(?:\s*\|\s*IP:\s*([^\n]+))?/g;
+    let match;
+    let latest = null;
+    while ((match = re.exec(raw)) !== null) {
+      latest = {
+        name: String(match[1] || '').trim(),
+        signedAt: String(match[2] || '').trim(),
+        ip: String(match[3] || '').trim()
+      };
+    }
+    return latest;
+  }
+
+  function phase12a85FormatDate(value) {
+    if (!value) return '';
+    const d = new Date(value);
+    if (Number.isNaN(d.getTime())) return String(value);
+    return d.toLocaleString(undefined, { month: 'short', day: 'numeric', year: 'numeric', hour: 'numeric', minute: '2-digit' });
+  }
+
+  function phase12a85EnsureStatusOptions() {
+    const statusSelect = phase12a85FindInput('Status');
+    if (!statusSelect || statusSelect.tagName !== 'SELECT') return;
+    const wanted = ['Consent Needed', 'Consent Given', 'S1 Complete', 'Emp Sent', 'Emp Complete', 'Completed'];
+    const existing = Array.from(statusSelect.options || []).map((option) => text(option));
+    wanted.forEach((label) => {
+      if (!existing.includes(label)) {
+        const option = document.createElement('option');
+        option.value = label;
+        option.textContent = label;
+        statusSelect.appendChild(option);
+      }
+    });
+  }
+
+  function phase12a85SignatureCardHtml(signature, statusValue, applicantName) {
+    const hasSignature = Boolean(signature && signature.name);
+    const consentGiven = /consent\s+given/i.test(statusValue || '');
+    const safe = (value) => String(value || '').replace(/[&<>"']/g, (ch) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#039;' }[ch]));
+    if (hasSignature) {
+      return `
+        <div class="phase12a85-signature-card signed">
+          <div class="phase12a85-signature-icon">✓</div>
+          <div>
+            <h4>Applicant Signed</h4>
+            <p><b>Electronic Signature:</b> ${safe(signature.name)}</p>
+            <p><b>Signed Date:</b> ${safe(phase12a85FormatDate(signature.signedAt))}</p>
+            ${signature.ip ? `<p><b>IP Address:</b> ${safe(signature.ip)}</p>` : ''}
+          </div>
+        </div>
+      `;
+    }
+    if (consentGiven) {
+      return `
+        <div class="phase12a85-signature-card warning">
+          <div class="phase12a85-signature-icon">!</div>
+          <div>
+            <h4>Consent Given — Signature Detail Not Found</h4>
+            <p>The report status is Consent Given, but no electronic signature marker was found in the notes field.</p>
+          </div>
+        </div>
+      `;
+    }
+    return `
+      <div class="phase12a85-signature-card unsigned">
+        <div class="phase12a85-signature-icon">!</div>
+        <div>
+          <h4>Applicant Not Signed Yet</h4>
+          <p>${safe(applicantName || 'The applicant')} has not submitted the applicant verification form yet.</p>
+          <p>Send the <b>Applicant Link</b> from the Safety Performance report list before sending the Employer Link.</p>
+        </div>
+      </div>
+    `;
+  }
+
+  function phase12a85CleanSectionTitles() {
+    const sectionTitles = Array.from(document.querySelectorAll('.form-card .form-section h3'));
+    sectionTitles.forEach((h3) => {
+      if (h3.dataset.phase12a85Enhanced === '1') return;
+      h3.dataset.phase12a85Enhanced = '1';
+      const current = text(h3).replace(/\s*⌄\s*$/, '').trim();
+      h3.innerHTML = `<span>${current}</span><span class="phase12a85-chevron">⌄</span>`;
+    });
+  }
+
+  function enhanceSafetyEditPage() {
+    const active = isSafetyEditPage();
+    document.body.classList.toggle('phase12a85-edit-page', active);
+    if (!active) return;
+
+    const form = document.querySelector('form.form-card, form.card.form-card');
+    if (!form) return;
+    form.classList.add('phase12a85-response-style-form');
+
+    phase12a85EnsureStatusOptions();
+    phase12a85CleanSectionTitles();
+
+    const applicantInput = phase12a85FindInput('Applicant Name');
+    const statusSelect = phase12a85FindInput('Status');
+    const notesField = phase12a85FindField('Notes');
+    const notesInput = notesField ? notesField.querySelector('textarea') : null;
+    const firstSection = form.querySelector('.form-section');
+    if (!firstSection) return;
+
+    let card = form.querySelector('[data-phase12a85-signature-status]');
+    if (!card) {
+      card = document.createElement('div');
+      card.setAttribute('data-phase12a85-signature-status', '1');
+      if (notesField && notesField.parentNode) notesField.insertAdjacentElement('afterend', card);
+      else firstSection.appendChild(card);
+    }
+
+    const signature = phase12a85ParseSignature(notesInput ? notesInput.value : '');
+    const statusValue = statusSelect ? statusSelect.value : '';
+    const applicantName = applicantInput ? applicantInput.value : '';
+    const nextHtml = phase12a85SignatureCardHtml(signature, statusValue, applicantName);
+    if (card.innerHTML.trim() !== nextHtml.trim()) card.innerHTML = nextHtml;
+
+    if (notesInput && !notesInput.dataset.phase12a85Listener) {
+      notesInput.dataset.phase12a85Listener = '1';
+      notesInput.addEventListener('input', () => setTimeout(enhanceSafetyEditPage, 0));
+    }
+    if (statusSelect && !statusSelect.dataset.phase12a85Listener) {
+      statusSelect.dataset.phase12a85Listener = '1';
+      statusSelect.addEventListener('change', () => setTimeout(enhanceSafetyEditPage, 0));
+    }
+  }
+  // PHASE12A85_EDIT_FORM_LAYOUT_AND_SIGNATURE_STATUS END
+
   function addStyles() {
     if (document.getElementById('phase6-style')) return;
     const style = document.createElement('style');
     style.id = 'phase6-style';
     style.textContent = `
+      .phase12a85-edit-page .main-panel { background: #f4f7fb; }
+      .phase12a85-edit-page .page-header { max-width: 1180px; margin-left: auto; margin-right: auto; align-items: flex-start; }
+      .phase12a85-edit-page .page-header h1 { font-size: 32px; color: #0f172a; }
+      .phase12a85-edit-page .page-header p { color: #64748b; }
+      .phase12a85-response-style-form { max-width: 1180px; margin: 0 auto 30px; border-radius: 18px; overflow: hidden; background: #fff; border: 1px solid #dbe4ef; box-shadow: 0 18px 50px rgba(15,23,42,.08); }
+      .phase12a85-edit-page .form-section { padding: 18px 22px 24px; border-bottom: 1px solid #dbe4ef; background: #fff; }
+      .phase12a85-edit-page .form-section h3 { display: flex; justify-content: space-between; align-items: center; margin: -18px -22px 18px; padding: 13px 18px; border: 0; border-radius: 0; background: #dbeafe; color: #1e3a8a; font-size: 15px; font-weight: 900; letter-spacing: .01em; }
+      .phase12a85-chevron { color: #2563eb; font-weight: 900; }
+      .phase12a85-edit-page .form-section h4 { margin: 22px 0 12px; padding-top: 4px; font-size: 14px; color: #1e293b; text-transform: none; letter-spacing: 0; }
+      .phase12a85-edit-page .field span { color: #475569; font-weight: 900; }
+      .phase12a85-edit-page input, .phase12a85-edit-page select, .phase12a85-edit-page textarea { border: 1px solid #cbd5e1; border-radius: 8px; background: #fff; }
+      .phase12a85-edit-page input:focus, .phase12a85-edit-page select:focus, .phase12a85-edit-page textarea:focus { outline: 2px solid rgba(37,99,235,.18); border-color: #2563eb; }
+      .phase12a85-edit-page .check-grid .check-row { border-radius: 10px; background: #f8fafc; }
+      .phase12a85-edit-page .accident-row { background: #f8fafc; border: 1px solid #e2e8f0; border-radius: 12px; padding: 10px; }
+      .phase12a85-edit-page .form-actions { max-width: 1180px; margin: 0 auto; border-top: 1px solid #dbe4ef; background: #f8fafc; }
+      .phase12a85-signature-card { display: flex; gap: 14px; align-items: flex-start; border-radius: 14px; padding: 14px 16px; margin: 16px 0 4px; border: 1px solid #e2e8f0; }
+      .phase12a85-signature-card h4 { margin: 0 0 6px !important; padding: 0 !important; font-size: 16px !important; text-transform: none !important; letter-spacing: 0 !important; }
+      .phase12a85-signature-card p { margin: 3px 0; color: #334155; font-size: 13px; }
+      .phase12a85-signature-icon { width: 34px; height: 34px; border-radius: 999px; display: inline-flex; align-items: center; justify-content: center; flex: 0 0 auto; font-weight: 900; }
+      .phase12a85-signature-card.signed { border-color: #86efac; background: #f0fdf4; }
+      .phase12a85-signature-card.signed h4, .phase12a85-signature-card.signed .phase12a85-signature-icon { color: #166534; }
+      .phase12a85-signature-card.signed .phase12a85-signature-icon { background: #dcfce7; }
+      .phase12a85-signature-card.unsigned { border-color: #fed7aa; background: #fff7ed; }
+      .phase12a85-signature-card.unsigned h4, .phase12a85-signature-card.unsigned .phase12a85-signature-icon { color: #c2410c; }
+      .phase12a85-signature-card.unsigned .phase12a85-signature-icon { background: #ffedd5; }
+      .phase12a85-signature-card.warning { border-color: #fde68a; background: #fffbeb; }
+      .phase12a85-signature-card.warning h4, .phase12a85-signature-card.warning .phase12a85-signature-icon { color: #a16207; }
+      .phase12a85-signature-card.warning .phase12a85-signature-icon { background: #fef3c7; }
+      @media(max-width:900px){ .phase12a85-edit-page .page-header, .phase12a85-response-style-form { max-width: 100%; } .phase12a85-signature-card { flex-direction: column; } }
+
       .phase6-panel { margin-bottom: 16px; padding: 16px; border-left: 5px solid #16a34a; }
       .phase6-panel h2 { margin: 0 0 8px; }
       .phase6-panel-actions { margin: 12px 0; display: flex; flex-wrap: wrap; gap: 10px; }
@@ -1203,6 +1390,11 @@
       if (!document.getElementById('phase12a79-email-settings')) renderEmailSettingsPage();
       return;
     }
+    if (isSafetyEditPage()) {
+      enhanceSafetyEditPage();
+      return;
+    }
+    document.body.classList.remove('phase12a85-edit-page');
     if (!isSafetyPage()) return;
     startLegacyButtonObserver();
     addPanel();
