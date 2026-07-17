@@ -419,6 +419,10 @@
           <input data-phase12a78-fax-number placeholder="Example: 9725551234" inputmode="tel" />
         </label>
         <label class="phase12a78-field">
+          <span>eFax send domain</span>
+          <input data-phase12a95-efax-domain value="efaxsend.com" />
+        </label>
+        <label class="phase12a78-field">
           <span>Recipient / Company</span>
           <input data-phase12a78-recipient-name placeholder="Previous employer or contact name" />
         </label>
@@ -433,7 +437,7 @@
         <p class="phase6-note">Templates can use <b>{{applicantName}}</b>, <b>{{fileNumber}}</b>, <b>{{previousEmployer}}</b>, <b>{{recipientName}}</b>, and <b>{{today}}</b>.</p>
         <div class="phase6-modal-actions">
           <button type="button" data-phase12a78-close class="phase12a78-secondary">Cancel</button>
-          <button type="button" data-phase12a78-send>Send Fax</button>
+          <button type="button" data-phase12a78-send>Download PDF & Open Gmail</button>
         </div>
         <div class="phase12a93-debug hidden" data-phase12a93-debug>
           <div class="phase12a93-debug-head">
@@ -442,7 +446,7 @@
           </div>
           <pre data-phase12a93-debug-text></pre>
         </div>
-        <p class="phase6-note">This sends the completed FMCSA PDF to eFax by email. eFax will handle the actual fax delivery and confirmation.</p>
+        <p class="phase6-note"><b>Important:</b> Gmail will open with the fax email prepared and the FMCSA PDF will download. Attach the downloaded PDF in Gmail before you click Send.</p>
       </div>
     `;
     document.body.appendChild(modal);
@@ -458,6 +462,8 @@
     modal.querySelector('[data-phase12a78-summary]').textContent = `File #${data.fileNumber} — ${data.applicant || 'Applicant not listed'}`;
     modal.querySelector('[data-phase12a78-fax-number]').value = '';
     modal.querySelector('[data-phase12a78-recipient-name]').value = data.employer || '';
+    const domainInput = modal.querySelector('[data-phase12a95-efax-domain]');
+    if (domainInput) domainInput.value = localStorage.getItem('phase12a95EfaxDomain') || 'efaxsend.com';
     modal.querySelector('[data-phase12a79-subject]').value = defaultFaxSubject(data);
     modal.querySelector('[data-phase12a78-cover-message]').value = defaultFaxCoverMessage(data);
     const debugBox = modal.querySelector('[data-phase12a93-debug]');
@@ -481,23 +487,20 @@
   function formatFaxDebug(result, data) {
     const debug = result && result.debug ? result.debug : {};
     const lines = [
-      ['Status', debug.status || result?.status || 'sent'],
-      ['Sent At', debug.sentAt || new Date().toISOString()],
-      ['Sent To eFax', debug.sentTo || result?.faxEmail || ''],
-      ['From', debug.fromEmail || result?.fromEmail || ''],
-      ['Reply-To', debug.replyToEmail || result?.replyToEmail || ''],
+      ['Status', debug.status || result?.status || 'gmail_compose_opened'],
+      ['Prepared At', debug.sentAt || debug.preparedAt || new Date().toISOString()],
+      ['Gmail To', debug.sentTo || result?.faxEmail || ''],
       ['eFax Domain', debug.efaxDomain || result?.efaxDomain || ''],
       ['Recipient Fax Digits', debug.recipientFaxDigits || ''],
-      ['Email Provider', debug.emailProvider || 'resend'],
-      ['Provider Message ID', debug.emailProviderId || result?.emailProviderId || ''],
+      ['Email Provider', debug.emailProvider || 'gmail_compose'],
       ['Template ID', debug.templateId || 'Manual/default'],
       ['Template Name', debug.templateName || 'Manual/default'],
       ['Applicant', debug.applicantName || data?.applicant || ''],
       ['File #', debug.fileNumber || data?.fileNumber || ''],
       ['Subject', debug.subject || ''],
-      ['PDF Attached', debug.pdfAttached ? 'Yes' : 'Unknown'],
+      ['PDF Downloaded', debug.pdfAttached ? 'Yes' : 'Unknown'],
       ['Attachment Filename', debug.attachmentFilename || ''],
-      ['Note', debug.note || 'This confirms the app sent the email to the eFax gateway. Final fax delivery is confirmed separately by eFax.']
+      ['Note', debug.note || 'Gmail was opened with the fax email prepared. Attach the downloaded FMCSA PDF before sending from Gmail.']
     ];
     return lines.map(([label, value]) => `${label}: ${value || '—'}`).join('\n');
   }
@@ -522,53 +525,122 @@
     }
   }
 
-  async function sendFaxFromModal() {
+  function faxDomainFromModal(modal) {
+    const input = modal.querySelector('[data-phase12a95-efax-domain]');
+    const value = String(input?.value || 'efaxsend.com').trim().replace(/^@+/, '').toLowerCase() || 'efaxsend.com';
+    try { localStorage.setItem('phase12a95EfaxDomain', value); } catch {}
+    if (input) input.value = value;
+    return value;
+  }
+
+  function faxDraftFromModal() {
     const modal = getFaxModal();
     const data = modal.__data || {};
     const faxNumber = normalizeFax(modal.querySelector('[data-phase12a78-fax-number]')?.value || '');
+    const domain = faxDomainFromModal(modal);
     const recipientName = String(modal.querySelector('[data-phase12a78-recipient-name]')?.value || '').trim();
     const templateId = Number(modal.querySelector('[data-phase12a79-template-select]')?.value || 0) || null;
+    const template = (phase12a79TemplateCache || []).find((item) => Number(item.id) === Number(templateId));
     const subject = String(modal.querySelector('[data-phase12a79-subject]')?.value || '').trim();
-    const coverMessage = String(modal.querySelector('[data-phase12a78-cover-message]')?.value || '').trim();
+    const body = String(modal.querySelector('[data-phase12a78-cover-message]')?.value || '').trim();
+    const to = faxNumber ? `${faxNumber}@${domain}` : '';
+    return {
+      to,
+      faxNumber,
+      domain,
+      recipientName,
+      templateId,
+      templateName: template ? String(template.name || '') : 'Manual/default',
+      subject,
+      body,
+      full: `To: ${to || '[enter fax email]'}\nSubject: ${subject}\n\n${body}`,
+      gmailUrl: 'https://mail.google.com/mail/?view=cm&fs=1'
+        + `&to=${encodeURIComponent(to)}`
+        + `&su=${encodeURIComponent(subject)}`
+        + `&body=${encodeURIComponent(body)}`
+    };
+  }
+
+  function pdfFilenameFromDisposition(disposition, fileNumber) {
+    const fallback = `fmcsa-safety-performance-${String(fileNumber || 'report').replace(/[^0-9A-Za-z_-]/g, '') || 'report'}.pdf`;
+    const header = String(disposition || '');
+    const starMatch = header.match(/filename\*=UTF-8''([^;]+)/i);
+    if (starMatch) {
+      try { return decodeURIComponent(starMatch[1].replace(/"/g, '')); } catch {}
+    }
+    const match = header.match(/filename="?([^";]+)"?/i);
+    return match ? match[1] : fallback;
+  }
+
+  async function downloadFmcsaPdfForFax(data) {
+    const url = '/api/index?path=' + encodeURIComponent('client-safety-pdf')
+      + '&companyId=' + encodeURIComponent(getCompanyId())
+      + '&fileNumber=' + encodeURIComponent(data.fileNumber || '');
+    const response = await fetch(url, { credentials: 'include' });
+    if (!response.ok) {
+      const raw = await response.text();
+      let message = raw;
+      try { message = JSON.parse(raw).message || raw; } catch {}
+      throw new Error(message || `Could not download FMCSA PDF: ${response.status}`);
+    }
+    const blob = await response.blob();
+    const filename = pdfFilenameFromDisposition(response.headers.get('Content-Disposition'), data.fileNumber);
+    const objectUrl = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = objectUrl;
+    a.download = filename;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    setTimeout(() => URL.revokeObjectURL(objectUrl), 4000);
+    return { filename, size: blob.size };
+  }
+
+  async function sendFaxFromModal() {
+    const modal = getFaxModal();
+    const data = modal.__data || {};
+    const draft = faxDraftFromModal();
     const sendButton = modal.querySelector('[data-phase12a78-send]');
 
     if (!data.fileNumber) return toast('Could not find the file number for this report.', true);
-    if (faxNumber.length < 7) return toast('Enter a valid recipient fax number.', true);
-
-    const confirmed = window.confirm(`Send the FMCSA report for file #${data.fileNumber} to fax number ${faxNumber}?`);
-    if (!confirmed) return;
+    if (draft.faxNumber.length < 7) return toast('Enter a valid recipient fax number.', true);
 
     const originalText = sendButton ? sendButton.textContent : '';
-    let faxSendSucceeded = false;
     if (sendButton) {
       sendButton.disabled = true;
-      sendButton.textContent = 'Sending...';
+      sendButton.textContent = 'Preparing Gmail...';
     }
 
     try {
-      const result = await apiWithFallback('safety-reports/fax-fmcsa', {
-        method: 'POST',
-        body: JSON.stringify({
-          companyId: getCompanyId(),
-          fileNumber: data.fileNumber,
-          faxNumber,
-          recipientName,
-          templateId,
-          subject,
-          coverMessage
-        })
-      });
-      showFaxDebug(modal, result, data);
-      faxSendSucceeded = true;
-      toast((result.message || 'Fax sent to eFax.') + ' Fax debug details are shown in the popup.');
-      if (sendButton) sendButton.textContent = 'Sent - Review Debug';
+      const pdf = await downloadFmcsaPdfForFax(data);
+      await copyText(draft.full, 'Fax email draft copied. Attach the downloaded FMCSA PDF before sending in Gmail.');
+      window.open(draft.gmailUrl, '_blank', 'noopener,noreferrer');
+      showFaxDebug(modal, {
+        status: 'gmail_compose_opened_pdf_downloaded',
+        debug: {
+          status: 'gmail_compose_opened_pdf_downloaded',
+          preparedAt: new Date().toISOString(),
+          sentTo: draft.to,
+          recipientFaxDigits: draft.faxNumber,
+          efaxDomain: draft.domain,
+          emailProvider: 'gmail_compose_manual_send',
+          templateId: draft.templateId || 'Manual/default',
+          templateName: draft.templateName || 'Manual/default',
+          applicantName: data.applicant || '',
+          fileNumber: data.fileNumber || '',
+          subject: draft.subject,
+          pdfAttached: true,
+          attachmentFilename: pdf.filename,
+          note: 'The FMCSA PDF was downloaded and Gmail was opened. Attach the downloaded PDF in Gmail before clicking Send.'
+        }
+      }, data);
+      toast('Gmail opened and FMCSA PDF downloaded. Attach the PDF in Gmail before sending.');
+      if (sendButton) sendButton.textContent = 'Gmail Opened - Attach PDF';
     } catch (error) {
-      toast(error.message || 'Could not send fax.', true);
+      toast(error.message || 'Could not prepare Gmail fax.', true);
+      if (sendButton) sendButton.textContent = originalText || 'Download PDF & Open Gmail';
     } finally {
-      if (sendButton) {
-        sendButton.disabled = false;
-        if (!faxSendSucceeded) sendButton.textContent = originalText || 'Send Fax';
-      }
+      if (sendButton) sendButton.disabled = false;
     }
   }
   // PHASE12A78_EFAX_FAX_MODAL END
