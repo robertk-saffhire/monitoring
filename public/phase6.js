@@ -435,6 +435,13 @@
           <button type="button" data-phase12a78-close class="phase12a78-secondary">Cancel</button>
           <button type="button" data-phase12a78-send>Send Fax</button>
         </div>
+        <div class="phase12a93-debug hidden" data-phase12a93-debug>
+          <div class="phase12a93-debug-head">
+            <h3>Fax Debug</h3>
+            <button type="button" data-phase12a93-copy-debug>Copy Debug</button>
+          </div>
+          <pre data-phase12a93-debug-text></pre>
+        </div>
         <p class="phase6-note">This sends the completed FMCSA PDF to eFax by email. eFax will handle the actual fax delivery and confirmation.</p>
       </div>
     `;
@@ -453,6 +460,10 @@
     modal.querySelector('[data-phase12a78-recipient-name]').value = data.employer || '';
     modal.querySelector('[data-phase12a79-subject]').value = defaultFaxSubject(data);
     modal.querySelector('[data-phase12a78-cover-message]').value = defaultFaxCoverMessage(data);
+    const debugBox = modal.querySelector('[data-phase12a93-debug]');
+    const debugText = modal.querySelector('[data-phase12a93-debug-text]');
+    if (debugBox) debugBox.classList.add('hidden');
+    if (debugText) debugText.textContent = '';
     fillFaxTemplateSelect(modal, phase12a79TemplateCache || []);
     loadFaxTemplates().then((templates) => fillFaxTemplateSelect(modal, templates)).catch((error) => toast(error.message || 'Could not load email templates.', true));
     modal.classList.remove('hidden');
@@ -465,6 +476,50 @@
 
   function normalizeFax(value) {
     return String(value || '').replace(/[^0-9]/g, '');
+  }
+
+  function formatFaxDebug(result, data) {
+    const debug = result && result.debug ? result.debug : {};
+    const lines = [
+      ['Status', debug.status || result?.status || 'sent'],
+      ['Sent At', debug.sentAt || new Date().toISOString()],
+      ['Sent To eFax', debug.sentTo || result?.faxEmail || ''],
+      ['From', debug.fromEmail || result?.fromEmail || ''],
+      ['Reply-To', debug.replyToEmail || result?.replyToEmail || ''],
+      ['eFax Domain', debug.efaxDomain || result?.efaxDomain || ''],
+      ['Recipient Fax Digits', debug.recipientFaxDigits || ''],
+      ['Email Provider', debug.emailProvider || 'resend'],
+      ['Provider Message ID', debug.emailProviderId || result?.emailProviderId || ''],
+      ['Template ID', debug.templateId || 'Manual/default'],
+      ['Template Name', debug.templateName || 'Manual/default'],
+      ['Applicant', debug.applicantName || data?.applicant || ''],
+      ['File #', debug.fileNumber || data?.fileNumber || ''],
+      ['Subject', debug.subject || ''],
+      ['PDF Attached', debug.pdfAttached ? 'Yes' : 'Unknown'],
+      ['Attachment Filename', debug.attachmentFilename || ''],
+      ['Note', debug.note || 'This confirms the app sent the email to the eFax gateway. Final fax delivery is confirmed separately by eFax.']
+    ];
+    return lines.map(([label, value]) => `${label}: ${value || '—'}`).join('\n');
+  }
+
+  function showFaxDebug(modal, result, data) {
+    const box = modal.querySelector('[data-phase12a93-debug]');
+    const pre = modal.querySelector('[data-phase12a93-debug-text]');
+    if (!box || !pre) return;
+    pre.textContent = formatFaxDebug(result, data);
+    box.classList.remove('hidden');
+  }
+
+  async function copyFaxDebug() {
+    const modal = getFaxModal();
+    const text = modal.querySelector('[data-phase12a93-debug-text]')?.textContent || '';
+    if (!text) return toast('No fax debug details to copy yet.', true);
+    try {
+      await navigator.clipboard.writeText(text);
+      toast('Fax debug details copied.');
+    } catch {
+      window.prompt('Copy fax debug details:', text);
+    }
   }
 
   async function sendFaxFromModal() {
@@ -484,6 +539,7 @@
     if (!confirmed) return;
 
     const originalText = sendButton ? sendButton.textContent : '';
+    let faxSendSucceeded = false;
     if (sendButton) {
       sendButton.disabled = true;
       sendButton.textContent = 'Sending...';
@@ -502,14 +558,16 @@
           coverMessage
         })
       });
-      toast(result.message || 'Fax sent to eFax.');
-      closeFaxModal();
+      showFaxDebug(modal, result, data);
+      faxSendSucceeded = true;
+      toast((result.message || 'Fax sent to eFax.') + ' Fax debug details are shown in the popup.');
+      if (sendButton) sendButton.textContent = 'Sent - Review Debug';
     } catch (error) {
       toast(error.message || 'Could not send fax.', true);
     } finally {
       if (sendButton) {
         sendButton.disabled = false;
-        sendButton.textContent = originalText || 'Send Fax';
+        if (!faxSendSucceeded) sendButton.textContent = originalText || 'Send Fax';
       }
     }
   }
@@ -1944,6 +2002,11 @@
       .phase12a89-link-color-group button, .phase12a89-link-color-group a { margin: 0 !important; }
       .phase12a89-link-tools { display: flex; gap: 8px; align-items: flex-start; margin-left: auto; }
       .phase12a89-link-tools:empty { display: none; }
+      .phase12a93-debug { margin-top: 14px; border: 1px solid #bfdbfe; background: #eff6ff; border-radius: 14px; padding: 12px; }
+      .phase12a93-debug-head { display: flex; align-items: center; justify-content: space-between; gap: 10px; margin-bottom: 8px; }
+      .phase12a93-debug-head h3 { margin: 0; font-size: 15px; color: #1e3a8a; }
+      .phase12a93-debug-head button { border: 1px solid #93c5fd; border-radius: 999px; background: #dbeafe; color: #1d4ed8; padding: 6px 10px; font-size: 12px; font-weight: 900; cursor: pointer; }
+      .phase12a93-debug pre { margin: 0; white-space: pre-wrap; word-break: break-word; color: #1e293b; font-size: 12px; line-height: 1.55; }
       th[data-phase6-sortable] { cursor: pointer; user-select: none; }
       th[data-phase6-sortable]:hover { background: #eef2ff; color: #111827; }
       .phase6-sort-head { display: inline-flex; align-items: center; gap: 6px; white-space: nowrap; }
@@ -1999,6 +2062,12 @@
       event.preventDefault();
       event.stopPropagation();
       sendFaxFromModal();
+      return;
+    }
+    if (event.target && event.target.closest && event.target.closest('[data-phase12a93-copy-debug]')) {
+      event.preventDefault();
+      event.stopPropagation();
+      copyFaxDebug();
       return;
     }
     if (event.target && event.target.closest && event.target.closest('[data-phase12a79-add-template]')) {
