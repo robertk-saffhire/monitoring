@@ -1,20 +1,14 @@
-Phase 12A-92 - Client Gmail Template Selection
+Phase 12A-93 — Fax Debug Details
 
-Upload only this file:
+Upload only these files:
+- api/index.ts
 - public/phase6.js
 
 What changed:
-- Client Gmail now opens a template-selection popup first.
-- You can choose an existing Email Settings template before Gmail opens.
-- The selected template fills the Gmail subject and body.
-- Template variables supported include:
-  {{applicantName}}
-  {{fileNumber}}
-  {{previousEmployer}}
-  {{clientName}}
-  {{clientEmail}}
-  {{today}}
-- The draft is copied to the clipboard before Gmail opens.
+- Fax FMCSA now returns a debug object after the email is handed to the eFax email gateway.
+- The Fax popup now stays open after sending and shows Fax Debug details.
+- You can copy the debug details.
+- Debug details include eFax destination email, From email, Reply-To, eFax domain, fax number digits, template used, subject, PDF attachment status, filename, and Resend message ID.
 
-SQL: No new SQL.
-ENV: No new Vercel environment variables.
+SQL: No SQL needed.
+Vercel ENV: No ENV changes needed.
