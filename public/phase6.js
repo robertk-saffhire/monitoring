@@ -555,11 +555,14 @@
     return apiWithFallback('safety-report-notes?companyId=' + encodeURIComponent(getCompanyId()) + '&fileNumber=' + encodeURIComponent(data.fileNumber));
   }
 
-  function phase12a87NoteHtml(note) {
+  function phase12a87NoteHtml(note, options = {}) {
     const badge = note.showToClient ? '<span class="phase12a87-note-badge client">Client can see</span>' : '<span class="phase12a87-note-badge internal">Internal only</span>';
     const meta = [note.createdBy, phase12a87FormatDate(note.createdAt)].filter(Boolean).join(' · ');
-    return `<div class="phase12a87-note-item">
-      <div class="phase12a87-note-top">${badge}${meta ? `<span class="phase12a87-note-meta">${phase12a87Escape(meta)}</span>` : ''}</div>
+    const deleteButton = options.showDelete && note.id
+      ? `<button type="button" class="phase12a87-delete-note" data-phase12a87-delete-note="${phase12a87Escape(note.id)}">Delete</button>`
+      : '';
+    return `<div class="phase12a87-note-item" data-phase12a87-note-id="${phase12a87Escape(note.id || '')}">
+      <div class="phase12a87-note-top">${badge}${meta ? `<span class="phase12a87-note-meta">${phase12a87Escape(meta)}</span>` : ''}${deleteButton}</div>
       <div class="phase12a87-note-text">${phase12a87Escape(note.note).replace(/\n/g, '<br>')}</div>
     </div>`;
   }
@@ -660,7 +663,7 @@
     modal.classList.remove('hidden');
     try {
       const result = await phase12a87LoadNotes(row);
-      existing.innerHTML = result.notes && result.notes.length ? result.notes.map(phase12a87NoteHtml).join('') : '<p class="phase12a87-empty-note">No notes have been added yet.</p>';
+      existing.innerHTML = result.notes && result.notes.length ? result.notes.map((note) => phase12a87NoteHtml(note, { showDelete: true })).join('') : '<p class="phase12a87-empty-note">No notes have been added yet.</p>';
     } catch (error) {
       existing.innerHTML = `<p class="phase12a87-empty-note danger">${phase12a87Escape(error.message || 'Could not load notes.')}</p>`;
     }
@@ -703,6 +706,40 @@
       toast(error.message || 'Could not save note.', true);
     } finally {
       if (button) { button.disabled = false; button.textContent = original || 'Save Note'; }
+    }
+  }
+
+  async function phase12a87DeleteNoteFromModal(button) {
+    const modal = phase12a87GetNotesModal();
+    const row = modal.__row;
+    const noteId = button && button.getAttribute('data-phase12a87-delete-note');
+    if (!noteId) return toast('Could not find the note to delete.', true);
+    if (!window.confirm('Delete this note? This cannot be undone.')) return;
+    const original = button.textContent;
+    button.disabled = true;
+    button.textContent = 'Deleting...';
+    try {
+      await apiWithFallback('safety-report-notes?companyId=' + encodeURIComponent(getCompanyId()) + '&id=' + encodeURIComponent(noteId), {
+        method: 'DELETE'
+      });
+      toast('Note deleted.');
+      if (row) {
+        const table = row.closest('table');
+        const idx = indexes(table);
+        const cell = idx.notes >= 0 ? row.children[idx.notes] : null;
+        if (cell) cell.dataset.phase12a87Loaded = '0';
+        phase12a87EnhanceNotesCell(row);
+        const existing = modal.querySelector('[data-phase12a87-existing-notes]');
+        if (existing) {
+          existing.innerHTML = '<p class="phase12a87-empty-note">Loading notes...</p>';
+          const result = await phase12a87LoadNotes(row);
+          existing.innerHTML = result.notes && result.notes.length ? result.notes.map((note) => phase12a87NoteHtml(note, { showDelete: true })).join('') : '<p class="phase12a87-empty-note">No notes have been added yet.</p>';
+        }
+      }
+    } catch (error) {
+      toast(error.message || 'Could not delete note.', true);
+      button.disabled = false;
+      button.textContent = original || 'Delete';
     }
   }
   // PHASE12A87_REPORT_NOTES_MANAGER END
@@ -990,6 +1027,7 @@
       phase12a83LegacyCleanupQueued = false;
       if (!isSafetyPage() || phase12a80EmailSettingsActive) return;
       removeLegacySafetyButtons();
+      phase12a89NormalizeLinksColumn();
     });
   }
 
@@ -1020,7 +1058,9 @@
       Array.from(table.querySelectorAll('tbody tr')).forEach((row) => {
         const cells = Array.from(row.children);
         const actionCell = cells[actionIndex] || cells[cells.length - 1];
-        if (!actionCell || actionCell.querySelector('.phase6-link-group')) return;
+        if (!actionCell) return;
+        const existingLabels = Array.from(actionCell.querySelectorAll('button, a')).map((el) => phase12a89NormalizeLabel(text(el)));
+        if (existingLabels.includes('applicant link') && existingLabels.includes('employer link') && existingLabels.includes('fax fmcsa')) return;
 
         const group = document.createElement('div');
         group.className = 'phase6-link-group';
@@ -1062,6 +1102,129 @@
       });
     });
   }
+
+
+  // PHASE12A89_LINKS_COLUMN_CLEANUP START
+  function phase12a89NormalizeLabel(label) {
+    return String(label || '').replace(/\s+/g, ' ').trim().toLowerCase();
+  }
+
+  function phase12a89DesiredOrder(label) {
+    const order = {
+      'applicant link': 10,
+      'employer link': 20,
+      'fax fmcsa': 30,
+      'client gmail': 40,
+      'mark completed': 50,
+      'fmcsa pdf': 60
+    };
+    return order[phase12a89NormalizeLabel(label)] || 999;
+  }
+
+  function phase12a89GroupClass(label) {
+    const normalized = phase12a89NormalizeLabel(label);
+    if (normalized === 'applicant link') return 'blue';
+    if (normalized === 'employer link' || normalized === 'fmcsa pdf') return 'green';
+    if (normalized === 'fax fmcsa' || normalized === 'client gmail' || normalized === 'mark completed') return 'purple';
+    return 'other';
+  }
+
+  function phase12a89RenameLinksHeader(table) {
+    const idx = indexes(table);
+    const headers = Array.from(table.querySelectorAll('thead th'));
+    const actionHeader = idx.actions >= 0 ? headers[idx.actions] : null;
+    if (actionHeader && text(actionHeader) !== 'Links') actionHeader.textContent = 'Links';
+  }
+
+  function phase12a89IsIconOnlyAction(el) {
+    const label = phase12a89NormalizeLabel(text(el));
+    if (label) return false;
+    return Boolean(el.querySelector('svg')) || el.classList.contains('icon-btn');
+  }
+
+  function phase12a89NormalizeLinksColumn() {
+    if (!isSafetyPage()) return;
+    safetyTables().forEach((table) => {
+      phase12a89RenameLinksHeader(table);
+      const idx = indexes(table);
+      if (idx.actions < 0) return;
+      Array.from(table.querySelectorAll('tbody tr')).forEach((row) => {
+        if (!row.children || row.children.length <= idx.actions) return;
+        const cell = row.children[idx.actions];
+        if (!cell) return;
+        cell.classList.add('phase12a89-links-cell');
+
+        let layout = cell.querySelector(':scope > .phase12a89-links-layout');
+        if (!layout) {
+          layout = document.createElement('div');
+          layout.className = 'phase12a89-links-layout';
+          layout.innerHTML = '<div class="phase12a89-links-main"></div><div class="phase12a89-link-tools"></div>';
+          cell.insertBefore(layout, cell.firstChild);
+        }
+
+        const main = layout.querySelector('.phase12a89-links-main');
+        const tools = layout.querySelector('.phase12a89-link-tools');
+        const desired = new Map();
+        const iconActions = [];
+
+        Array.from(cell.querySelectorAll('button, a')).forEach((el) => {
+          if (el.closest('.phase6-modal') || el.closest('#phase12a87-notes-modal')) return;
+          const label = phase12a89NormalizeLabel(text(el));
+          if (['pdf', 'email', 'copy', 'open gmail', 'final packet', 'copy client draft'].includes(label)) {
+            el.remove();
+            return;
+          }
+          if (['applicant link', 'employer link', 'fax fmcsa', 'client gmail', 'mark completed', 'fmcsa pdf'].includes(label)) {
+            if (!desired.has(label)) desired.set(label, el);
+            else el.remove();
+            return;
+          }
+          if (phase12a89IsIconOnlyAction(el)) iconActions.push(el);
+        });
+
+        if (!desired.has('applicant link') || !desired.has('employer link') || !desired.has('fax fmcsa')) {
+          addButtons();
+          Array.from(cell.querySelectorAll('button, a')).forEach((el) => {
+            const label = phase12a89NormalizeLabel(text(el));
+            if (['applicant link', 'employer link', 'fax fmcsa'].includes(label)) {
+              if (!desired.has(label)) desired.set(label, el);
+              else if (desired.get(label) !== el) el.remove();
+            }
+          });
+        }
+
+        main.innerHTML = '';
+        ['blue', 'green', 'purple'].forEach((groupName) => {
+          const items = Array.from(desired.entries())
+            .filter(([label]) => phase12a89GroupClass(label) === groupName)
+            .sort((a, b) => phase12a89DesiredOrder(a[0]) - phase12a89DesiredOrder(b[0]));
+          if (!items.length) return;
+          const group = document.createElement('div');
+          group.className = 'phase12a89-link-color-group ' + groupName;
+          items.forEach(([, el]) => group.appendChild(el));
+          main.appendChild(group);
+        });
+
+        tools.innerHTML = '';
+        const uniqueTools = new Set();
+        iconActions.forEach((el) => {
+          if (uniqueTools.has(el)) return;
+          uniqueTools.add(el);
+          tools.appendChild(el);
+        });
+
+        Array.from(cell.childNodes).forEach((node) => {
+          if (node === layout) return;
+          if (node.nodeType === 3 && !String(node.textContent || '').trim()) {
+            node.remove();
+            return;
+          }
+          if (node.nodeType === 1 && !node.closest('.phase12a89-links-layout')) node.remove();
+        });
+      });
+    });
+  }
+  // PHASE12A89_LINKS_COLUMN_CLEANUP END
 
   function addPanel() {
     if (!isSafetyPage() || document.getElementById('phase6-panel')) return;
@@ -1523,6 +1686,16 @@
       .phase6-note { margin: 12px 0 0; color: #64748b; font-size: 13px; }
       .status-chip.consent-needed { background: #fff7ed !important; color: #c2410c !important; }
       .status-chip.consent-given { background: #ecfdf5 !important; color: #047857 !important; }
+      .phase12a87-note-top { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+      .phase12a87-delete-note { margin-left: auto; border: 1px solid #fecaca; background: #fee2e2; color: #991b1b; border-radius: 999px; padding: 3px 8px; font-size: 11px; font-weight: 900; cursor: pointer; }
+      .phase12a87-delete-note:hover { background: #fecaca; }
+      .phase12a89-links-cell { min-width: 230px; }
+      .phase12a89-links-layout { display: flex; align-items: flex-start; justify-content: space-between; gap: 14px; }
+      .phase12a89-links-main { display: grid; gap: 7px; align-content: start; }
+      .phase12a89-link-color-group { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }
+      .phase12a89-link-color-group button, .phase12a89-link-color-group a { margin: 0 !important; }
+      .phase12a89-link-tools { display: flex; gap: 8px; align-items: flex-start; margin-left: auto; }
+      .phase12a89-link-tools:empty { display: none; }
       th[data-phase6-sortable] { cursor: pointer; user-select: none; }
       th[data-phase6-sortable]:hover { background: #eef2ff; color: #111827; }
       .phase6-sort-head { display: inline-flex; align-items: center; gap: 6px; white-space: nowrap; }
@@ -1578,6 +1751,12 @@
       event.preventDefault();
       event.stopPropagation();
       phase12a87CloseNotesModal();
+      return;
+    }
+    if (event.target && event.target.closest && event.target.closest('[data-phase12a87-delete-note]')) {
+      event.preventDefault();
+      event.stopPropagation();
+      phase12a87DeleteNoteFromModal(event.target.closest('[data-phase12a87-delete-note]'));
       return;
     }
     if (event.target && event.target.closest && event.target.closest('[data-phase12a87-save-note]')) {
@@ -1637,8 +1816,10 @@
     removeLegacySafetyButtons();
     phase12a88RemoveFollowUpColumn();
     addButtons();
+    phase12a89NormalizeLinksColumn();
     phase12a87EnhanceNotes();
     removeLegacySafetyButtons();
+    phase12a89NormalizeLinksColumn();
     ensureSafetyStatusOptions();
     makeSafetyTablesSortable();
     hookSafetyRefreshButton();
