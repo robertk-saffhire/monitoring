@@ -65,7 +65,7 @@
       followUp: find(['follow up', 'followup']),
       employer: find(['previous employer', 'employer', 'company']),
       notes: find(['notes']),
-      actions: find(['actions', 'response'])
+      actions: find(['links', 'actions', 'response'])
     };
   }
 
@@ -1104,6 +1104,65 @@
   }
 
 
+
+
+  // PHASE12A90_SINGLE_LINKS_COLUMN START
+  function phase12a90LinkColumnCandidates(table) {
+    const headers = Array.from(table.querySelectorAll('thead th'));
+    return headers
+      .map((th, index) => ({ th, index, label: cleanHeader(text(th)) }))
+      .filter((item) => item.label === 'links' || item.label === 'phase 4 actions' || item.label === 'response links' || item.label === 'actions' || item.label.includes('response'));
+  }
+
+  function phase12a90CellHasLinkButtons(cell) {
+    if (!cell) return false;
+    return Array.from(cell.querySelectorAll('button, a')).some((el) => {
+      const label = phase12a89NormalizeLabel(text(el));
+      return ['applicant link', 'employer link', 'fax fmcsa', 'client gmail', 'mark completed', 'fmcsa pdf'].includes(label) || phase12a89IsIconOnlyAction(el);
+    });
+  }
+
+  function phase12a90CollapseDuplicateLinksColumns() {
+    if (!isSafetyPage()) return;
+    safetyTables().forEach((table) => {
+      let candidates = phase12a90LinkColumnCandidates(table);
+      if (!candidates.length) return;
+
+      const bodyRows = Array.from(table.querySelectorAll('tbody tr'));
+      let primary = candidates[0].index;
+      const withButtons = candidates.find((candidate) => bodyRows.some((row) => phase12a90CellHasLinkButtons(row.children[candidate.index])));
+      if (withButtons) primary = withButtons.index;
+
+      const headers = Array.from(table.querySelectorAll('thead th'));
+      if (headers[primary]) headers[primary].textContent = 'Links';
+
+      candidates
+        .map((candidate) => candidate.index)
+        .filter((index) => index !== primary)
+        .sort((a, b) => b - a)
+        .forEach((removeIndex) => {
+          bodyRows.forEach((row) => {
+            const keepCell = row.children[primary];
+            const removeCell = row.children[removeIndex];
+            if (keepCell && removeCell && keepCell !== removeCell) {
+              Array.from(removeCell.childNodes).forEach((node) => {
+                const isBlankText = node.nodeType === 3 && !String(node.textContent || '').trim();
+                if (!isBlankText) keepCell.appendChild(node);
+              });
+            }
+            if (removeCell) removeCell.remove();
+          });
+          const liveHeaders = Array.from(table.querySelectorAll('thead th'));
+          if (liveHeaders[removeIndex]) liveHeaders[removeIndex].remove();
+          if (removeIndex < primary) primary -= 1;
+        });
+
+      const finalHeaders = Array.from(table.querySelectorAll('thead th'));
+      if (finalHeaders[primary]) finalHeaders[primary].textContent = 'Links';
+    });
+  }
+  // PHASE12A90_SINGLE_LINKS_COLUMN END
+
   // PHASE12A89_LINKS_COLUMN_CLEANUP START
   function phase12a89NormalizeLabel(label) {
     return String(label || '').replace(/\s+/g, ' ').trim().toLowerCase();
@@ -1815,10 +1874,13 @@
     addPanel();
     removeLegacySafetyButtons();
     phase12a88RemoveFollowUpColumn();
+    phase12a90CollapseDuplicateLinksColumns();
     addButtons();
+    phase12a90CollapseDuplicateLinksColumns();
     phase12a89NormalizeLinksColumn();
     phase12a87EnhanceNotes();
     removeLegacySafetyButtons();
+    phase12a90CollapseDuplicateLinksColumns();
     phase12a89NormalizeLinksColumn();
     ensureSafetyStatusOptions();
     makeSafetyTablesSortable();
