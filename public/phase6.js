@@ -348,6 +348,8 @@
       employer: data.employer || '',
       recipientName: (extra && extra.recipientName) || data.employer || '',
       recipient: (extra && extra.recipientName) || data.employer || '',
+      clientName: (extra && extra.clientName) || data.clientName || data.employerName || '',
+      clientEmail: (extra && extra.clientEmail) || data.clientEmail || '',
       faxNumber: (extra && extra.faxNumber) || '',
       today,
       date: today
@@ -512,6 +514,191 @@
     }
   }
   // PHASE12A78_EFAX_FAX_MODAL END
+
+
+  // PHASE12A92_CLIENT_GMAIL_TEMPLATE_MODAL START
+  function reportValue(report, key, fallback) {
+    if (!report) return fallback || '';
+    const value = report[key];
+    return value === undefined || value === null || String(value).trim() === '' ? (fallback || '') : String(value).trim();
+  }
+
+  function buildClientGmailData(report, row) {
+    const rowInfo = row ? rowData(row) : {};
+    return {
+      fileNumber: reportValue(report, 'fileNumber', rowInfo.fileNumber || ''),
+      applicant: reportValue(report, 'applicantName', rowInfo.applicant || ''),
+      applicantName: reportValue(report, 'applicantName', rowInfo.applicant || ''),
+      employer: reportValue(report, 'prevEmployerName', rowInfo.employer || ''),
+      previousEmployer: reportValue(report, 'prevEmployerName', rowInfo.employer || ''),
+      prevEmployer: reportValue(report, 'prevEmployerName', rowInfo.employer || ''),
+      employerName: reportValue(report, 'employerName', ''),
+      clientName: reportValue(report, 'employerName', ''),
+      clientEmail: reportValue(report, 'employerEmail', ''),
+      infoReceivedFrom: reportValue(report, 'infoReceivedFrom', ''),
+      infoReceivedDate: reportValue(report, 'infoReceivedDate', ''),
+      status: reportValue(report, 'status', '')
+    };
+  }
+
+  function defaultClientGmailSubject(data) {
+    return `Completed Safety Performance Report${data.fileNumber ? ` - File #${data.fileNumber}` : ''}`;
+  }
+
+  function defaultClientGmailBody(data) {
+    return [
+      'Hello,',
+      '',
+      `The Safety Performance report has been completed for ${data.applicant || 'the applicant'}.`,
+      '',
+      data.fileNumber ? `File Number: ${data.fileNumber}` : '',
+      data.applicant ? `Applicant: ${data.applicant}` : '',
+      data.previousEmployer ? `Previous Employer: ${data.previousEmployer}` : '',
+      data.infoReceivedFrom ? `Information Received From: ${data.infoReceivedFrom}` : '',
+      data.infoReceivedDate ? `Date Received: ${data.infoReceivedDate}` : '',
+      '',
+      'The completed packet is ready. Please attach the saved PDF packet before sending this email.',
+      '',
+      'Thank you,',
+      'SaffHire Background Screening'
+    ].filter((line, index, arr) => line || arr[index - 1] !== '').join('\n').trim();
+  }
+
+  async function phase12a92FindReport(fileNumber) {
+    const result = await apiWithFallback('safety-reports?companyId=' + encodeURIComponent(getCompanyId()));
+    const reports = Array.isArray(result.reports) ? result.reports : [];
+    const wanted = String(fileNumber || '').trim();
+    return reports.find((report) => String(report.fileNumber || '').trim() === wanted) || null;
+  }
+
+  function getClientGmailModal() {
+    let modal = document.getElementById('phase12a92-client-gmail-modal');
+    if (modal) return modal;
+    modal = document.createElement('div');
+    modal.id = 'phase12a92-client-gmail-modal';
+    modal.className = 'phase6-modal hidden';
+    modal.innerHTML = `
+      <div class="phase6-modal-card phase12a92-client-card">
+        <div class="phase6-modal-head">
+          <h2>Client Gmail Draft</h2>
+          <button type="button" data-phase12a92-close>×</button>
+        </div>
+        <p class="phase6-note" data-phase12a92-summary></p>
+        <label class="phase12a78-field">
+          <span>Email template</span>
+          <select data-phase12a92-template-select><option value="">Manual / default client email</option></select>
+        </label>
+        <label class="phase12a78-field">
+          <span>To / Client Email</span>
+          <input data-phase12a92-to placeholder="client@example.com" />
+        </label>
+        <label class="phase12a78-field">
+          <span>Email subject</span>
+          <input data-phase12a92-subject placeholder="Completed Safety Performance Report" />
+        </label>
+        <label class="phase12a78-field">
+          <span>Email body</span>
+          <textarea data-phase12a92-body rows="9"></textarea>
+        </label>
+        <p class="phase6-note">Templates can use <b>{{applicantName}}</b>, <b>{{fileNumber}}</b>, <b>{{previousEmployer}}</b>, <b>{{clientName}}</b>, <b>{{clientEmail}}</b>, and <b>{{today}}</b>.</p>
+        <div class="phase6-modal-actions">
+          <button type="button" data-phase12a92-close class="phase12a78-secondary">Cancel</button>
+          <button type="button" data-phase12a92-copy>Copy Draft</button>
+          <button type="button" data-phase12a92-open-gmail>Open Gmail</button>
+        </div>
+        <p class="phase6-note">Gmail opens with the selected template. Attach the completed FMCSA PDF before sending.</p>
+      </div>
+    `;
+    document.body.appendChild(modal);
+    return modal;
+  }
+
+  function fillClientGmailTemplateSelect(modal, templates) {
+    const select = modal.querySelector('[data-phase12a92-template-select]');
+    if (!select) return;
+    const current = select.value;
+    select.innerHTML = '<option value="">Manual / default client email</option>' + (templates || []).map((template) => `<option value="${String(template.id)}">${String(template.name || '').replace(/</g, '&lt;')}</option>`).join('');
+    if (current && Array.from(select.options).some((option) => option.value === current)) select.value = current;
+  }
+
+  function applyClientGmailTemplate(modal) {
+    const data = modal.__data || {};
+    const select = modal.querySelector('[data-phase12a92-template-select]');
+    const selectedId = select ? Number(select.value || 0) : 0;
+    const template = (phase12a79TemplateCache || []).find((item) => Number(item.id) === selectedId);
+    const toInput = modal.querySelector('[data-phase12a92-to]');
+    const subjectInput = modal.querySelector('[data-phase12a92-subject]');
+    const bodyInput = modal.querySelector('[data-phase12a92-body]');
+    const clientEmail = String(toInput?.value || data.clientEmail || '').trim();
+    const clientName = data.clientName || data.employerName || '';
+    if (template) {
+      if (subjectInput) subjectInput.value = renderFaxTemplate(template.subject, data, { clientEmail, clientName, recipientName: clientName });
+      if (bodyInput) bodyInput.value = renderFaxTemplate(template.body, data, { clientEmail, clientName, recipientName: clientName });
+    } else {
+      if (subjectInput) subjectInput.value = defaultClientGmailSubject(data);
+      if (bodyInput) bodyInput.value = defaultClientGmailBody(data);
+    }
+  }
+
+  async function showClientGmailModal(row) {
+    const rowInfo = rowData(row);
+    if (!rowInfo.fileNumber) return toast('Could not find the file number for this report.', true);
+    const modal = getClientGmailModal();
+    modal.__row = row;
+    modal.__data = Object.assign({}, rowInfo, { clientEmail: '', clientName: '' });
+    modal.querySelector('[data-phase12a92-summary]').textContent = `Loading file #${rowInfo.fileNumber}...`;
+    modal.classList.remove('hidden');
+
+    const report = await phase12a92FindReport(rowInfo.fileNumber);
+    if (!report) throw new Error(`Could not find file #${rowInfo.fileNumber} in the database.`);
+    const data = buildClientGmailData(report, row);
+    modal.__report = report;
+    modal.__data = data;
+    modal.querySelector('[data-phase12a92-summary]').textContent = `File #${data.fileNumber} — ${data.applicant || 'Applicant not listed'}`;
+    modal.querySelector('[data-phase12a92-to]').value = data.clientEmail || '';
+    modal.querySelector('[data-phase12a92-subject]').value = defaultClientGmailSubject(data);
+    modal.querySelector('[data-phase12a92-body]').value = defaultClientGmailBody(data);
+    fillClientGmailTemplateSelect(modal, phase12a79TemplateCache || []);
+    const templates = await loadFaxTemplates();
+    fillClientGmailTemplateSelect(modal, templates);
+    applyClientGmailTemplate(modal);
+    setTimeout(() => modal.querySelector('[data-phase12a92-template-select]')?.focus(), 50);
+  }
+
+  function closeClientGmailModal() {
+    getClientGmailModal().classList.add('hidden');
+  }
+
+  function clientGmailDraftFromModal() {
+    const modal = getClientGmailModal();
+    const to = String(modal.querySelector('[data-phase12a92-to]')?.value || '').trim();
+    const subject = String(modal.querySelector('[data-phase12a92-subject]')?.value || '').trim();
+    const body = String(modal.querySelector('[data-phase12a92-body]')?.value || '').trim();
+    return {
+      to,
+      subject,
+      body,
+      full: `To: ${to || '[enter client email]'}\nSubject: ${subject}\n\n${body}`,
+      gmailUrl: 'https://mail.google.com/mail/?view=cm&fs=1'
+        + `&to=${encodeURIComponent(to)}`
+        + `&su=${encodeURIComponent(subject)}`
+        + `&body=${encodeURIComponent(body)}`
+    };
+  }
+
+  async function openClientGmailFromModal() {
+    const draft = clientGmailDraftFromModal();
+    await copyText(draft.full, 'Client email draft copied. Attach the completed FMCSA PDF before sending.');
+    window.open(draft.gmailUrl, '_blank', 'noopener,noreferrer');
+    closeClientGmailModal();
+  }
+
+  function isClientGmailButton(el) {
+    if (!el) return false;
+    if (el.matches && el.matches('[data-phase7-action="client-gmail"]')) return true;
+    return phase12a89NormalizeLabel(text(el)) === 'client gmail';
+  }
+  // PHASE12A92_CLIENT_GMAIL_TEMPLATE_MODAL END
 
   async function generateLink(row, responseRole) {
     const data = rowData(row);
@@ -1720,7 +1907,9 @@
       .phase12a79-body-label { margin-top: 12px !important; }
       .phase12a79-row-actions { margin-top: 10px; display: flex; justify-content: flex-end; gap: 8px; }
       .phase12a79-row-actions .danger { background: #dc2626; }
-      .phase12a79-fax-card select { width: 100%; border: 1px solid #cbd5e1; border-radius: 10px; padding: 10px 12px; font: inherit; }
+      .phase12a79-fax-card select, .phase12a92-client-card select { width: 100%; border: 1px solid #cbd5e1; border-radius: 10px; padding: 10px 12px; font: inherit; }
+      .phase12a92-client-card [data-phase12a92-open-gmail] { background: #ea4335 !important; }
+      .phase12a92-client-card [data-phase12a92-copy] { background: #2563eb !important; }
 
       .phase12a80-email-nav svg { flex: 0 0 auto; }
       .phase12a80-email-page-header p { margin: 6px 0 0; color: #6b7280; }
@@ -1772,6 +1961,37 @@
   }, true);
 
   document.addEventListener('click', function (event) {
+    const phase12a92ClientButton = event.target && event.target.closest ? event.target.closest('[data-phase7-action="client-gmail"], button, a') : null;
+    if (isSafetyPage() && phase12a92ClientButton && isClientGmailButton(phase12a92ClientButton)) {
+      const row = phase12a92ClientButton.closest('tr');
+      if (row) {
+        event.preventDefault();
+        event.stopPropagation();
+        if (typeof event.stopImmediatePropagation === 'function') event.stopImmediatePropagation();
+        showClientGmailModal(row).catch((error) => toast(error.message || 'Could not prepare Client Gmail template.', true));
+        return;
+      }
+    }
+    if (event.target && event.target.closest && event.target.closest('[data-phase12a92-close]')) {
+      event.preventDefault();
+      event.stopPropagation();
+      closeClientGmailModal();
+      return;
+    }
+    if (event.target && event.target.closest && event.target.closest('[data-phase12a92-copy]')) {
+      event.preventDefault();
+      event.stopPropagation();
+      const draft = clientGmailDraftFromModal();
+      copyText(draft.full, 'Client email draft copied.');
+      return;
+    }
+    if (event.target && event.target.closest && event.target.closest('[data-phase12a92-open-gmail]')) {
+      event.preventDefault();
+      event.stopPropagation();
+      openClientGmailFromModal().catch((error) => toast(error.message || 'Could not open Gmail.', true));
+      return;
+    }
+
     if (event.target && event.target.closest && event.target.closest('[data-phase6-close]')) closeModal();
 
     if (event.target && event.target.closest && event.target.closest('[data-phase12a78-close]')) closeFaxModal();
@@ -1852,6 +2072,9 @@
   document.addEventListener('change', function (event) {
     if (event.target && event.target.matches && event.target.matches('[data-phase12a79-template-select]')) {
       applyFaxTemplate(getFaxModal());
+    }
+    if (event.target && event.target.matches && event.target.matches('[data-phase12a92-template-select]')) {
+      applyClientGmailTemplate(getClientGmailModal());
     }
   });
 
