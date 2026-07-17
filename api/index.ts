@@ -391,6 +391,108 @@ async function emailTemplates(req: any, res: any, user: any) {
 }
 // PHASE12A79_EMAIL_TEMPLATE_SETTINGS END
 
+
+
+// PHASE12A87_SAFETY_REPORT_NOTES START
+function canManageSafetyReportNotes(user: any) {
+  const role = String(user?.role || '');
+  return role === 'admin' || role === 'user' || role === 'viewer';
+}
+
+async function findSafetyReportForNotes(companyId: number, bodyOrUrl: any) {
+  const getValue = (key: string) => {
+    if (bodyOrUrl && typeof bodyOrUrl.get === 'function') return bodyOrUrl.get(key);
+    return bodyOrUrl ? bodyOrUrl[key] : undefined;
+  };
+  const reportId = Number(getValue('reportId') || getValue('safetyReportId') || getValue('id') || 0);
+  const fileNumber = String(getValue('fileNumber') || '').trim();
+
+  if (reportId) {
+    const result = await query('select id, "companyId", "fileNumber", "applicantName" from safety_reports where id=$1 and "companyId"=$2 limit 1', [reportId, companyId]);
+    return result.rows[0] || null;
+  }
+
+  if (fileNumber) {
+    const result = await query('select id, "companyId", "fileNumber", "applicantName" from safety_reports where trim("fileNumber"::text)=trim($1) and "companyId"=$2 order by id desc limit 1', [fileNumber, companyId]);
+    return result.rows[0] || null;
+  }
+
+  return null;
+}
+
+async function safetyReportNotes(req: any, res: any, user: any) {
+  if (!canManageSafetyReportNotes(user)) return json(res, 403, { status: 'error', message: 'Safety note access is restricted' });
+  const url = new URL(req.url || '/', 'https://local.test');
+  const companyId = requestedCompanyId(req, user);
+
+  if (req.method === 'GET') {
+    const report = await findSafetyReportForNotes(companyId, url.searchParams);
+    if (!report) return json(res, 404, { status: 'error', message: 'Safety report not found' });
+    const result = await query(
+      'select id, "companyId", "safetyReportId", note, "showToClient", "createdBy", "createdAt", "updatedAt" from safety_report_notes where "companyId"=$1 and "safetyReportId"=$2 order by "createdAt" desc, id desc',
+      [companyId, report.id]
+    );
+    return json(res, 200, { status: 'ok', report, notes: result.rows });
+  }
+
+  const body = await readBody(req);
+
+  if (req.method === 'POST') {
+    const report = await findSafetyReportForNotes(companyId, body);
+    if (!report) return json(res, 404, { status: 'error', message: 'Safety report not found' });
+    const note = String(body.note || body.notes || '').trim();
+    if (!note) return json(res, 400, { status: 'error', message: 'Note is required' });
+    const showToClient = body.showToClient === true || String(body.showToClient || '').toLowerCase() === 'true' || String(body.visibility || '').toLowerCase() === 'client';
+    const createdBy = String(user.displayName || user.username || '').trim();
+    const result = await query(
+      'insert into safety_report_notes ("companyId", "safetyReportId", note, "showToClient", "createdBy") values ($1,$2,$3,$4,$5) returning id, "companyId", "safetyReportId", note, "showToClient", "createdBy", "createdAt", "updatedAt"',
+      [companyId, report.id, note, showToClient, createdBy]
+    );
+    return json(res, 200, { status: 'ok', report, note: result.rows[0] });
+  }
+
+  if (req.method === 'PATCH') {
+    const id = Number(body.id || 0);
+    const note = String(body.note || body.notes || '').trim();
+    if (!id) return json(res, 400, { status: 'error', message: 'Note id is required' });
+    if (!note) return json(res, 400, { status: 'error', message: 'Note is required' });
+    const showToClient = body.showToClient === true || String(body.showToClient || '').toLowerCase() === 'true' || String(body.visibility || '').toLowerCase() === 'client';
+    const result = await query(
+      'update safety_report_notes set note=$1, "showToClient"=$2, "updatedAt"=now() where id=$3 and "companyId"=$4 returning id, "companyId", "safetyReportId", note, "showToClient", "createdBy", "createdAt", "updatedAt"',
+      [note, showToClient, id, companyId]
+    );
+    if (!result.rows[0]) return json(res, 404, { status: 'error', message: 'Note not found' });
+    return json(res, 200, { status: 'ok', note: result.rows[0] });
+  }
+
+  if (req.method === 'DELETE') {
+    const id = Number(url.searchParams.get('id') || body.id || 0);
+    if (!id) return json(res, 400, { status: 'error', message: 'Note id is required' });
+    await query('delete from safety_report_notes where id=$1 and "companyId"=$2', [id, companyId]);
+    return json(res, 200, { status: 'ok', success: true });
+  }
+
+  return json(res, 405, { status: 'error', message: 'Method not allowed' });
+}
+
+async function getClientVisibleSafetyNotes(companyId: number) {
+  try {
+    const result = await query(
+      `select "safetyReportId", string_agg(note, E'\n\n' order by "createdAt" desc, id desc) as notes
+       from safety_report_notes
+       where "companyId"=$1 and "showToClient"=true
+       group by "safetyReportId"`,
+      [companyId]
+    );
+    const map = new Map<number, string>();
+    result.rows.forEach((row: any) => map.set(Number(row.safetyReportId), String(row.notes || '')));
+    return map;
+  } catch {
+    return new Map<number, string>();
+  }
+}
+// PHASE12A87_SAFETY_REPORT_NOTES END
+
 async function importApplicants(req: any, res: any, user: any) {
   if (!requireAdmin(user, res)) return; if (req.method !== 'POST') return json(res, 405, { status: 'error', message: 'Method not allowed' }); const body = await readBody(req); const companyId = Number(body.companyId || user.companyId || 1); const rows = Array.isArray(body.rows) ? body.rows : []; let imported = 0, skipped = 0; for (const row of rows) { const fileNumber = String(pick(row, ['fileNumber','File Number','File #','FileNumber','file_number'])).trim(); if (!fileNumber) { skipped++; continue; } const medExpire = String(pick(row, ['medExpire','Med Expire','Medical Expiration','medicalExpiration'])).trim(); await query('insert into applicants ("companyId","fileNumber","applicantName","orderDate","monitorStatus","mvrStatus","medExpire","medExpireOverridden",notes) values ($1,$2,$3,$4,$5,$6,$7,$8,$9) on conflict ("fileNumber","companyId") do update set "applicantName"=excluded."applicantName","orderDate"=excluded."orderDate","monitorStatus"=excluded."monitorStatus","mvrStatus"=excluded."mvrStatus","medExpire"=excluded."medExpire","medExpireOverridden"=excluded."medExpireOverridden",notes=excluded.notes,"updatedAt"=now()', [companyId, fileNumber, String(pick(row, ['name','Name','Applicant Name','applicantName'])).trim(), String(pick(row, ['orderDate','Order Date','Created','created'])).trim(), normalizeMonitorStatus(pick(row, ['monitorStatus','Monitor Status','Monitoring','monitoring'])), String(pick(row, ['mvrStatus','MVR Status','Status'])).trim(), medExpire || null, Boolean(medExpire), String(pick(row, ['notes','Notes'])).trim()]); imported++; } return json(res, 200, { status: 'ok', imported, skipped });
 }
@@ -479,6 +581,11 @@ async function clientDashboard(req: any, res: any, user: any) {
   const recentSafety = await query(
     `select id, "fileNumber", "applicantName", created, status, "followUpDate", "prevEmployerName", notes
      from safety_reports where "companyId"=$1 order by id desc limit 1000`, [companyId]);
+  const clientVisibleSafetyNotes = await getClientVisibleSafetyNotes(companyId);
+  const clientSafeSafetyReports = recentSafety.rows.map((row: any) => ({
+    ...row,
+    notes: clientVisibleSafetyNotes.get(Number(row.id)) || ''
+  }));
 
   const clientUsers = await query(
     `select id, username, "displayName", role, "companyId", "isActive", "mustChangePassword", "lastSignedIn"
@@ -490,7 +597,7 @@ async function clientDashboard(req: any, res: any, user: any) {
     applicantStats: applicantStats.rows[0] || {},
     safetyStats: safetyStats.rows[0] || {},
     recentApplicants: recentApplicants.rows,
-    recentSafetyReports: recentSafety.rows,
+    recentSafetyReports: clientSafeSafetyReports,
     users: clientUsers.rows.map(publicUser),
     canManageUsers: canManageClientUsers(user)
   });
@@ -3919,6 +4026,7 @@ export default async function handler(req: any, res: any) {
     if (route === 'users') return users(req, res, user);
     if (route === 'notification-emails') return notificationEmails(req, res, user);
     if (route === 'email-templates') return emailTemplates(req, res, user);
+    if (route === 'safety-report-notes') return safetyReportNotes(req, res, user);
     if (route === 'import-applicants') return importApplicants(req, res, user);
     if (route === 'change-password') return changePassword(req, res, user);
     if (route === 'tazworks-sync/run') return tazworksSyncRun(req, res, user);
