@@ -515,6 +515,178 @@
   }
 
 
+
+
+  // PHASE12A87_REPORT_NOTES_MANAGER START
+  function phase12a87Escape(value) {
+    return String(value || '').replace(/[&<>"']/g, (ch) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#039;' }[ch]));
+  }
+
+  function phase12a87FormatDate(value) {
+    if (!value) return '';
+    const d = new Date(value);
+    if (Number.isNaN(d.getTime())) return String(value || '');
+    return d.toLocaleString(undefined, { month: 'short', day: 'numeric', year: 'numeric', hour: 'numeric', minute: '2-digit' });
+  }
+
+  async function phase12a87LoadNotes(row) {
+    const data = rowData(row);
+    if (!data.fileNumber) return { notes: [] };
+    return apiWithFallback('safety-report-notes?companyId=' + encodeURIComponent(getCompanyId()) + '&fileNumber=' + encodeURIComponent(data.fileNumber));
+  }
+
+  function phase12a87NoteHtml(note) {
+    const badge = note.showToClient ? '<span class="phase12a87-note-badge client">Client can see</span>' : '<span class="phase12a87-note-badge internal">Internal only</span>';
+    const meta = [note.createdBy, phase12a87FormatDate(note.createdAt)].filter(Boolean).join(' · ');
+    return `<div class="phase12a87-note-item">
+      <div class="phase12a87-note-top">${badge}${meta ? `<span class="phase12a87-note-meta">${phase12a87Escape(meta)}</span>` : ''}</div>
+      <div class="phase12a87-note-text">${phase12a87Escape(note.note).replace(/\n/g, '<br>')}</div>
+    </div>`;
+  }
+
+  function phase12a87RenderNotesCell(cell, notes) {
+    const list = cell.querySelector('[data-phase12a87-note-list]');
+    if (!list) return;
+    if (!notes || !notes.length) {
+      list.innerHTML = '<div class="phase12a87-empty-note">No report notes yet.</div>';
+      return;
+    }
+    list.innerHTML = notes.map(phase12a87NoteHtml).join('');
+  }
+
+  function phase12a87EnhanceNotesCell(row) {
+    const table = row.closest('table');
+    const idx = indexes(table);
+    if (idx.notes < 0 || !row.children[idx.notes]) return;
+    const cell = row.children[idx.notes];
+    if (!cell.dataset.phase12a87OriginalText) cell.dataset.phase12a87OriginalText = text(cell);
+    if (!cell.querySelector('[data-phase12a87-note-box]')) {
+      cell.innerHTML = `
+        <div class="phase12a87-note-box" data-phase12a87-note-box>
+          <div class="phase12a87-note-list" data-phase12a87-note-list><span class="phase12a87-empty-note">Loading notes...</span></div>
+          <button type="button" class="phase12a87-note-edit" data-phase12a87-open-notes>Edit Notes</button>
+        </div>
+      `;
+    }
+    if (cell.dataset.phase12a87Loaded === '1') return;
+    cell.dataset.phase12a87Loaded = '1';
+    phase12a87LoadNotes(row)
+      .then((result) => {
+        cell.dataset.phase12a87NoteData = JSON.stringify(result.notes || []);
+        phase12a87RenderNotesCell(cell, result.notes || []);
+      })
+      .catch((error) => {
+        cell.dataset.phase12a87Loaded = '0';
+        const list = cell.querySelector('[data-phase12a87-note-list]');
+        if (list) list.innerHTML = `<div class="phase12a87-empty-note danger">${phase12a87Escape(error.message || 'Could not load notes.')}</div>`;
+      });
+  }
+
+  function phase12a87EnhanceNotes() {
+    safetyTables().forEach((table) => {
+      const idx = indexes(table);
+      if (idx.notes < 0) return;
+      Array.from(table.querySelectorAll('tbody tr')).forEach((row) => {
+        if (!row.children || row.children.length <= 1) return;
+        phase12a87EnhanceNotesCell(row);
+      });
+    });
+  }
+
+  function phase12a87GetNotesModal() {
+    let modal = document.getElementById('phase12a87-notes-modal');
+    if (modal) return modal;
+    modal = document.createElement('div');
+    modal.id = 'phase12a87-notes-modal';
+    modal.className = 'phase6-modal hidden';
+    modal.innerHTML = `
+      <div class="phase6-modal-card phase12a87-notes-card">
+        <div class="phase6-modal-head">
+          <h2>Report Notes</h2>
+          <button type="button" data-phase12a87-close>×</button>
+        </div>
+        <p class="phase6-note" data-phase12a87-summary></p>
+        <div class="phase12a87-existing-notes" data-phase12a87-existing-notes></div>
+        <label class="phase12a87-field">
+          <span>New note</span>
+          <textarea data-phase12a87-note-text rows="5" placeholder="Type the note here..."></textarea>
+        </label>
+        <div class="phase12a87-visibility-box">
+          <label><input type="radio" name="phase12a87-visibility" value="private" checked /> Do not show to client</label>
+          <label><input type="radio" name="phase12a87-visibility" value="client" /> Show to client</label>
+        </div>
+        <div class="phase6-modal-actions">
+          <button type="button" data-phase12a87-close class="phase12a78-secondary">Cancel</button>
+          <button type="button" data-phase12a87-save-note>Save Note</button>
+        </div>
+      </div>
+    `;
+    document.body.appendChild(modal);
+    return modal;
+  }
+
+  async function phase12a87ShowNotesModal(row) {
+    const data = rowData(row);
+    if (!data.fileNumber) return toast('Could not find the file number for this report.', true);
+    const modal = phase12a87GetNotesModal();
+    modal.__row = row;
+    modal.__data = data;
+    modal.querySelector('[data-phase12a87-summary]').textContent = `File #${data.fileNumber} — ${data.applicant || 'Applicant not listed'}`;
+    modal.querySelector('[data-phase12a87-note-text]').value = '';
+    const privateRadio = modal.querySelector('input[name="phase12a87-visibility"][value="private"]');
+    if (privateRadio) privateRadio.checked = true;
+    const existing = modal.querySelector('[data-phase12a87-existing-notes]');
+    existing.innerHTML = '<p class="phase12a87-empty-note">Loading notes...</p>';
+    modal.classList.remove('hidden');
+    try {
+      const result = await phase12a87LoadNotes(row);
+      existing.innerHTML = result.notes && result.notes.length ? result.notes.map(phase12a87NoteHtml).join('') : '<p class="phase12a87-empty-note">No notes have been added yet.</p>';
+    } catch (error) {
+      existing.innerHTML = `<p class="phase12a87-empty-note danger">${phase12a87Escape(error.message || 'Could not load notes.')}</p>`;
+    }
+    setTimeout(() => modal.querySelector('[data-phase12a87-note-text]')?.focus(), 50);
+  }
+
+  function phase12a87CloseNotesModal() {
+    phase12a87GetNotesModal().classList.add('hidden');
+  }
+
+  async function phase12a87SaveNoteFromModal() {
+    const modal = phase12a87GetNotesModal();
+    const row = modal.__row;
+    const data = modal.__data || {};
+    const noteText = String(modal.querySelector('[data-phase12a87-note-text]')?.value || '').trim();
+    const showToClient = modal.querySelector('input[name="phase12a87-visibility"][value="client"]')?.checked === true;
+    const button = modal.querySelector('[data-phase12a87-save-note]');
+    if (!row || !data.fileNumber) return toast('Could not find the report row.', true);
+    if (!noteText) return toast('Type a note before saving.', true);
+    const original = button ? button.textContent : '';
+    if (button) { button.disabled = true; button.textContent = 'Saving...'; }
+    try {
+      await apiWithFallback('safety-report-notes', {
+        method: 'POST',
+        body: JSON.stringify({
+          companyId: getCompanyId(),
+          fileNumber: data.fileNumber,
+          note: noteText,
+          showToClient
+        })
+      });
+      const table = row.closest('table');
+      const idx = indexes(table);
+      const cell = idx.notes >= 0 ? row.children[idx.notes] : null;
+      if (cell) cell.dataset.phase12a87Loaded = '0';
+      phase12a87EnhanceNotesCell(row);
+      toast(showToClient ? 'Note saved and visible to client.' : 'Internal note saved.');
+      phase12a87CloseNotesModal();
+    } catch (error) {
+      toast(error.message || 'Could not save note.', true);
+    } finally {
+      if (button) { button.disabled = false; button.textContent = original || 'Save Note'; }
+    }
+  }
+  // PHASE12A87_REPORT_NOTES_MANAGER END
+
   async function pullLiveSafety(row) {
     const data = rowData(row);
     if (!data.fileNumber) return toast('Could not find the file number for this report.', true);
@@ -1192,6 +1364,7 @@
     const applicantInput = phase12a85FindInput('Applicant Name');
     const statusSelect = phase12a85FindInput('Status');
     const notesField = phase12a85FindField('Notes');
+    if (notesField) notesField.classList.add('phase12a87-hide-form-notes');
     const notesInput = notesField ? notesField.querySelector('textarea') : null;
     const firstSection = form.querySelector('.form-section');
     if (!firstSection) return;
@@ -1255,6 +1428,27 @@
       .phase12a85-signature-card.warning h4, .phase12a85-signature-card.warning .phase12a85-signature-icon { color: #a16207; }
       .phase12a85-signature-card.warning .phase12a85-signature-icon { background: #fef3c7; }
       @media(max-width:900px){ .phase12a85-edit-page .page-header, .phase12a85-response-style-form { max-width: 100%; } .phase12a85-signature-card { flex-direction: column; } }
+
+      .phase12a87-hide-form-notes { display: none !important; }
+      .phase12a87-note-box { min-width: 220px; max-width: 360px; }
+      .phase12a87-note-list { display: grid; gap: 8px; margin-bottom: 8px; }
+      .phase12a87-note-item { border: 1px solid #e2e8f0; border-radius: 10px; background: #f8fafc; padding: 8px 9px; }
+      .phase12a87-note-top { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; margin-bottom: 5px; }
+      .phase12a87-note-badge { border-radius: 999px; padding: 2px 7px; font-size: 10px; font-weight: 900; white-space: nowrap; }
+      .phase12a87-note-badge.client { background: #dcfce7; color: #166534; border: 1px solid #86efac; }
+      .phase12a87-note-badge.internal { background: #e0e7ff; color: #3730a3; border: 1px solid #c7d2fe; }
+      .phase12a87-note-meta { color: #64748b; font-size: 11px; }
+      .phase12a87-note-text { color: #334155; font-size: 12px; line-height: 1.35; white-space: normal; }
+      .phase12a87-empty-note { color: #64748b; font-size: 12px; font-style: italic; margin: 0 0 8px; }
+      .phase12a87-empty-note.danger { color: #b91c1c; font-style: normal; }
+      .phase12a87-note-edit { border: 1px solid #2563eb; background: #eff6ff; color: #1d4ed8; border-radius: 999px; padding: 6px 10px; font-size: 12px; font-weight: 900; cursor: pointer; }
+      .phase12a87-existing-notes { max-height: 240px; overflow: auto; border: 1px solid #e2e8f0; border-radius: 12px; background: #f8fafc; padding: 10px; margin: 12px 0; }
+      .phase12a87-field { display: block; margin: 12px 0; }
+      .phase12a87-field span { display: block; font-size: 12px; font-weight: 900; color: #475569; margin: 0 0 5px; }
+      .phase12a87-field textarea { width: 100%; border: 1px solid #cbd5e1; border-radius: 10px; padding: 10px 12px; font: inherit; }
+      .phase12a87-visibility-box { display: flex; flex-wrap: wrap; gap: 14px; padding: 10px 0; }
+      .phase12a87-visibility-box label { display: inline-flex; align-items: center; gap: 8px; margin: 0; font-weight: 800; color: #334155; }
+      .phase12a87-visibility-box input { width: auto; }
 
       .phase6-panel { margin-bottom: 16px; padding: 16px; border-left: 5px solid #16a34a; }
       .phase6-panel h2 { margin: 0 0 8px; }
@@ -1350,6 +1544,25 @@
       deleteEmailTemplate(event.target.closest('[data-phase12a79-delete-template]')).catch((error) => toast(error.message || 'Could not delete template.', true));
       return;
     }
+    if (event.target && event.target.closest && event.target.closest('[data-phase12a87-open-notes]')) {
+      event.preventDefault();
+      event.stopPropagation();
+      const row = event.target.closest('tr');
+      if (row) phase12a87ShowNotesModal(row);
+      return;
+    }
+    if (event.target && event.target.closest && event.target.closest('[data-phase12a87-close]')) {
+      event.preventDefault();
+      event.stopPropagation();
+      phase12a87CloseNotesModal();
+      return;
+    }
+    if (event.target && event.target.closest && event.target.closest('[data-phase12a87-save-note]')) {
+      event.preventDefault();
+      event.stopPropagation();
+      phase12a87SaveNoteFromModal();
+      return;
+    }
 
     const modal = getModal();
     const link = modal.__link;
@@ -1400,6 +1613,7 @@
     addPanel();
     removeLegacySafetyButtons();
     addButtons();
+    phase12a87EnhanceNotes();
     removeLegacySafetyButtons();
     ensureSafetyStatusOptions();
     makeSafetyTablesSortable();
