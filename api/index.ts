@@ -875,7 +875,7 @@ function faxDomain() {
 }
 
 function faxFromEmail() {
-  return String(process.env.SAFETY_FROM_EMAIL || process.env.EMAIL_FROM || '').trim();
+  return String(process.env.FAX_FROM || process.env.FAX_SMTP_USER || process.env.SAFETY_FROM_EMAIL || process.env.EMAIL_FROM || '').trim();
 }
 
 function faxReplyToEmail() {
@@ -960,6 +960,90 @@ async function sendViaResendToEfax(params: { toFaxEmail: string; fromEmail: stri
   }
   return data;
 }
+
+function faxSmtpUser() {
+  return String(process.env.FAX_SMTP_USER || faxFromEmail() || '').trim();
+}
+
+function faxSmtpPass() {
+  return String(process.env.FAX_SMTP_PASS || '').trim();
+}
+
+function faxSmtpHost() {
+  return String(process.env.FAX_SMTP_HOST || 'smtp.gmail.com').trim() || 'smtp.gmail.com';
+}
+
+function faxSmtpPort() {
+  const raw = Number(process.env.FAX_SMTP_PORT || 465);
+  return Number.isFinite(raw) && raw > 0 ? raw : 465;
+}
+
+function faxSmtpSecure() {
+  const raw = String(process.env.FAX_SMTP_SECURE || 'true').trim().toLowerCase();
+  return !['false', '0', 'no'].includes(raw);
+}
+
+function faxSmtpConfigured() {
+  return Boolean(faxSmtpPass() || process.env.FAX_SMTP_HOST || process.env.FAX_SMTP_USER || process.env.FAX_FROM);
+}
+
+async function sendViaSmtpToEfax(params: { toFaxEmail: string; fromEmail: string; replyToEmail?: string; subject: string; text: string; filename: string; pdfBase64: string; }) {
+  const smtpUser = faxSmtpUser();
+  const smtpPass = faxSmtpPass();
+  const fromEmail = String(params.fromEmail || faxFromEmail()).trim();
+  if (!smtpUser || !smtpUser.includes('@')) throw new Error('FAX_SMTP_USER is missing in Vercel Environment Variables');
+  if (!smtpPass) throw new Error('FAX_SMTP_PASS is missing in Vercel Environment Variables');
+  if (!fromEmail || !fromEmail.includes('@')) throw new Error('FAX_FROM is missing in Vercel Environment Variables');
+  if (!params.toFaxEmail || !params.toFaxEmail.includes('@')) throw new Error('eFax destination email could not be created from the fax number');
+
+  let nodemailerModule: any;
+  try {
+    nodemailerModule = await import('nodemailer');
+  } catch (error: any) {
+    throw new Error(`Nodemailer dependency is missing. Upload package.json from Phase 12A-94 and redeploy. ${errorMessage(error)}`);
+  }
+  const nodemailer = nodemailerModule.default || nodemailerModule;
+  const transporter = nodemailer.createTransport({
+    host: faxSmtpHost(),
+    port: faxSmtpPort(),
+    secure: faxSmtpSecure(),
+    auth: {
+      user: smtpUser,
+      pass: smtpPass,
+    },
+  });
+
+  try {
+    const info = await transporter.sendMail({
+      from: fromEmail,
+      to: params.toFaxEmail,
+      subject: params.subject || 'FMCSA Safety Performance Report',
+      text: params.text || 'Please see the attached FMCSA Safety Performance report.',
+      replyTo: params.replyToEmail && params.replyToEmail.includes('@') ? params.replyToEmail : undefined,
+      attachments: [
+        {
+          filename: params.filename,
+          content: Buffer.from(params.pdfBase64, 'base64'),
+          contentType: 'application/pdf',
+        },
+      ],
+    });
+    return {
+      id: info?.messageId || null,
+      messageId: info?.messageId || null,
+      accepted: info?.accepted || [],
+      rejected: info?.rejected || [],
+      response: info?.response || null,
+      envelope: info?.envelope || null,
+      provider: 'gmail_smtp',
+      smtpHost: faxSmtpHost(),
+      smtpPort: faxSmtpPort(),
+      smtpUser,
+    };
+  } catch (error: any) {
+    throw new Error(`Gmail SMTP/eFax email send failed: ${errorMessage(error)}`);
+  }
+}
 async function safetyReportsFaxFmcsaInner(req: any, res: any, user: any) {
   if (req.method !== 'POST') return json(res, 405, { status: 'error', message: 'Method not allowed' });
   if (!requireCompanyScope(user, res)) return;
@@ -1011,15 +1095,28 @@ async function safetyReportsFaxFmcsaInner(req: any, res: any, user: any) {
   const fromEmail = faxFromEmail();
   const replyToEmail = faxReplyToEmail();
 
-  const emailResult = await sendViaResendToEfax({
-    toFaxEmail,
-    fromEmail,
-    replyToEmail,
-    subject,
-    text,
-    filename,
-    pdfBase64: Buffer.from(bytes).toString('base64')
-  });
+  const pdfBase64 = Buffer.from(bytes).toString('base64');
+  const usingSmtp = faxSmtpConfigured();
+  const emailResult = usingSmtp
+    ? await sendViaSmtpToEfax({
+        toFaxEmail,
+        fromEmail,
+        replyToEmail,
+        subject,
+        text,
+        filename,
+        pdfBase64
+      })
+    : await sendViaResendToEfax({
+        toFaxEmail,
+        fromEmail,
+        replyToEmail,
+        subject,
+        text,
+        filename,
+        pdfBase64
+      });
+  const emailProvider = usingSmtp ? 'gmail_smtp' : 'resend';
 
   const faxDebug = {
     status: 'sent_to_efax_email_gateway',
@@ -1029,8 +1126,10 @@ async function safetyReportsFaxFmcsaInner(req: any, res: any, user: any) {
     efaxDomain: domain,
     fromEmail,
     replyToEmail: replyToEmail || null,
-    emailProvider: 'resend',
-    emailProviderId: emailResult?.id || null,
+    emailProvider,
+    emailProviderId: emailResult?.id || emailResult?.messageId || null,
+    smtpHost: emailResult?.smtpHost || null,
+    smtpUser: emailResult?.smtpUser || null,
     subject,
     templateId: templateId || null,
     templateName: selectedTemplate?.name || null,
@@ -1040,13 +1139,13 @@ async function safetyReportsFaxFmcsaInner(req: any, res: any, user: any) {
     pdfAttached: true,
     attachmentFilename: filename,
     attachmentContentType: 'application/pdf',
-    note: 'This confirms the app sent the email to the eFax gateway. Final fax delivery is confirmed separately by eFax.'
+    note: usingSmtp ? 'This confirms the app sent the fax email through Gmail SMTP to the eFax gateway. Final fax delivery is confirmed separately by eFax.' : 'This confirms the app sent the email to the eFax gateway. Final fax delivery is confirmed separately by eFax.'
   };
 
   try {
     await query(
       'update safety_reports set "lastFaxSentAt"=now(), "lastFaxSentTo"=$1, "lastFaxStatus"=$2, "lastFaxMessage"=$3, "updatedAt"=now() where id=$4 and "companyId"=$5',
-      [recipientFaxDigits, 'sent_to_efax', `Sent to ${toFaxEmail} from ${fromEmail || 'unknown sender'}; Resend ID: ${emailResult?.id || 'none'}`, report.id, companyId]
+      [recipientFaxDigits, 'sent_to_efax', `Sent to ${toFaxEmail} from ${fromEmail || 'unknown sender'} using ${emailProvider}; Message ID: ${emailResult?.id || emailResult?.messageId || 'none'}`, report.id, companyId]
     );
   } catch {
     // Fax should not fail just because the optional logging columns have not been added yet.
@@ -1062,7 +1161,8 @@ async function safetyReportsFaxFmcsaInner(req: any, res: any, user: any) {
     efaxDomain: domain,
     reportId: report.id,
     fileNumber: report.fileNumber,
-    emailProviderId: emailResult?.id || null,
+    emailProvider,
+    emailProviderId: emailResult?.id || emailResult?.messageId || null,
     debug: faxDebug
   });
 }
