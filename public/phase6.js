@@ -22,6 +22,13 @@
     return titles.some((title) => /safety\s+performance\s+reports?/i.test(title));
   }
 
+  function isSettingsPage() {
+    const titles = Array.from(document.querySelectorAll('.page-header h1, h1, .head h2'))
+      .map((el) => text(el))
+      .filter(Boolean);
+    return titles.some((title) => /^settings$/i.test(title));
+  }
+
   function safetyTables() {
     if (!isSafetyPage()) return [];
 
@@ -216,11 +223,14 @@
   }
 
   async function apiWithFallback(path, options) {
-    const consolidated = '/api/index?path=' + encodeURIComponent(path);
+    const parts = String(path || '').split('?');
+    const routePath = parts.shift() || '';
+    const queryString = parts.length ? '&' + parts.join('?') : '';
+    const consolidated = '/api/index?path=' + encodeURIComponent(routePath) + queryString;
     try {
       return await api(consolidated, options);
     } catch (firstError) {
-      if (path === 'safety-response-link') {
+      if (routePath === 'safety-response-link') {
         try {
           return await api('/api/safety-response-link', options);
         } catch {}
@@ -267,6 +277,69 @@
     ].filter((line, index, arr) => line || arr[index - 1] !== '').join('\n').trim();
   }
 
+
+  function defaultFaxSubject(data) {
+    return `FMCSA Safety Performance Report${data.fileNumber ? ` - File #${data.fileNumber}` : ''}`;
+  }
+
+  function renderFaxTemplate(value, data, extra) {
+    const today = new Date().toISOString().slice(0, 10);
+    const values = {
+      applicantName: data.applicant || '',
+      applicant: data.applicant || '',
+      fileNumber: data.fileNumber || '',
+      previousEmployer: data.employer || '',
+      prevEmployer: data.employer || '',
+      employer: data.employer || '',
+      recipientName: (extra && extra.recipientName) || data.employer || '',
+      recipient: (extra && extra.recipientName) || data.employer || '',
+      faxNumber: (extra && extra.faxNumber) || '',
+      today,
+      date: today
+    };
+    return String(value || '').replace(/\{\{\s*([A-Za-z0-9_]+)\s*\}\}/g, function (_match, key) {
+      return values[key] !== undefined ? values[key] : '';
+    });
+  }
+
+  let phase12a79TemplateCache = null;
+  let phase12a79TemplateCacheAt = 0;
+
+  async function loadFaxTemplates(force) {
+    const now = Date.now();
+    if (!force && phase12a79TemplateCache && now - phase12a79TemplateCacheAt < 30000) return phase12a79TemplateCache;
+    const result = await apiWithFallback('email-templates?type=fax&companyId=' + encodeURIComponent(getCompanyId()));
+    phase12a79TemplateCache = Array.isArray(result.templates) ? result.templates.filter((template) => template.isActive !== false) : [];
+    phase12a79TemplateCacheAt = now;
+    return phase12a79TemplateCache;
+  }
+
+  function fillFaxTemplateSelect(modal, templates) {
+    const select = modal.querySelector('[data-phase12a79-template-select]');
+    if (!select) return;
+    const current = select.value;
+    select.innerHTML = '<option value="">Manual / default message</option>' + (templates || []).map((template) => `<option value="${String(template.id)}">${String(template.name || '').replace(/</g, '&lt;')}</option>`).join('');
+    if (current && Array.from(select.options).some((option) => option.value === current)) select.value = current;
+  }
+
+  function applyFaxTemplate(modal) {
+    const data = modal.__data || {};
+    const select = modal.querySelector('[data-phase12a79-template-select]');
+    const selectedId = select ? Number(select.value || 0) : 0;
+    const template = (phase12a79TemplateCache || []).find((item) => Number(item.id) === selectedId);
+    const recipientName = String(modal.querySelector('[data-phase12a78-recipient-name]')?.value || data.employer || '').trim();
+    const faxNumber = normalizeFax(modal.querySelector('[data-phase12a78-fax-number]')?.value || '');
+    const subjectInput = modal.querySelector('[data-phase12a79-subject]');
+    const bodyInput = modal.querySelector('[data-phase12a78-cover-message]');
+    if (template) {
+      if (subjectInput) subjectInput.value = renderFaxTemplate(template.subject, data, { recipientName, faxNumber });
+      if (bodyInput) bodyInput.value = renderFaxTemplate(template.body, data, { recipientName, faxNumber });
+    } else {
+      if (subjectInput) subjectInput.value = defaultFaxSubject(data);
+      if (bodyInput) bodyInput.value = defaultFaxCoverMessage(data);
+    }
+  }
+
   function getFaxModal() {
     let modal = document.getElementById('phase12a78-fax-modal');
     if (modal) return modal;
@@ -281,6 +354,10 @@
         </div>
         <p class="phase6-note" data-phase12a78-summary></p>
         <label class="phase12a78-field">
+          <span>Email template</span>
+          <select data-phase12a79-template-select><option value="">Manual / default message</option></select>
+        </label>
+        <label class="phase12a78-field">
           <span>Recipient fax number</span>
           <input data-phase12a78-fax-number placeholder="Example: 9725551234" inputmode="tel" />
         </label>
@@ -289,9 +366,14 @@
           <input data-phase12a78-recipient-name placeholder="Previous employer or contact name" />
         </label>
         <label class="phase12a78-field">
-          <span>Fax cover message</span>
+          <span>Email subject</span>
+          <input data-phase12a79-subject placeholder="FMCSA Safety Performance Report" />
+        </label>
+        <label class="phase12a78-field">
+          <span>Email / fax cover body</span>
           <textarea data-phase12a78-cover-message rows="8"></textarea>
         </label>
+        <p class="phase6-note">Templates can use <b>{{applicantName}}</b>, <b>{{fileNumber}}</b>, <b>{{previousEmployer}}</b>, <b>{{recipientName}}</b>, and <b>{{today}}</b>.</p>
         <div class="phase6-modal-actions">
           <button type="button" data-phase12a78-close class="phase12a78-secondary">Cancel</button>
           <button type="button" data-phase12a78-send>Send Fax</button>
@@ -312,7 +394,10 @@
     modal.querySelector('[data-phase12a78-summary]').textContent = `File #${data.fileNumber} — ${data.applicant || 'Applicant not listed'}`;
     modal.querySelector('[data-phase12a78-fax-number]').value = '';
     modal.querySelector('[data-phase12a78-recipient-name]').value = data.employer || '';
+    modal.querySelector('[data-phase12a79-subject]').value = defaultFaxSubject(data);
     modal.querySelector('[data-phase12a78-cover-message]').value = defaultFaxCoverMessage(data);
+    fillFaxTemplateSelect(modal, phase12a79TemplateCache || []);
+    loadFaxTemplates().then((templates) => fillFaxTemplateSelect(modal, templates)).catch((error) => toast(error.message || 'Could not load email templates.', true));
     modal.classList.remove('hidden');
     setTimeout(() => modal.querySelector('[data-phase12a78-fax-number]')?.focus(), 50);
   }
@@ -330,6 +415,8 @@
     const data = modal.__data || {};
     const faxNumber = normalizeFax(modal.querySelector('[data-phase12a78-fax-number]')?.value || '');
     const recipientName = String(modal.querySelector('[data-phase12a78-recipient-name]')?.value || '').trim();
+    const templateId = Number(modal.querySelector('[data-phase12a79-template-select]')?.value || 0) || null;
+    const subject = String(modal.querySelector('[data-phase12a79-subject]')?.value || '').trim();
     const coverMessage = String(modal.querySelector('[data-phase12a78-cover-message]')?.value || '').trim();
     const sendButton = modal.querySelector('[data-phase12a78-send]');
 
@@ -353,6 +440,8 @@
           fileNumber: data.fileNumber,
           faxNumber,
           recipientName,
+          templateId,
+          subject,
           coverMessage
         })
       });
@@ -710,6 +799,124 @@
   }
 
 
+
+
+  // PHASE12A79_EMAIL_TEMPLATE_SETTINGS_UI START
+  function addEmailSettingsPage() {
+    if (!isSettingsPage()) return;
+    if (document.getElementById('phase12a79-email-settings')) return;
+    const anchor = Array.from(document.querySelectorAll('.settings-card, .card.wide-card')).pop() || document.querySelector('.main-panel') || document.body;
+    const panel = document.createElement('section');
+    panel.id = 'phase12a79-email-settings';
+    panel.className = 'card wide-card settings-card phase12a79-settings-card';
+    panel.innerHTML = `
+      <h2>Email Settings</h2>
+      <p class="muted">Create reusable fax/email templates. Use <b>{{applicantName}}</b> to pull in the applicant's name. You can also use <b>{{fileNumber}}</b>, <b>{{previousEmployer}}</b>, <b>{{recipientName}}</b>, and <b>{{today}}</b>.</p>
+      <div class="phase12a79-template-form">
+        <label><span>Template Name</span><input data-phase12a79-new-name placeholder="Example: FMCSA Fax Cover" /></label>
+        <label><span>Subject</span><input data-phase12a79-new-subject placeholder="FMCSA Safety Performance Report - {{applicantName}}" /></label>
+        <label class="wide"><span>Email Body</span><textarea data-phase12a79-new-body rows="6" placeholder="Please see attached FMCSA report for {{applicantName}}."></textarea></label>
+        <button type="button" data-phase12a79-add-template>Create Template</button>
+      </div>
+      <div data-phase12a79-list class="phase12a79-template-list"><p class="muted">Loading templates...</p></div>
+    `;
+    anchor.insertAdjacentElement('afterend', panel);
+    loadTemplateSettings().catch((error) => toast(error.message || 'Could not load email templates.', true));
+  }
+
+  async function loadTemplateSettings() {
+    const panel = document.getElementById('phase12a79-email-settings');
+    if (!panel) return;
+    const list = panel.querySelector('[data-phase12a79-list]');
+    const result = await apiWithFallback('email-templates?type=fax&companyId=' + encodeURIComponent(getCompanyId()));
+    phase12a79TemplateCache = Array.isArray(result.templates) ? result.templates : [];
+    phase12a79TemplateCacheAt = Date.now();
+    renderTemplateSettingsList(phase12a79TemplateCache);
+  }
+
+  function renderTemplateSettingsList(templates) {
+    const panel = document.getElementById('phase12a79-email-settings');
+    if (!panel) return;
+    const list = panel.querySelector('[data-phase12a79-list]');
+    if (!list) return;
+    if (!templates || !templates.length) {
+      list.innerHTML = '<p class="muted">No email templates yet.</p>';
+      return;
+    }
+    list.innerHTML = templates.map((template) => `
+      <div class="phase12a79-template-row" data-phase12a79-template-id="${template.id}">
+        <div class="phase12a79-row-grid">
+          <label><span>Name</span><input data-phase12a79-name value="${escapeAttr(template.name || '')}" /></label>
+          <label><span>Subject</span><input data-phase12a79-subject-edit value="${escapeAttr(template.subject || '')}" /></label>
+          <label><span>Active</span><select data-phase12a79-active><option value="true" ${template.isActive !== false ? 'selected' : ''}>Active</option><option value="false" ${template.isActive === false ? 'selected' : ''}>Inactive</option></select></label>
+        </div>
+        <label class="phase12a79-body-label"><span>Body</span><textarea data-phase12a79-body rows="5">${escapeHtml(template.body || '')}</textarea></label>
+        <div class="phase12a79-row-actions"><button type="button" data-phase12a79-save-template>Save</button><button type="button" class="danger" data-phase12a79-delete-template>Delete</button></div>
+      </div>
+    `).join('');
+  }
+
+  function escapeAttr(value) {
+    return String(value || '').replace(/&/g, '&amp;').replace(/"/g, '&quot;').replace(/</g, '&lt;');
+  }
+
+  function escapeHtml(value) {
+    return String(value || '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+  }
+
+  function templatePayloadFromPanel(prefix, row) {
+    if (prefix === 'new') {
+      const panel = document.getElementById('phase12a79-email-settings');
+      return {
+        type: 'fax',
+        name: String(panel.querySelector('[data-phase12a79-new-name]')?.value || '').trim(),
+        subject: String(panel.querySelector('[data-phase12a79-new-subject]')?.value || '').trim(),
+        body: String(panel.querySelector('[data-phase12a79-new-body]')?.value || '').trim(),
+        isActive: true
+      };
+    }
+    return {
+      id: Number(row?.dataset.phase12a79TemplateId || 0),
+      type: 'fax',
+      name: String(row.querySelector('[data-phase12a79-name]')?.value || '').trim(),
+      subject: String(row.querySelector('[data-phase12a79-subject-edit]')?.value || '').trim(),
+      body: String(row.querySelector('[data-phase12a79-body]')?.value || '').trim(),
+      isActive: String(row.querySelector('[data-phase12a79-active]')?.value || 'true') === 'true'
+    };
+  }
+
+  async function addEmailTemplate() {
+    const panel = document.getElementById('phase12a79-email-settings');
+    const payload = templatePayloadFromPanel('new');
+    if (!payload.name || !payload.subject || !payload.body) return toast('Template name, subject, and body are required.', true);
+    await apiWithFallback('email-templates?companyId=' + encodeURIComponent(getCompanyId()), { method: 'POST', body: JSON.stringify(payload) });
+    panel.querySelector('[data-phase12a79-new-name]').value = '';
+    panel.querySelector('[data-phase12a79-new-subject]').value = '';
+    panel.querySelector('[data-phase12a79-new-body]').value = '';
+    toast('Email template created.');
+    await loadTemplateSettings();
+  }
+
+  async function saveEmailTemplate(button) {
+    const row = button.closest('[data-phase12a79-template-id]');
+    const payload = templatePayloadFromPanel('edit', row);
+    if (!payload.id || !payload.name || !payload.subject || !payload.body) return toast('Template name, subject, and body are required.', true);
+    await apiWithFallback('email-templates?companyId=' + encodeURIComponent(getCompanyId()), { method: 'PATCH', body: JSON.stringify(payload) });
+    toast('Email template saved.');
+    await loadTemplateSettings();
+  }
+
+  async function deleteEmailTemplate(button) {
+    const row = button.closest('[data-phase12a79-template-id]');
+    const id = Number(row?.dataset.phase12a79TemplateId || 0);
+    if (!id) return;
+    if (!window.confirm('Delete this email template?')) return;
+    await apiWithFallback('email-templates?id=' + encodeURIComponent(id) + '&companyId=' + encodeURIComponent(getCompanyId()), { method: 'DELETE' });
+    toast('Email template deleted.');
+    await loadTemplateSettings();
+  }
+  // PHASE12A79_EMAIL_TEMPLATE_SETTINGS_UI END
+
   function addStyles() {
     if (document.getElementById('phase6-style')) return;
     const style = document.createElement('style');
@@ -728,6 +935,20 @@
       .phase12a78-field input, .phase12a78-field textarea { width: 100%; border: 1px solid #cbd5e1; border-radius: 10px; padding: 10px 12px; font: inherit; }
       .phase12a78-secondary { background: #64748b !important; }
       .phase12a78-fax-card [data-phase12a78-send]:disabled { opacity: .6; cursor: wait; }
+      .phase12a79-template-form { display: grid; grid-template-columns: 1fr 1.4fr; gap: 12px; margin-top: 14px; }
+      .phase12a79-template-form label, .phase12a79-template-row label { display: block; margin: 0; }
+      .phase12a79-template-form label span, .phase12a79-template-row label span { display: block; font-size: 12px; font-weight: 900; color: #475569; margin: 0 0 5px; }
+      .phase12a79-template-form input, .phase12a79-template-form textarea, .phase12a79-template-row input, .phase12a79-template-row textarea, .phase12a79-template-row select { width: 100%; border: 1px solid #cbd5e1; border-radius: 10px; padding: 10px 12px; font: inherit; }
+      .phase12a79-template-form .wide { grid-column: 1 / -1; }
+      .phase12a79-template-form button, .phase12a79-row-actions button { border: 0; border-radius: 12px; padding: 10px 14px; font-weight: 900; background: #111827; color: #fff; cursor: pointer; }
+      .phase12a79-template-list { margin-top: 16px; display: grid; gap: 12px; }
+      .phase12a79-template-row { border: 1px solid #e2e8f0; border-radius: 14px; padding: 14px; background: #f8fafc; }
+      .phase12a79-row-grid { display: grid; grid-template-columns: 1fr 1.5fr 130px; gap: 12px; }
+      .phase12a79-body-label { margin-top: 12px !important; }
+      .phase12a79-row-actions { margin-top: 10px; display: flex; justify-content: flex-end; gap: 8px; }
+      .phase12a79-row-actions .danger { background: #dc2626; }
+      .phase12a79-fax-card select { width: 100%; border: 1px solid #cbd5e1; border-radius: 10px; padding: 10px 12px; font: inherit; }
+      @media(max-width:900px){ .phase12a79-template-form, .phase12a79-row-grid { grid-template-columns: 1fr; } }
       .phase6-link-button:hover { filter: brightness(.97); }
       .phase6-toast { position: fixed; right: 18px; bottom: 18px; z-index: 10004; background: #111827; color: #fff; border-radius: 12px; padding: 12px 14px; box-shadow: 0 18px 45px rgba(15,23,42,.25); font-size: 14px; max-width: 520px; }
       .phase6-toast.danger { background: #991b1b; }
@@ -763,6 +984,24 @@
       sendFaxFromModal();
       return;
     }
+    if (event.target && event.target.closest && event.target.closest('[data-phase12a79-add-template]')) {
+      event.preventDefault();
+      event.stopPropagation();
+      addEmailTemplate().catch((error) => toast(error.message || 'Could not create template.', true));
+      return;
+    }
+    if (event.target && event.target.closest && event.target.closest('[data-phase12a79-save-template]')) {
+      event.preventDefault();
+      event.stopPropagation();
+      saveEmailTemplate(event.target.closest('[data-phase12a79-save-template]')).catch((error) => toast(error.message || 'Could not save template.', true));
+      return;
+    }
+    if (event.target && event.target.closest && event.target.closest('[data-phase12a79-delete-template]')) {
+      event.preventDefault();
+      event.stopPropagation();
+      deleteEmailTemplate(event.target.closest('[data-phase12a79-delete-template]')).catch((error) => toast(error.message || 'Could not delete template.', true));
+      return;
+    }
 
     const modal = getModal();
     const link = modal.__link;
@@ -786,9 +1025,18 @@
     }
   });
 
+
+
+  document.addEventListener('change', function (event) {
+    if (event.target && event.target.matches && event.target.matches('[data-phase12a79-template-select]')) {
+      applyFaxTemplate(getFaxModal());
+    }
+  });
+
   function refresh() {
-    if (!isSafetyPage()) return;
     addStyles();
+    if (isSettingsPage()) addEmailSettingsPage();
+    if (!isSafetyPage()) return;
     addPanel();
     addButtons();
     makeSafetyTablesSortable();
