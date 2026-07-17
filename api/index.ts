@@ -1021,10 +1021,32 @@ async function safetyReportsFaxFmcsaInner(req: any, res: any, user: any) {
     pdfBase64: Buffer.from(bytes).toString('base64')
   });
 
+  const faxDebug = {
+    status: 'sent_to_efax_email_gateway',
+    sentAt: new Date().toISOString(),
+    sentTo: toFaxEmail,
+    recipientFaxDigits,
+    efaxDomain: domain,
+    fromEmail,
+    replyToEmail: replyToEmail || null,
+    emailProvider: 'resend',
+    emailProviderId: emailResult?.id || null,
+    subject,
+    templateId: templateId || null,
+    templateName: selectedTemplate?.name || null,
+    reportId: report.id,
+    fileNumber: report.fileNumber || null,
+    applicantName: report.applicantName || null,
+    pdfAttached: true,
+    attachmentFilename: filename,
+    attachmentContentType: 'application/pdf',
+    note: 'This confirms the app sent the email to the eFax gateway. Final fax delivery is confirmed separately by eFax.'
+  };
+
   try {
     await query(
       'update safety_reports set "lastFaxSentAt"=now(), "lastFaxSentTo"=$1, "lastFaxStatus"=$2, "lastFaxMessage"=$3, "updatedAt"=now() where id=$4 and "companyId"=$5',
-      [recipientFaxDigits, 'sent_to_efax', `Sent to ${toFaxEmail}`, report.id, companyId]
+      [recipientFaxDigits, 'sent_to_efax', `Sent to ${toFaxEmail} from ${fromEmail || 'unknown sender'}; Resend ID: ${emailResult?.id || 'none'}`, report.id, companyId]
     );
   } catch {
     // Fax should not fail just because the optional logging columns have not been added yet.
@@ -1035,9 +1057,13 @@ async function safetyReportsFaxFmcsaInner(req: any, res: any, user: any) {
     success: true,
     message: `Fax sent to eFax for delivery to ${recipientFaxDigits}.`,
     faxEmail: toFaxEmail,
+    fromEmail,
+    replyToEmail: replyToEmail || null,
+    efaxDomain: domain,
     reportId: report.id,
     fileNumber: report.fileNumber,
-    emailProviderId: emailResult?.id || null
+    emailProviderId: emailResult?.id || null,
+    debug: faxDebug
   });
 }
 
