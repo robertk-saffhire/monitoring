@@ -4,6 +4,11 @@ import { jwtVerify, SignJWT } from 'jose';
 import fs from 'fs';
 import path from 'path';
 
+// PHASE12A82_FAX_STABILITY START
+// Give the consolidated API route more time for PDF generation + eFax email delivery.
+export const config = { maxDuration: 60 };
+// PHASE12A82_FAX_STABILITY END
+
 const { Pool } = pg;
 let pool: any;
 const SESSION_COOKIE = 'saffhire_session';
@@ -694,6 +699,17 @@ function faxReplyToEmail() {
   return String(process.env.SAFETY_REPLY_TO_EMAIL || process.env.EMAIL_REPLY_TO || '').trim();
 }
 
+function faxFetchTimeoutMs() {
+  const raw = Number(process.env.EFAX_SEND_TIMEOUT_MS || 15000);
+  return Number.isFinite(raw) && raw >= 5000 ? raw : 15000;
+}
+
+function makeAbortSignal(ms: number) {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), ms);
+  return { signal: controller.signal, clear: () => clearTimeout(timer) };
+}
+
 function defaultFaxCoverMessage(report: any, recipientName?: string) {
   const parts = [
     recipientName ? `Attention: ${recipientName}` : '',
@@ -714,12 +730,13 @@ async function sendViaResendToEfax(params: { toFaxEmail: string; fromEmail: stri
   const apiKey = String(process.env.RESEND_API_KEY || '').trim();
   if (!apiKey) throw new Error('RESEND_API_KEY is missing in Vercel Environment Variables');
   if (!params.fromEmail || !params.fromEmail.includes('@')) throw new Error('EMAIL_FROM or SAFETY_FROM_EMAIL is missing in Vercel Environment Variables');
+  if (!params.toFaxEmail || !params.toFaxEmail.includes('@')) throw new Error('eFax destination email could not be created from the fax number');
 
   const payload: any = {
     from: params.fromEmail,
     to: [params.toFaxEmail],
-    subject: params.subject,
-    text: params.text,
+    subject: params.subject || 'FMCSA Safety Performance Report',
+    text: params.text || 'Please see the attached FMCSA Safety Performance report.',
     attachments: [
       {
         filename: params.filename,
@@ -729,16 +746,29 @@ async function sendViaResendToEfax(params: { toFaxEmail: string; fromEmail: stri
   };
   if (params.replyToEmail && params.replyToEmail.includes('@')) payload.reply_to = params.replyToEmail;
 
-  const response = await fetch('https://api.resend.com/emails', {
-    method: 'POST',
-    headers: {
-      Authorization: `Bearer ${apiKey}`,
-      'Content-Type': 'application/json'
-    },
-    body: JSON.stringify(payload)
-  });
+  const timeout = makeAbortSignal(faxFetchTimeoutMs());
+  let response: any;
+  let raw = '';
+  try {
+    response = await fetch('https://api.resend.com/emails', {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${apiKey}`,
+        'Content-Type': 'application/json'
+      },
+      body: JSON.stringify(payload),
+      signal: timeout.signal
+    });
+    raw = await response.text();
+  } catch (error: any) {
+    if (error?.name === 'AbortError') {
+      throw new Error('Resend/eFax email request timed out before Vercel finished the function. Try again, or increase EFAX_SEND_TIMEOUT_MS.');
+    }
+    throw new Error(`Resend/eFax email request failed before a response was received: ${errorMessage(error)}`);
+  } finally {
+    timeout.clear();
+  }
 
-  const raw = await response.text();
   let data: any = null;
   try { data = raw ? JSON.parse(raw) : null; } catch { data = raw; }
   if (!response.ok) {
@@ -747,8 +777,7 @@ async function sendViaResendToEfax(params: { toFaxEmail: string; fromEmail: stri
   }
   return data;
 }
-
-async function safetyReportsFaxFmcsa(req: any, res: any, user: any) {
+async function safetyReportsFaxFmcsaInner(req: any, res: any, user: any) {
   if (req.method !== 'POST') return json(res, 405, { status: 'error', message: 'Method not allowed' });
   if (!requireCompanyScope(user, res)) return;
 
@@ -827,6 +856,19 @@ async function safetyReportsFaxFmcsa(req: any, res: any, user: any) {
     fileNumber: report.fileNumber,
     emailProviderId: emailResult?.id || null
   });
+}
+
+
+async function safetyReportsFaxFmcsa(req: any, res: any, user: any) {
+  try {
+    return await safetyReportsFaxFmcsaInner(req, res, user);
+  } catch (error: any) {
+    return json(res, 500, {
+      status: 'error',
+      message: `Fax FMCSA failed: ${errorMessage(error)}`,
+      code: 'FAX_FMCSA_FAILED'
+    });
+  }
 }
 // PHASE12A78_EFAX_FMCSA_REPORT END
 
