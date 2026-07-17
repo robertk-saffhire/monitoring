@@ -582,6 +582,145 @@ async function clientSafetyPdf(req: any, res: any, user: any) {
   res.setHeader('Content-Disposition', `attachment; filename="completed-safety-performance-${safeFile}.pdf"`);
   res.end(Buffer.from(bytes));
 }
+
+
+// PHASE12A78_EFAX_FMCSA_REPORT START
+function faxDigits(value: any) {
+  const digits = String(value || '').replace(/[^0-9]/g, '');
+  if (digits.length < 7) throw new Error('Recipient fax number is required');
+  return digits;
+}
+
+function faxDomain() {
+  return String(process.env.EFAX_SEND_DOMAIN || 'send.efax.com').replace(/^@+/, '').trim() || 'send.efax.com';
+}
+
+function faxFromEmail() {
+  return String(process.env.SAFETY_FROM_EMAIL || process.env.EMAIL_FROM || '').trim();
+}
+
+function faxReplyToEmail() {
+  return String(process.env.SAFETY_REPLY_TO_EMAIL || process.env.EMAIL_REPLY_TO || '').trim();
+}
+
+function defaultFaxCoverMessage(report: any, recipientName?: string) {
+  const parts = [
+    recipientName ? `Attention: ${recipientName}` : '',
+    '',
+    'Please see the attached FMCSA Safety Performance report.',
+    '',
+    `Applicant: ${pdfClean(report.applicantName) || 'N/A'}`,
+    `File Number: ${pdfClean(report.fileNumber) || 'N/A'}`,
+    report.prevEmployerName ? `Previous Employer: ${report.prevEmployerName}` : '',
+    '',
+    'Thank you,',
+    'SaffHire Background Screening'
+  ].filter((line, index, arr) => line || arr[index - 1] !== '');
+  return parts.join('\n').trim();
+}
+
+async function sendViaResendToEfax(params: { toFaxEmail: string; fromEmail: string; replyToEmail?: string; subject: string; text: string; filename: string; pdfBase64: string; }) {
+  const apiKey = String(process.env.RESEND_API_KEY || '').trim();
+  if (!apiKey) throw new Error('RESEND_API_KEY is missing in Vercel Environment Variables');
+  if (!params.fromEmail || !params.fromEmail.includes('@')) throw new Error('EMAIL_FROM or SAFETY_FROM_EMAIL is missing in Vercel Environment Variables');
+
+  const payload: any = {
+    from: params.fromEmail,
+    to: [params.toFaxEmail],
+    subject: params.subject,
+    text: params.text,
+    attachments: [
+      {
+        filename: params.filename,
+        content: params.pdfBase64,
+      }
+    ]
+  };
+  if (params.replyToEmail && params.replyToEmail.includes('@')) payload.reply_to = params.replyToEmail;
+
+  const response = await fetch('https://api.resend.com/emails', {
+    method: 'POST',
+    headers: {
+      Authorization: `Bearer ${apiKey}`,
+      'Content-Type': 'application/json'
+    },
+    body: JSON.stringify(payload)
+  });
+
+  const raw = await response.text();
+  let data: any = null;
+  try { data = raw ? JSON.parse(raw) : null; } catch { data = raw; }
+  if (!response.ok) {
+    const detail = typeof data === 'object' ? (data?.message || data?.error || JSON.stringify(data)) : String(data || '');
+    throw new Error(`eFax email send failed: ${detail || response.statusText}`);
+  }
+  return data;
+}
+
+async function safetyReportsFaxFmcsa(req: any, res: any, user: any) {
+  if (req.method !== 'POST') return json(res, 405, { status: 'error', message: 'Method not allowed' });
+  if (!requireCompanyScope(user, res)) return;
+
+  const body = await readBody(req);
+  const companyId = Number(body.companyId || requestedCompanyId(req, user));
+  const id = Number(body.id || 0);
+  const fileNumber = String(body.fileNumber || '').trim();
+  const recipientFaxDigits = faxDigits(body.faxNumber || body.recipientFaxNumber || body.prevEmployerFax);
+  const recipientName = String(body.recipientName || '').trim();
+  const domain = faxDomain();
+  const toFaxEmail = `${recipientFaxDigits}@${domain}`;
+
+  let result;
+  if (id) {
+    result = await query('select * from safety_reports where id=$1 and "companyId"=$2 limit 1', [id, companyId]);
+  } else if (fileNumber) {
+    result = await query('select * from safety_reports where "companyId"=$1 and "fileNumber"=$2 order by id desc limit 1', [companyId, fileNumber]);
+  } else {
+    return json(res, 400, { status: 'error', message: 'Report id or file number is required' });
+  }
+
+  const report = result.rows[0];
+  if (!report) return json(res, 404, { status: 'error', message: 'Safety Performance report not found' });
+
+  const bytes = await buildCompletedSafetyPdf(report);
+  const safeFile = String(report.fileNumber || report.id || 'safety-performance').replace(/[^0-9A-Za-z_-]/g, '') || 'safety-performance';
+  const filename = `fmcsa-safety-performance-${safeFile}.pdf`;
+  const subject = `FMCSA Safety Performance Report${report.fileNumber ? ` - File #${report.fileNumber}` : ''}`;
+  const text = String(body.coverMessage || '').trim() || defaultFaxCoverMessage(report, recipientName);
+  const fromEmail = faxFromEmail();
+  const replyToEmail = faxReplyToEmail();
+
+  const emailResult = await sendViaResendToEfax({
+    toFaxEmail,
+    fromEmail,
+    replyToEmail,
+    subject,
+    text,
+    filename,
+    pdfBase64: Buffer.from(bytes).toString('base64')
+  });
+
+  try {
+    await query(
+      'update safety_reports set "lastFaxSentAt"=now(), "lastFaxSentTo"=$1, "lastFaxStatus"=$2, "lastFaxMessage"=$3, "updatedAt"=now() where id=$4 and "companyId"=$5',
+      [recipientFaxDigits, 'sent_to_efax', `Sent to ${toFaxEmail}`, report.id, companyId]
+    );
+  } catch {
+    // Fax should not fail just because the optional logging columns have not been added yet.
+  }
+
+  return json(res, 200, {
+    status: 'ok',
+    success: true,
+    message: `Fax sent to eFax for delivery to ${recipientFaxDigits}.`,
+    faxEmail: toFaxEmail,
+    reportId: report.id,
+    fileNumber: report.fileNumber,
+    emailProviderId: emailResult?.id || null
+  });
+}
+// PHASE12A78_EFAX_FMCSA_REPORT END
+
 // PHASE12A40_CLIENT_COMPLETED_SAFETY_PDF END
 
 async function systemCheck(req: any, res: any, user: any) {
@@ -3584,6 +3723,7 @@ export default async function handler(req: any, res: any) {
     if (route === 'applicants') return applicants(req, res, user);
     if (route === 'safety-reports') return safetyReports(req, res, user);
     if (route === 'safety-reports/live-pull') return safetyReportsLivePull(req, res, user);
+    if (route === 'safety-reports/fax-fmcsa') return safetyReportsFaxFmcsa(req, res, user);
     if (route === 'safety-reports/live-discover') return safetyReportsLiveDiscover(req, res, user);
     if (route === 'safety-response-link') return safetyResponseLink(req, res, user);
     if (route === 'safety-response-diagnostics') return safetyResponseDiagnostics(req, res, user);
