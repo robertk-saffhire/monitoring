@@ -1,14 +1,16 @@
-Phase 12A-93 — Fax Debug Details
+Phase 12A-94 — Fax Through Gmail SMTP
 
 Upload only these files:
 - api/index.ts
-- public/phase6.js
+- package.json
 
-What changed:
-- Fax FMCSA now returns a debug object after the email is handed to the eFax email gateway.
-- The Fax popup now stays open after sending and shows Fax Debug details.
-- You can copy the debug details.
-- Debug details include eFax destination email, From email, Reply-To, eFax domain, fax number digits, template used, subject, PDF attachment status, filename, and Resend message ID.
+Then add these Vercel ENV variables:
+- FAX_SMTP_HOST=smtp.gmail.com
+- FAX_SMTP_PORT=465
+- FAX_SMTP_SECURE=true
+- FAX_SMTP_USER=robertk@saffhire.com
+- FAX_SMTP_PASS=<Google app password>
+- FAX_FROM=robertk@saffhire.com
+- EFAX_SEND_DOMAIN=efaxsend.com
 
-SQL: No SQL needed.
-Vercel ENV: No ENV changes needed.
+No SQL changes are required.
