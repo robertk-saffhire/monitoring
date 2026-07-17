@@ -7,7 +7,7 @@ import path from 'path';
 const { Pool } = pg;
 let pool: any;
 const SESSION_COOKIE = 'saffhire_session';
-const SAFETY_STATUSES = new Set(['S1 Complete', 'Emp Sent', 'Emp Complete', 'Completed']);
+const SAFETY_STATUSES = new Set(['Consent Needed', 'Consent Given', 'S1 Complete', 'Emp Sent', 'Emp Complete', 'Completed']);
 const USER_ROLES = new Set(['admin', 'user', 'viewer', 'client_admin', 'client_user']);
 const BOOL_REPORT_FIELDS = new Set([
   'vehicleStraightTruck', 'vehicleTractorSemitrailer', 'vehicleBus', 'vehicleCargoTank', 'vehicleDoublesTriples', 'vehicleOther',
@@ -155,7 +155,7 @@ async function applicants(req: any, res: any, user: any) {
 function cleanReport(body: any, companyId: number) {
   const out: any = { companyId };
   for (const field of REPORT_FIELDS) {
-    if (field === 'status') out[field] = SAFETY_STATUSES.has(body[field]) ? body[field] : 'S1 Complete';
+    if (field === 'status') out[field] = SAFETY_STATUSES.has(body[field]) ? body[field] : 'Consent Needed';
     else if (field === 'created') out[field] = String(body[field] || new Date().toISOString().slice(0, 10)).trim();
     else if (BOOL_REPORT_FIELDS.has(field)) out[field] = asBool(body[field]);
     else out[field] = String(body[field] ?? '').trim();
@@ -209,7 +209,7 @@ async function safetyReports(req: any, res: any, user: any) {
     }
     return json(res, 200, { status: 'ok', reports: r.rows, source, requestedCompanyId: companyId });
   }
-  if (req.method === 'POST') { const v = cleanReport(await readBody(req), companyId); if (!v.fileNumber && !v.applicantName) return json(res, 400, { status: 'error', message: 'File number or applicant name is required' }); const placeholders = reportCols.map((_, i) => `$${i + 1}`).join(','); const r = await query(`insert into safety_reports (${reportCols.join(',')}) values (${placeholders}) returning *`, reportValues(v)); return json(res, 200, { status: 'ok', report: r.rows[0] }); }
+  if (req.method === 'POST') { const v = cleanReport(await readBody(req), companyId); v.status = 'Consent Needed'; if (!v.fileNumber && !v.applicantName) return json(res, 400, { status: 'error', message: 'File number or applicant name is required' }); const placeholders = reportCols.map((_, i) => `$${i + 1}`).join(','); const r = await query(`insert into safety_reports (${reportCols.join(',')}) values (${placeholders}) returning *`, reportValues(v)); return json(res, 200, { status: 'ok', report: r.rows[0] }); }
   if (req.method === 'PATCH') { const body = await readBody(req); const id = Number(body.id); if (!id) return json(res, 400, { status: 'error', message: 'Report id is required' }); const v = cleanReport(body, companyId); const assignments = reportCols.slice(1).map((col, i) => `${col}=$${i + 1}`).join(','); const params = reportValues(v).slice(1); params.push(id, companyId); const r = await query(`update safety_reports set ${assignments}, "updatedAt"=now() where id=$${params.length - 1} and "companyId"=$${params.length} returning *`, params); return json(res, 200, { status: 'ok', report: r.rows[0] }); }
   if (req.method === 'DELETE') { const id = Number(url.searchParams.get('id')); await query('delete from safety_reports where id=$1 and "companyId"=$2', [id, companyId]); return json(res, 200, { status: 'ok', success: true }); }
   return json(res, 405, { status: 'error', message: 'Method not allowed' });
@@ -3104,7 +3104,7 @@ async function safetyReportsLivePull(req: any, res: any, user: any) {
          "prevEmployerCityStateZip"=coalesce(nullif($6,''), "prevEmployerCityStateZip"),
          "jobTitle"=coalesce(nullif($7,''), "jobTitle"),
          "fromDate"=coalesce(nullif($8,''), "fromDate"),
-         status=case when status in ('Completed','Emp Complete') then status else 'S1 Complete' end,
+         status=case when status in ('Completed','Emp Complete','Consent Given') then status else 'Consent Needed' end,
          "tazworksHost"=$9,
          "tazworksClientGuid"=$10,
          "tazworksOrderGuid"=$11,
@@ -3187,7 +3187,7 @@ async function safetyUpdateExistingReportFromLive(reportId: number, companyId: n
          "prevEmployerCityStateZip"=coalesce(nullif($6,''), "prevEmployerCityStateZip"),
          "jobTitle"=coalesce(nullif($7,''), "jobTitle"),
          "fromDate"=coalesce(nullif($8,''), "fromDate"),
-         status=case when status in ('Completed','Emp Complete') then status else 'S1 Complete' end,
+         status=case when status in ('Completed','Emp Complete','Consent Given') then status else 'Consent Needed' end,
          "tazworksHost"=$9,
          "tazworksClientGuid"=$10,
          "tazworksOrderGuid"=$11,
@@ -3241,7 +3241,7 @@ async function safetyCreateOrUpdateReportFromLive(companyId: number, host: strin
     applicantName: extracted.applicantName || order.applicantName || '',
     fileNumber,
     created: dateOnly(order.orderedDate || order.createdDate || new Date()) || new Date().toISOString().slice(0, 10),
-    status: 'S1 Complete',
+    status: 'Consent Needed',
     followUpDate: '',
     notes: safetyBuildLiveMessage(extracted),
     prevEmployerName: extracted.prevEmployerName || '',
@@ -3710,7 +3710,7 @@ async function safetyResponsePublic(req: any, res: any) {
       const sql = `
         update safety_reports
         set ${assignments.join(',')},
-            status='S1 Complete',
+            status='Consent Given',
             notes=trim(both E'\n' from concat(coalesce(notes,''), E'\n', $${noteParam}::text)),
             "updatedAt"=now()
         where id=$${reportParam} and "companyId"=$${companyParam}
