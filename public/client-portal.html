@@ -1,1594 +1,332 @@
-<!doctype html><html lang="en"><head><meta charset="UTF-8"/><meta name="viewport" content="width=device-width,initial-scale=1.0"/><title>SaffHire Client Portal</title><style>:root{--g:#1fff00;--ink:#0f172a;--muted:#64748b;--line:#dbe3ef;--bg:#f8fafc}body{margin:0;font-family:system-ui,-apple-system,Segoe UI,sans-serif;background:var(--bg);color:var(--ink)}.layout{min-height:100vh;display:grid;grid-template-columns:260px 1fr}aside{background:#0f172a;color:#fff;padding:22px 14px}.brand{padding:0 10px 18px;border-bottom:1px solid rgba(255,255,255,.14);margin-bottom:16px}.brand h1{margin:0}.brand p{margin:4px 0 0;color:#cbd5e1}nav button{width:100%;border:0;border-radius:13px;color:#e2e8f0;background:transparent;padding:11px;text-align:left;font-weight:900;cursor:pointer;margin:4px 0}nav button.active,nav button:hover{background:rgba(31,255,0,.16);box-shadow:inset 4px 0 0 var(--g);color:#fff}main{padding:24px}.head{display:flex;justify-content:space-between;gap:12px;margin-bottom:18px}.head h2{margin:0 0 4px;font-size:28px}.head p{margin:0;color:var(--muted);font-weight:700}.card{background:#fff;border:1px solid var(--line);border-radius:18px;padding:16px;margin-bottom:16px;box-shadow:0 8px 24px rgba(15,23,42,.05)}.grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(190px,1fr));gap:14px}.metric b{display:block;font-size:28px}.metric span{color:var(--muted);font-weight:800}.table{overflow:auto;border:1px solid var(--line);border-radius:15px}table{width:100%;border-collapse:collapse;background:#fff}th,td{padding:10px;border-bottom:1px solid #e2e8f0;text-align:left;vertical-align:middle}th{background:#f8fafc;color:#475569;text-transform:uppercase;font-size:12px}select,textarea{border:1px solid #cbd5e1;border-radius:10px;padding:8px;font:inherit}textarea{width:260px;min-height:54px}select.on{border-color:var(--g);background:rgba(31,255,0,.16);font-weight:1000}tr.dirty td{background:#fffbeb}.btn{border:1px solid #16a34a;background:#ecfdf5;color:#166534;border-radius:999px;padding:9px 12px;font-weight:1000;cursor:pointer}.danger{border-color:#dc2626;background:#fef2f2;color:#991b1b}.toast{position:fixed;right:18px;bottom:18px;background:#111827;color:#fff;border-radius:12px;padding:12px 14px}.toast.bad{background:#991b1b}@media(max-width:860px){.layout{grid-template-columns:1fr}nav{display:flex;overflow:auto;gap:8px}nav button{white-space:nowrap}}</style></head><body><div class="layout"><aside><div class="brand"><h1>SaffHire</h1><p id="name">Client Portal</p></div><nav><button data-p="dash" class="active">Dashboard</button><button data-p="mon">Monitoring</button><button data-p="safe">Safety Performance</button></nav></aside><main><div id="app" class="card">Loading client portal...</div></main></div><script>let S={p:'dash',d:null};const A=document.getElementById('app');function esc(v){return String(v??'').replaceAll('&','&amp;').replaceAll('<','&lt;').replaceAll('>','&gt;').replaceAll('"','&quot;').replaceAll("'","&#039;")}function fmt(v){if(!v)return'';const d=new Date(v);return Number.isNaN(d.getTime())?String(v):d.toLocaleDateString()}function ep(p){return'/api/index?path='+encodeURIComponent(p)}async function api(p,o){const r=await fetch(ep(p),Object.assign({credentials:'include'},o||{},{headers:Object.assign({'Content-Type':'application/json'},(o&&o.headers)||{})}));const raw=await r.text();let d={};try{d=raw?JSON.parse(raw):{}}catch{}if(!r.ok)throw new Error(d.message||raw||'Request failed');return d}function toast(m,b){let t=document.createElement('div');t.className=b?'toast bad':'toast';t.textContent=m;document.body.appendChild(t);setTimeout(()=>t.remove(),3500)}function head(t,s){return`<div class=head><div><h2>${esc(t)}</h2><p>${esc(s||'')}</p></div><div><button class=btn onclick=load()>Refresh</button> <button class='btn danger' onclick=logout()>Logout</button></div></div>`}function metric(l,v){return`<div class='card metric'><b>${esc(v??0)}</b><span>${esc(l)}</span></div>`}async function boot(){try{await api('client-auth/me');await load()}catch(e){location.href='/client-login.html'}}async function load(){A.innerHTML='Loading...';try{S.d=await api('client-dashboard');document.getElementById('name').textContent=S.d.company?.name||'Client Portal';render()}catch(e){A.className='card';A.textContent=e.message}}async function logout(){await api('client-auth/logout',{method:'POST',body:'{}'}).catch(()=>{});location.href='/client-login.html'}function render(){document.querySelectorAll('nav button').forEach(b=>b.classList.toggle('active',b.dataset.p===S.p));if(S.p==='mon')return mon();if(S.p==='safe')return safe();dash()}function dash(){let d=S.d||{},a=d.applicantStats||{},s=d.safetyStats||{};A.className='';A.innerHTML=head('Dashboard',d.company?.name||'')+`<div class=grid>${metric('Total Monitoring',a.total)}${metric('On Monitoring',a.on_monitoring)}${metric('Off Monitoring',a.off_monitoring)}${metric('Expired Medical',a.expired_medical)}${metric('Safety Reports',s.total)}${metric('Completed Safety',s.completed)}</div><section class=card><h3>Recent Monitoring</h3>${monTable((d.recentApplicants||[]).slice(0,10),false)}</section><section class=card><h3>Recent Safety Performance</h3>${safeTable((d.recentSafetyReports||[]).slice(0,10))}</section>`}function monTable(rows,edit){if(!rows.length)return'<p>No monitoring records found.</p>';return`<div class=table><table><thead><tr><th>File #</th><th>Name</th><th>Order Date</th><th>Monitoring</th><th>MVR Status</th><th>Med Expire</th><th>Notes</th>${edit?'<th>Save</th>':''}</tr></thead><tbody>${rows.map(r=>`<tr data-id='${esc(r.id)}'><td><b>${esc(r.fileNumber)}</b></td><td>${esc(r.name)}</td><td>${esc(fmt(r.orderDate))}</td><td>${edit?`<select data-f=monitorStatus class='${r.monitorStatus==='On'?'on':''}'><option value=Off ${r.monitorStatus!=='On'?'selected':''}>Off</option><option value=On ${r.monitorStatus==='On'?'selected':''}>On</option></select>`:esc(r.monitorStatus)}</td><td>${esc(r.mvrStatus)}</td><td>${esc(r.medExpire)}</td><td>${edit?`<textarea data-f=notes>${esc(r.notes||'')}</textarea>`:esc(r.notes)}</td>${edit?'<td><button class=btn data-a=save>Save</button></td>':''}</tr>`).join('')}</tbody></table></div>`}function mon(){let rows=S.d?.recentApplicants||[];A.className='';A.innerHTML=head('Monitoring','Turn Monitoring On/Off and save notes.')+`<section class=card><button class=btn onclick=saveAll()>Save All Changed</button><br><br>${monTable(rows,true)}</section>`;document.querySelectorAll('[data-id]').forEach(row=>{row.querySelectorAll('select,textarea').forEach(el=>el.addEventListener('change',()=>row.classList.add('dirty')));row.querySelector('[data-a=save]')?.addEventListener('click',()=>saveRow(row))})}async function saveRow(row){let b=row.querySelector('[data-a=save]');let old=b.textContent;b.disabled=true;b.textContent='Saving...';try{await api('client-applicant',{method:'PATCH',body:JSON.stringify({id:row.dataset.id,monitorStatus:row.querySelector('[data-f=monitorStatus]').value,notes:row.querySelector('[data-f=notes]').value})});row.classList.remove('dirty');row.querySelector('select').classList.toggle('on',row.querySelector('select').value==='On');toast('Saved.')}catch(e){toast(e.message,true)}finally{b.disabled=false;b.textContent=old}}async function saveAll(){let rows=[...document.querySelectorAll('tr.dirty[data-id]')];if(!rows.length)return toast('No changes to save.');for(const r of rows)await saveRow(r);await load()}function safeTable(rows){if(!rows.length)return'<p>No safety reports found.</p>';return`<div class=table><table><thead><tr><th>File #</th><th>Applicant</th><th>Created</th><th>Status</th><th>Follow Up</th><th>Previous Employer</th><th>Notes</th></tr></thead><tbody>${rows.map(r=>`<tr><td>${esc(r.fileNumber)}</td><td>${esc(r.applicantName)}</td><td>${esc(fmt(r.created))}</td><td>${esc(r.status)}</td><td>${esc(r.followUpDate)}</td><td>${esc(r.prevEmployerName)}</td><td>${esc(r.notes)}</td></tr>`).join('')}</tbody></table></div>`}function safe(){A.className='';A.innerHTML=head('Safety Performance','Read-only Safety Performance reports.')+`<section class=card>${safeTable(S.d?.recentSafetyReports||[])}</section>`}document.querySelectorAll('nav button').forEach(b=>b.onclick=()=>{S.p=b.dataset.p;render()});boot();</script>
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1.0" />
+  <title>SaffHire Client Portal</title>
+  <style>
+    :root{--g:#1fff00;--ink:#0f172a;--muted:#64748b;--line:#dbe3ef;--bg:#f8fafc;--good:#166534;--bad:#991b1b;--warn:#92400e}
+    *{box-sizing:border-box}body{margin:0;font-family:system-ui,-apple-system,Segoe UI,sans-serif;background:var(--bg);color:var(--ink)}
+    .layout{min-height:100vh;display:grid;grid-template-columns:260px 1fr}aside{background:#0f172a;color:#fff;padding:22px 14px;position:sticky;top:0;height:100vh}.brand{padding:0 10px 18px;border-bottom:1px solid rgba(255,255,255,.14);margin-bottom:16px}.brand h1{margin:0;font-size:24px}.brand p{margin:5px 0 0;color:#cbd5e1;font-weight:700;font-size:13px}.nav-label{margin:18px 10px 8px;color:#94a3b8;font-size:11px;font-weight:1000;letter-spacing:.14em;text-transform:uppercase}nav button{width:100%;border:0;border-radius:13px;color:#e2e8f0;background:transparent;padding:11px;text-align:left;font-weight:900;cursor:pointer;margin:4px 0}nav button.active,nav button:hover{background:rgba(31,255,0,.16);box-shadow:inset 4px 0 0 var(--g);color:#fff}nav button[hidden]{display:none}main{padding:24px}.head{display:flex;justify-content:space-between;gap:12px;align-items:flex-start;margin-bottom:18px}.head h2{margin:0 0 4px;font-size:28px}.head p{margin:0;color:var(--muted);font-weight:700}.actions{display:flex;gap:8px;flex-wrap:wrap;justify-content:flex-end}.card{background:#fff;border:1px solid var(--line);border-radius:18px;padding:16px;margin-bottom:16px;box-shadow:0 8px 24px rgba(15,23,42,.05)}.grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(175px,1fr));gap:14px}.metric b{display:block;font-size:28px}.metric span{color:var(--muted);font-weight:800}.table-wrap{overflow:auto;border:1px solid var(--line);border-radius:15px;background:#fff}table{width:100%;border-collapse:collapse;background:#fff}th,td{padding:10px;border-bottom:1px solid #e2e8f0;text-align:left;vertical-align:middle}th{background:#f8fafc;color:#475569;text-transform:uppercase;font-size:12px;white-space:nowrap}td{font-size:14px}.toolbar{display:flex;gap:10px;align-items:center;flex-wrap:wrap;margin-bottom:12px}.toolbar input,.toolbar select,input,select,textarea{border:1px solid #cbd5e1;border-radius:10px;padding:9px 10px;font:inherit;background:#fff}.toolbar input{min-width:260px;flex:1}textarea{width:260px;min-height:54px;resize:vertical}select.on{border-color:var(--g);background:rgba(31,255,0,.16);font-weight:1000}.btn{border:1px solid #16a34a;background:#ecfdf5;color:#166534;border-radius:999px;padding:9px 12px;font-weight:1000;cursor:pointer;text-decoration:none;display:inline-flex;align-items:center;gap:6px;justify-content:center}.btn:disabled{opacity:.55;cursor:not-allowed}.danger{border-color:#dc2626;background:#fef2f2;color:#991b1b}.neutral{border-color:#cbd5e1;background:#fff;color:#334155}.purple{border-color:#7c3aed;background:#f5f3ff;color:#5b21b6}.pill{display:inline-flex;border-radius:999px;padding:4px 9px;font-weight:900;font-size:12px;border:1px solid #cbd5e1}.pill.good{background:#ecfdf5;color:#166534;border-color:#bbf7d0}.pill.bad{background:#fef2f2;color:#991b1b;border-color:#fecaca}.pill.warn{background:#fffbeb;color:#92400e;border-color:#fde68a}.dirty td{background:#fffbeb!important}.hide{display:none!important}.toast{position:fixed;right:18px;bottom:18px;z-index:99999;background:#111827;color:#fff;border-radius:12px;padding:12px 14px;box-shadow:0 18px 45px rgba(15,23,42,.25);max-width:460px}.toast.bad{background:#991b1b}.form-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(210px,1fr));gap:12px;align-items:end}.form-grid label{font-weight:900;color:#334155;display:grid;gap:6px}.check{display:flex;align-items:center;gap:8px;font-weight:900;color:#334155}.empty{color:#64748b;font-weight:800}.small{font-size:12px;color:#64748b;font-weight:700}.role-note{color:#64748b;margin-top:8px}.status-completed{background:#ecfdf5;color:#166534;border-color:#bbf7d0}.status-open{background:#fff7ed;color:#9a3412;border-color:#fed7aa}@media(max-width:860px){.layout{grid-template-columns:1fr}aside{height:auto;position:relative}nav{display:flex;overflow:auto;gap:8px}nav button{white-space:nowrap}main{padding:14px}.head{display:block}.actions{justify-content:flex-start;margin-top:12px}.toolbar input{min-width:100%}textarea{width:220px}}
+  </style>
+</head>
+<body>
+  <div class="layout">
+    <aside>
+      <div class="brand"><h1>SaffHire</h1><p id="client-name">Client Portal</p><p id="user-name"></p></div>
+      <nav>
+        <div class="nav-label">Client View</div>
+        <button data-page="dashboard" class="active">Dashboard</button>
+        <button data-page="monitoring">Monitoring</button>
+        <button data-page="safety">Safety Reports</button>
+        <div id="admin-label" class="nav-label" hidden>Admin</div>
+        <button id="users-nav" data-page="users" hidden>User Admin</button>
+      </nav>
+    </aside>
+    <main><div id="app" class="card">Loading client portal...</div></main>
+  </div>
 <script>
-// Phase 12A-36: Client Portal Monitoring header sort
-(function(){
-  let sort={index:-1,direction:'asc',type:'text'};
-  const HEADERS=[
-    ['File #','number'],
-    ['Name','text'],
-    ['Order Date','date'],
-    ['Monitoring','text'],
-    ['MVR Status','text'],
-    ['Med Expire','date'],
-    ['Notes','text']
-  ];
-  function text(el){return(el&&el.textContent?el.textContent:'').trim()}
-  function norm(v){return String(v||'').replace(/[↕↑↓]/g,'').replace(/\s+/g,' ').trim().toLowerCase()}
-  function activePage(){const b=[...document.querySelectorAll('nav button')].find(x=>x.classList.contains('active'));return b?b.dataset.p:''}
-  function isMonitoring(){return activePage()==='mon'||text(document.querySelector('.head h2'))==='Monitoring'}
-  function getTable(){
-    if(!isMonitoring())return null;
-    return [...document.querySelectorAll('table')].find(t=>{
-      const h=[...t.querySelectorAll('thead th')].map(th=>norm(text(th)));
-      return h.includes('file #')&&h.includes('name')&&h.includes('monitoring')&&h.includes('med expire');
-    })||null;
+(() => {
+  const state = { page: 'dashboard', data: null, user: null, filters: { monitoringSearch: '', monitoringStatus: 'active', safetySearch: '', safetyStatus: 'all' } };
+  const app = document.getElementById('app');
+  const clientName = document.getElementById('client-name');
+  const userName = document.getElementById('user-name');
+  const usersNav = document.getElementById('users-nav');
+  const adminLabel = document.getElementById('admin-label');
+
+  function esc(value) {
+    return String(value ?? '').replaceAll('&','&amp;').replaceAll('<','&lt;').replaceAll('>','&gt;').replaceAll('"','&quot;').replaceAll("'",'&#039;');
   }
-  function val(row,i,type){
-    const c=row.children[i]; if(!c)return'';
-    const s=c.querySelector('select'); if(s)return s.value||'';
-    const ta=c.querySelector('textarea'); if(ta)return ta.value||'';
-    const input=c.querySelector('input'); if(input)return input.value||'';
-    const raw=text(c);
-    if(type==='number'){const n=Number(String(raw).replace(/[^0-9.-]/g,''));return Number.isNaN(n)?raw.toLowerCase():n}
-    if(type==='date'){if(!raw)return 0;const d=new Date(raw);return Number.isNaN(d.getTime())?raw.toLowerCase():d.getTime()}
-    return raw.toLowerCase();
+  function endpoint(path) {
+    const raw = String(path || '');
+    const splitAt = raw.indexOf('?');
+    if (splitAt === -1) return '/api/index?path=' + encodeURIComponent(raw);
+    return '/api/index?path=' + encodeURIComponent(raw.slice(0, splitAt)) + '&' + raw.slice(splitAt + 1);
   }
-  function cmp(a,b){if(typeof a==='number'&&typeof b==='number')return a-b;return String(a).localeCompare(String(b),undefined,{numeric:true,sensitivity:'base'})}
-  function updateIcons(t){
-    [...t.querySelectorAll('[data-phase12a36-icon]')].forEach((ic,idx)=>{
-      ic.textContent=idx===sort.index?(sort.direction==='asc'?'↑':'↓'):'↕';
-      ic.classList.toggle('active',idx===sort.index);
+  async function api(path, options = {}) {
+    const headers = Object.assign({'Content-Type':'application/json'}, options.headers || {});
+    const response = await fetch(endpoint(path), Object.assign({credentials:'include'}, options, {headers}));
+    const raw = await response.text();
+    let data = {};
+    try { data = raw ? JSON.parse(raw) : {}; } catch {}
+    if (!response.ok) throw new Error(data.message || raw || 'Request failed');
+    return data;
+  }
+  function fmt(value) {
+    if (!value) return '';
+    const date = new Date(value);
+    return Number.isNaN(date.getTime()) ? String(value) : date.toLocaleDateString();
+  }
+  function toast(message, bad = false) {
+    const el = document.createElement('div');
+    el.className = bad ? 'toast bad' : 'toast';
+    el.textContent = message;
+    document.body.appendChild(el);
+    setTimeout(() => el.remove(), 3500);
+  }
+  function roleLabel(role) {
+    return String(role || '').replaceAll('_', ' ').replace(/\b\w/g, c => c.toUpperCase());
+  }
+  function canManageUsers() { return Boolean(state.data?.canManageUsers); }
+  function canEditMonitoring() { return Boolean(state.data?.canEditMonitoring); }
+
+  function header(title, subtitle) {
+    return `<div class="head"><div><h2>${esc(title)}</h2><p>${esc(subtitle || '')}</p></div><div class="actions"><button class="btn neutral" id="refresh-btn">Refresh</button><button class="btn danger" id="logout-btn">Logout</button></div></div>`;
+  }
+  function metric(label, value) {
+    return `<div class="card metric"><b>${esc(value ?? 0)}</b><span>${esc(label)}</span></div>`;
+  }
+  function statusPill(status) {
+    const raw = String(status || '');
+    const cls = raw === 'Completed' ? 'status-completed' : 'status-open';
+    return `<span class="pill ${cls}">${esc(raw || 'Open')}</span>`;
+  }
+  function monitoringPill(value) {
+    return String(value || '') === 'On' ? '<span class="pill good">On</span>' : '<span class="pill bad">Off</span>';
+  }
+  function bindHeaderButtons() {
+    document.getElementById('refresh-btn')?.addEventListener('click', load);
+    document.getElementById('logout-btn')?.addEventListener('click', logout);
+  }
+
+  async function boot() {
+    try {
+      const me = await api('client-auth/me');
+      state.user = me.user || null;
+      await load();
+    } catch (error) {
+      location.href = '/client-login.html';
+    }
+  }
+  async function load() {
+    app.className = 'card';
+    app.textContent = 'Loading...';
+    try {
+      state.data = await api('client-dashboard');
+      state.user = state.data.user || state.user;
+      clientName.textContent = state.data.company?.name || 'Client Portal';
+      userName.textContent = state.user ? `${state.user.displayName || state.user.username} · ${roleLabel(state.user.role)}` : '';
+      usersNav.hidden = !canManageUsers();
+      adminLabel.hidden = !canManageUsers();
+      if (state.page === 'users' && !canManageUsers()) state.page = 'dashboard';
+      render();
+    } catch (error) {
+      app.className = 'card';
+      app.innerHTML = `<h2>Could not load client portal</h2><p>${esc(error.message)}</p><p><button class="btn" id="retry-btn">Try Again</button></p>`;
+      document.getElementById('retry-btn')?.addEventListener('click', load);
+    }
+  }
+  async function logout() {
+    await api('client-auth/logout', {method:'POST', body:'{}'}).catch(() => {});
+    location.href = '/client-login.html';
+  }
+  function render() {
+    document.querySelectorAll('nav button[data-page]').forEach(btn => btn.classList.toggle('active', btn.dataset.page === state.page));
+    if (state.page === 'monitoring') return renderMonitoring();
+    if (state.page === 'safety') return renderSafety();
+    if (state.page === 'users') return renderUsers();
+    renderDashboard();
+  }
+
+  function recentApplicants() { return state.data?.recentApplicants || []; }
+  function recentSafety() { return state.data?.recentSafetyReports || []; }
+
+  function renderDashboard() {
+    const a = state.data?.applicantStats || {};
+    const s = state.data?.safetyStats || {};
+    app.className = '';
+    app.innerHTML = header('Dashboard', state.data?.company?.name || '') +
+      `<div class="grid">${metric('Total Monitoring', a.total)}${metric('On Monitoring', a.on_monitoring)}${metric('Off Monitoring', a.off_monitoring)}${metric('Med Cert Expired', a.expired_medical)}${metric('Med Cert 30 Days', a.expiring_30)}${metric('Safety Reports', s.total)}${metric('Open Safety', s.open)}${metric('Completed Safety', s.completed)}</div>` +
+      `<section class="card"><h3>Recent Monitoring</h3>${monitoringTable(recentApplicants().slice(0, 10), false)}</section>` +
+      `<section class="card"><h3>Recent Safety Reports</h3>${safetyTable(recentSafety().slice(0, 10))}</section>`;
+    bindHeaderButtons();
+  }
+
+  function matchesSearch(row, term, keys) {
+    if (!term) return true;
+    const haystack = keys.map(key => String(row[key] ?? '')).join(' ').toLowerCase();
+    return haystack.includes(term.toLowerCase());
+  }
+  function monitoringRowsFiltered() {
+    const term = state.filters.monitoringSearch;
+    const status = state.filters.monitoringStatus;
+    return recentApplicants().filter(row => {
+      const terminated = Boolean(row.terminated);
+      if (status === 'active' && terminated) return false;
+      if (status === 'terminated' && !terminated) return false;
+      if (status === 'on' && String(row.monitorStatus) !== 'On') return false;
+      if (status === 'off' && String(row.monitorStatus) === 'On') return false;
+      return matchesSearch(row, term, ['fileNumber', 'name', 'mvrStatus', 'notes', 'medExpire']);
     });
   }
-  function sortTable(t,i,type){
-    const tb=t.querySelector('tbody'); if(!tb)return;
-    const rows=[...tb.querySelectorAll('tr')].filter(r=>r.children.length>i);
-    sort={index:i,type,direction:sort.index===i&&sort.direction==='asc'?'desc':'asc'};
-    rows.sort((a,b)=>{const r=cmp(val(a,i,type),val(b,i,type));return sort.direction==='asc'?r:-r});
-    rows.forEach(r=>tb.appendChild(r));
-    updateIcons(t);
+  function monitoringTable(rows, edit) {
+    if (!rows.length) return '<p class="empty">No monitoring records found.</p>';
+    return `<div class="table-wrap"><table><thead><tr><th>File #</th><th>Name</th><th>Order Date</th><th>Monitoring</th><th>MVR Status</th><th>Med Expire</th><th>Notes</th><th>Terminated</th>${edit ? '<th>Save</th>' : ''}</tr></thead><tbody>${rows.map(row => {
+      const editable = edit && canEditMonitoring();
+      return `<tr data-id="${esc(row.id)}"><td><b>${esc(row.fileNumber)}</b></td><td>${esc(row.name)}</td><td>${esc(fmt(row.orderDate))}</td><td>${editable ? `<select data-field="monitorStatus" class="${row.monitorStatus === 'On' ? 'on' : ''}"><option value="Off" ${row.monitorStatus !== 'On' ? 'selected' : ''}>Off</option><option value="On" ${row.monitorStatus === 'On' ? 'selected' : ''}>On</option></select>` : monitoringPill(row.monitorStatus)}</td><td>${esc(row.mvrStatus)}</td><td>${esc(row.medExpire)}</td><td>${editable ? `<textarea data-field="notes">${esc(row.notes || '')}</textarea>` : esc(row.notes)}</td><td>${editable ? `<label class="check"><input type="checkbox" data-field="terminated" ${row.terminated ? 'checked' : ''}> Yes</label>` : (row.terminated ? '<span class="pill warn">Yes</span>' : '')}</td>${editable ? '<td><button class="btn" data-action="save-monitoring">Save</button></td>' : ''}</tr>`;
+    }).join('')}</tbody></table></div>`;
   }
-  function enhance(){
-    const t=getTable();
-    if(!t||t.dataset.phase12a36Sort==='1')return;
-    [...t.querySelectorAll('thead th')].forEach((th,i)=>{
-      const clean=norm(text(th));
-      const cfg=HEADERS.find(h=>h[0].toLowerCase()===clean);
-      if(!cfg)return;
-      th.innerHTML='<button type="button" class="phase12a36-sort-head"><span>'+cfg[0]+'</span><span data-phase12a36-icon>↕</span></button>';
-      th.querySelector('button').onclick=e=>{e.preventDefault();e.stopPropagation();sortTable(t,i,cfg[1])};
+  function renderMonitoring() {
+    const rows = monitoringRowsFiltered();
+    app.className = '';
+    app.innerHTML = header('Monitoring', canEditMonitoring() ? 'Client-scoped Monitoring records. You can update Monitoring status, notes, and terminated status.' : 'Read-only client-scoped Monitoring records.') +
+      `<section class="card"><div class="toolbar"><input id="monitoring-search" type="search" placeholder="Search by file number, name, status, notes..." value="${esc(state.filters.monitoringSearch)}"><select id="monitoring-filter"><option value="active" ${state.filters.monitoringStatus === 'active' ? 'selected' : ''}>Active only</option><option value="all" ${state.filters.monitoringStatus === 'all' ? 'selected' : ''}>All records</option><option value="on" ${state.filters.monitoringStatus === 'on' ? 'selected' : ''}>Monitoring On</option><option value="off" ${state.filters.monitoringStatus === 'off' ? 'selected' : ''}>Monitoring Off</option><option value="terminated" ${state.filters.monitoringStatus === 'terminated' ? 'selected' : ''}>Terminated only</option></select>${canEditMonitoring() ? '<button class="btn" id="save-all-monitoring">Save All Changed</button>' : ''}<span class="small">Showing ${rows.length} of ${recentApplicants().length}</span></div>${monitoringTable(rows, true)}</section>`;
+    bindHeaderButtons();
+    document.getElementById('monitoring-search')?.addEventListener('input', event => { state.filters.monitoringSearch = event.target.value; renderMonitoring(); });
+    document.getElementById('monitoring-filter')?.addEventListener('change', event => { state.filters.monitoringStatus = event.target.value; renderMonitoring(); });
+    document.getElementById('save-all-monitoring')?.addEventListener('click', saveAllMonitoring);
+    app.querySelectorAll('tr[data-id]').forEach(row => {
+      row.querySelectorAll('select, textarea, input[type="checkbox"]').forEach(el => el.addEventListener('change', () => row.classList.add('dirty')));
+      row.querySelector('[data-action="save-monitoring"]')?.addEventListener('click', () => saveMonitoringRow(row));
     });
-    t.dataset.phase12a36Sort='1';
   }
-  function style(){
-    if(document.getElementById('phase12a36-client-sort-style'))return;
-    const s=document.createElement('style');
-    s.id='phase12a36-client-sort-style';
-    s.textContent='.phase12a36-sort-head{width:100%;border:0;background:transparent;color:inherit;display:flex;justify-content:space-between;gap:8px;padding:0;font:inherit;font-weight:1000;text-transform:inherit;cursor:pointer}.phase12a36-sort-head:hover{color:#166534}[data-phase12a36-icon]{color:#94a3b8}[data-phase12a36-icon].active{color:#16a34a;font-weight:1000}';
-    document.head.appendChild(s);
-  }
-  function boot(){style();enhance();setInterval(enhance,700)}
-  if(document.readyState==='loading')document.addEventListener('DOMContentLoaded',boot);else boot();
-})();
-</script>
-
-
-<script>
-// Phase 12A-38: Client Monitoring Alerts Header
-(function(){
-  let activeFilter = 'all';
-
-  function text(el){ return (el && el.textContent ? el.textContent : '').trim(); }
-  function activePage(){ const b=[...document.querySelectorAll('nav button')].find(x=>x.classList.contains('active')); return b ? b.dataset.p : ''; }
-  function isMonitoring(){ return activePage()==='mon' || text(document.querySelector('.head h2'))==='Monitoring'; }
-
-  function getMonitoringTable(){
-    if(!isMonitoring()) return null;
-    return [...document.querySelectorAll('table')].find(t=>{
-      const h=[...t.querySelectorAll('thead th')].map(th=>text(th).replace(/[↕↑↓]/g,'').trim().toLowerCase());
-      return h.includes('file #') && h.includes('monitoring') && h.includes('med expire');
-    }) || null;
-  }
-
-  // PHASE12A51_CLIENT_ALERTS_EXCLUDE_TERMINATED
-  function rows(){
-    const t=getMonitoringTable();
-    if(!t) return [];
-    return [...t.querySelectorAll('tbody tr')].filter(r=>r.children.length>=7);
-  }
-
-  function isTerminatedRow(row){
-    if(row.hasAttribute('data-phase12a46-client-monitoring-hidden')) return true;
-    if(row.hasAttribute('data-phase12a46-monitoring-hidden')) return true;
-    const cb=row.querySelector('[data-phase12a45-terminated], [data-unterm]');
-    return Boolean(cb && cb.checked);
-  }
-
-  function cell(row,index){
-    const c=row.children[index];
-    if(!c) return '';
-    const s=c.querySelector('select'); if(s) return s.value || '';
-    const ta=c.querySelector('textarea'); if(ta) return ta.value || '';
-    const inp=c.querySelector('input'); if(inp) return inp.value || '';
-    return text(c);
-  }
-
-  function parseDate(raw){
-    const s=String(raw||'').trim();
-    if(!s) return null;
-    let m=s.match(/^(\d{4})[-/](\d{1,2})[-/](\d{1,2})/);
-    if(m) return new Date(Number(m[1]),Number(m[2])-1,Number(m[3]));
-    m=s.match(/^(\d{1,2})[-/](\d{1,2})[-/](\d{2,4})$/);
-    if(m){ const y=m[3].length===2?Number('20'+m[3]):Number(m[3]); return new Date(y,Number(m[1])-1,Number(m[2])); }
-    const d=new Date(s);
-    return Number.isNaN(d.getTime())?null:new Date(d.getFullYear(),d.getMonth(),d.getDate());
-  }
-
-  function today(){
-    const d=new Date();
-    return new Date(d.getFullYear(),d.getMonth(),d.getDate());
-  }
-
-  function rowData(row){
-    const med=cell(row,5);
-    const medDate=parseDate(med);
-    const days=medDate?Math.ceil((medDate.getTime()-today().getTime())/86400000):null;
-    return {
-      fileNumber: cell(row,0),
-      name: cell(row,1),
-      orderDate: cell(row,2),
-      monitoring: cell(row,3),
-      mvrStatus: cell(row,4),
-      medExpire: med,
-      medDate,
-      medDays: days,
-      notes: cell(row,6)
-    };
-  }
-
-  function state(row){
-    const d=rowData(row);
-    if(d.monitoring !== 'On') return 'off';
-    if(!d.medDate) return 'blank';
-    if(d.medDays < 0) return 'expired';
-    if(d.medDays <= 30) return 'exp30';
-    if(d.medDays <= 60) return 'exp60';
-    if(/pending|review|needed|expired|attention/i.test(d.mvrStatus||'')) return 'mvr';
-    return 'ok';
-  }
-
-  function counts(){
-    const out={total:0,on:0,off:0,expired:0,exp30:0,exp60:0,blank:0,mvr:0};
-    rows().forEach(row=>{
-      if(isTerminatedRow(row)) return;
-      const d=rowData(row), s=state(row);
-      out.total++;
-      if(d.monitoring==='On') out.on++; else out.off++;
-      if(s==='expired') out.expired++;
-      if(s==='exp30') out.exp30++;
-      if(s==='exp60') out.exp60++;
-      if(s==='blank') out.blank++;
-      if(s==='mvr') out.mvr++;
-    });
-    return out;
-  }
-
-  function shouldShow(row){
-    if(isTerminatedRow(row)) return false;
-    const d=rowData(row), s=state(row);
-    if(activeFilter==='all') return true;
-    if(activeFilter==='on') return d.monitoring==='On';
-    if(activeFilter==='off') return d.monitoring!=='On';
-    if(activeFilter==='expired') return s==='expired';
-    if(activeFilter==='exp30') return s==='exp30';
-    if(activeFilter==='exp60') return s==='exp60';
-    if(activeFilter==='blank') return s==='blank';
-    if(activeFilter==='mvr') return s==='mvr';
-    return true;
-  }
-
-  function updateRowVisibility(){
-    rows().forEach(row=>{ row.style.display=shouldShow(row)?'':'none'; });
-  }
-
-  function getPanel(){
-    return document.getElementById('client-monitoring-alerts');
-  }
-
-  function metricHtml(key,value,label){
-    return `<button type="button" class="client-alert-card ${activeFilter===key?'active':''}" data-client-alert-filter="${key}"><b>${value}</b><span>${label}</span></button>`;
-  }
-
-  function renderPanel(){
-    const c=counts();
-    const panel=getPanel();
-    if(!panel) return;
-
-    panel.innerHTML=`
-      <h3>Monitoring Alerts</h3>
-      <div class="client-alert-grid">
-        ${metricHtml('all',c.total,'Total')}
-        ${metricHtml('on',c.on,'On Monitoring')}
-        ${metricHtml('off',c.off,'Off Monitoring')}
-        ${metricHtml('expired',c.expired,'Expired Medical')}
-        ${metricHtml('exp30',c.exp30,'Expiring 30 Days')}
-        ${metricHtml('exp60',c.exp60,'Expiring 60 Days')}
-        ${metricHtml('blank',c.blank,'Blank Med Expire')}
-        ${metricHtml('mvr',c.mvr,'MVR Attention')}
-      </div>
-      <div class="client-alert-actions">
-        <button type="button" id="client-copy-summary">Copy Summary</button>
-        <button type="button" id="client-download-csv">Download Current View CSV</button>
-        <button type="button" id="client-recalculate-alerts">Recalculate Alerts</button>
-      </div>
-      <p class="client-alert-help">Click an alert card to filter the visible Monitoring records. Click the same card again by choosing Total to show all.</p>
-    `;
-
-    panel.querySelectorAll('[data-client-alert-filter]').forEach(btn=>{
-      btn.onclick=()=>{
-        activeFilter=btn.dataset.clientAlertFilter || 'all';
-        renderPanel();
-        updateRowVisibility();
+  async function saveMonitoringRow(row) {
+    const button = row.querySelector('[data-action="save-monitoring"]');
+    const old = button?.textContent || 'Save';
+    if (button) { button.disabled = true; button.textContent = 'Saving...'; }
+    try {
+      const payload = {
+        id: Number(row.dataset.id),
+        monitorStatus: row.querySelector('[data-field="monitorStatus"]')?.value || 'Off',
+        notes: row.querySelector('[data-field="notes"]')?.value || '',
+        terminated: Boolean(row.querySelector('[data-field="terminated"]')?.checked)
       };
-    });
-
-    panel.querySelector('#client-copy-summary').onclick=copySummary;
-    panel.querySelector('#client-download-csv').onclick=downloadCsv;
-    panel.querySelector('#client-recalculate-alerts').onclick=()=>{ renderPanel(); updateRowVisibility(); };
-  }
-
-  function ensurePanel(){
-    if(!isMonitoring()){
-      document.getElementById('client-monitoring-alerts')?.remove();
-      return;
-    }
-
-    const t=getMonitoringTable();
-    if(!t) return;
-
-    if(!getPanel()){
-      const section=t.closest('section.card,.card') || t.parentElement;
-      const panel=document.createElement('section');
-      panel.id='client-monitoring-alerts';
-      panel.className='card client-monitoring-alerts';
-      section.parentElement.insertBefore(panel,section);
-    }
-
-    renderPanel();
-    updateRowVisibility();
-  }
-
-  function visibleRows(){
-    return rows().filter(r=>r.style.display !== 'none' && !isTerminatedRow(r));
-  }
-
-  function csvEscape(value){
-    const s=String(value??'');
-    return /[",\n]/.test(s)?`"${s.replaceAll('"','""')}"`:s;
-  }
-
-  function downloadCsv(){
-    const header=['File #','Name','Order Date','Monitoring','MVR Status','Med Expire','Notes'];
-    const lines=[header.map(csvEscape).join(',')];
-    visibleRows().forEach(row=>{
-      const d=rowData(row);
-      lines.push([d.fileNumber,d.name,d.orderDate,d.monitoring,d.mvrStatus,d.medExpire,d.notes].map(csvEscape).join(','));
-    });
-    const blob=new Blob([lines.join('\n')],{type:'text/csv;charset=utf-8'});
-    const url=URL.createObjectURL(blob);
-    const a=document.createElement('a');
-    a.href=url;
-    a.download='client-monitoring-current-view.csv';
-    document.body.appendChild(a);
-    a.click();
-    a.remove();
-    URL.revokeObjectURL(url);
-  }
-
-  async function copySummary(){
-    const c=counts();
-    const summary=[
-      `Monitoring Summary`,
-      `Total: ${c.total}`,
-      `On Monitoring: ${c.on}`,
-      `Off Monitoring: ${c.off}`,
-      `Expired Medical: ${c.expired}`,
-      `Expiring 30 Days: ${c.exp30}`,
-      `Expiring 60 Days: ${c.exp60}`,
-      `Blank Med Expire: ${c.blank}`,
-      `MVR Attention: ${c.mvr}`
-    ].join('\n');
-
-    try{
-      await navigator.clipboard.writeText(summary);
-      toast('Summary copied.');
-    }catch{
-      prompt('Copy summary:',summary);
-    }
-  }
-
-  function toast(message){
-    let box=document.getElementById('client-alert-toast');
-    if(!box){
-      box=document.createElement('div');
-      box.id='client-alert-toast';
-      document.body.appendChild(box);
-    }
-    box.textContent=message;
-    clearTimeout(box.t);
-    box.t=setTimeout(()=>box.remove(),3000);
-  }
-
-  function addStyles(){
-    if(document.getElementById('client-monitoring-alert-styles')) return;
-    const style=document.createElement('style');
-    style.id='client-monitoring-alert-styles';
-    style.textContent=`
-      .client-monitoring-alerts {
-        border-left: 5px solid #38bdf8;
-      }
-      .client-monitoring-alerts h3 {
-        margin: 0 0 10px;
-      }
-      .client-alert-grid {
-        display: grid;
-        grid-template-columns: repeat(4,minmax(160px,1fr));
-        gap: 10px;
-      }
-      .client-alert-card {
-        text-align: left;
-        border: 1px solid #cbd5e1;
-        background: #fff;
-        border-radius: 12px;
-        padding: 10px 12px;
-        color: #0f172a;
-        cursor: pointer;
-      }
-      .client-alert-card b {
-        display: block;
-        font-size: 24px;
-        line-height: 1;
-      }
-      .client-alert-card span {
-        display: block;
-        margin-top: 4px;
-        font-weight: 900;
-      }
-      .client-alert-card.active {
-        border-color: #1fff00;
-        background: rgba(31,255,0,.16);
-      }
-      .client-alert-actions {
-        margin-top: 12px;
-        display: flex;
-        flex-wrap: wrap;
-        gap: 10px;
-      }
-      .client-alert-actions button {
-        border: 1px solid #38bdf8;
-        color: #075985;
-        background: #f0f9ff;
-        border-radius: 999px;
-        padding: 8px 11px;
-        font-weight: 1000;
-        cursor: pointer;
-      }
-      .client-alert-help {
-        margin: 10px 0 0;
-        color: #64748b;
-        font-weight: 700;
-      }
-      #client-alert-toast {
-        position: fixed;
-        right: 18px;
-        bottom: 18px;
-        z-index: 80;
-        background: #111827;
-        color: #fff;
-        border-radius: 12px;
-        padding: 12px 14px;
-        box-shadow: 0 18px 45px rgba(15,23,42,.25);
-      }
-      @media(max-width:900px){
-        .client-alert-grid{ grid-template-columns: repeat(2,minmax(150px,1fr)); }
-      }
-    `;
-    document.head.appendChild(style);
-  }
-
-  function boot(){
-    addStyles();
-    ensurePanel();
-    setInterval(ensurePanel,900);
-    document.addEventListener('change',()=>setTimeout(()=>{renderPanel();updateRowVisibility();},100),true);
-  }
-
-  if(document.readyState==='loading') document.addEventListener('DOMContentLoaded',boot);
-  else boot();
-})();
-</script>
-
-
-<script>
-// Phase 12A-40: Client completed Safety Performance PDF download
-(function(){
-  function text(el){return(el&&el.textContent?el.textContent:'').trim()}
-  function activePage(){const b=[...document.querySelectorAll('nav button')].find(x=>x.classList.contains('active'));return b?b.dataset.p:''}
-  function isSafety(){return activePage()==='safe'||text(document.querySelector('.head h2'))==='Safety Performance'}
-  function getSafetyTable(){
-    if(!isSafety())return null;
-    return [...document.querySelectorAll('table')].find(t=>{
-      const h=[...t.querySelectorAll('thead th')].map(th=>text(th).trim().toLowerCase());
-      return h.includes('file #')&&h.includes('applicant')&&h.includes('status');
-    })||null;
-  }
-  function enhance(){
-    const table=getSafetyTable();
-    if(!table||table.dataset.phase12a40Pdf==='1')return;
-
-    const headerRow=table.querySelector('thead tr');
-    if(headerRow){
-      const th=document.createElement('th');
-      th.textContent='Completed PDF';
-      headerRow.appendChild(th);
-    }
-
-    [...table.querySelectorAll('tbody tr')].forEach(row=>{
-      const cells=row.children;
-      const fileNumber=text(cells[0]);
-      const status=text(cells[3]);
-      const td=document.createElement('td');
-
-      if(status==='Completed'){
-        const a=document.createElement('a');
-        a.href='/api/index?path='+encodeURIComponent('client-safety-pdf')+'&fileNumber='+encodeURIComponent(fileNumber);
-        a.className='btn client-pdf-download';
-        a.textContent='Download PDF';
-        a.target='_blank';
-        a.rel='noopener';
-        td.appendChild(a);
-      } else {
-        const span=document.createElement('span');
-        span.className='client-pdf-not-ready';
-        span.textContent='Available when Completed';
-        td.appendChild(span);
-      }
-
-      row.appendChild(td);
-    });
-
-    table.dataset.phase12a40Pdf='1';
-  }
-  function styles(){
-    if(document.getElementById('phase12a40-pdf-style'))return;
-    const s=document.createElement('style');
-    s.id='phase12a40-pdf-style';
-    s.textContent='.client-pdf-download{white-space:nowrap;text-decoration:none}.client-pdf-not-ready{color:#64748b;font-weight:800;font-size:12px;white-space:nowrap}';
-    document.head.appendChild(s);
-  }
-  function boot(){styles();enhance();setInterval(enhance,800)}
-  if(document.readyState==='loading')document.addEventListener('DOMContentLoaded',boot);else boot();
-})();
-</script>
-
-<script>
-
-// Phase 12A-41: MVR order buttons
-(function () {
-  const MVR_BASE = 'https://saffhiresecure.com/app/client/driverpipeline/mvr/';
-
-  function text(el) {
-    return (el && el.textContent ? el.textContent : '').trim();
-  }
-
-  function normalize(value) {
-    return String(value || '').replace(/[↕↑↓]/g, '').replace(/\s+/g, ' ').trim().toLowerCase();
-  }
-
-  function currentTitle() {
-    return text(document.querySelector('.page-header h1')) || text(document.querySelector('.head h2'));
-  }
-
-  function activePortalPage() {
-    const active = Array.from(document.querySelectorAll('nav button')).find((button) => button.classList.contains('active'));
-    return active ? active.dataset.p : '';
-  }
-
-  function isMonitoringContext() {
-    const title = currentTitle();
-    return title === 'Monitoring' || activePortalPage() === 'mon' || title === 'Client View';
-  }
-
-  function findMonitoringTables() {
-    if (!isMonitoringContext()) return [];
-
-    return Array.from(document.querySelectorAll('table')).filter((table) => {
-      const headers = Array.from(table.querySelectorAll('thead th')).map((th) => normalize(text(th)));
-      return headers.includes('file #') &&
-        (headers.includes('mvr status') || headers.includes('mvr')) &&
-        (headers.includes('monitoring') || headers.includes('monitor status')) &&
-        !headers.includes('order mvr');
-    });
-  }
-
-  function fileNumberFromRow(row, fileIndex) {
-    const cell = row.children[fileIndex];
-    const raw = text(cell);
-    const match = raw.match(/[0-9]+/);
-    return match ? match[0] : '';
-  }
-
-  function addMvrButtonsToTable(table) {
-    if (!table || table.dataset.phase12a41MvrButtons === '1') return;
-
-    const headers = Array.from(table.querySelectorAll('thead th'));
-    const normalizedHeaders = headers.map((th) => normalize(text(th)));
-    const fileIndex = normalizedHeaders.indexOf('file #');
-
-    if (fileIndex < 0) return;
-
-    const headerRow = table.querySelector('thead tr');
-    if (!headerRow) return;
-
-    const th = document.createElement('th');
-    th.textContent = 'Order MVR';
-    th.className = 'phase12a41-mvr-header';
-    headerRow.appendChild(th);
-
-    Array.from(table.querySelectorAll('tbody tr')).forEach((row) => {
-      const fileNumber = fileNumberFromRow(row, fileIndex);
-      const td = document.createElement('td');
-      td.className = 'phase12a41-mvr-cell';
-
-      if (fileNumber) {
-        const a = document.createElement('a');
-        a.href = MVR_BASE + encodeURIComponent(fileNumber);
-        a.target = '_blank';
-        a.rel = 'noopener';
-        a.className = 'phase12a41-mvr-button';
-        a.textContent = 'Order MVR';
-        a.title = 'Order MVR for file ' + fileNumber;
-        td.appendChild(a);
-      } else {
-        const span = document.createElement('span');
-        span.className = 'phase12a41-mvr-missing';
-        span.textContent = 'No file #';
-        td.appendChild(span);
-      }
-
-      row.appendChild(td);
-    });
-
-    table.dataset.phase12a41MvrButtons = '1';
-  }
-
-  function refreshTables() {
-    findMonitoringTables().forEach(addMvrButtonsToTable);
-  }
-
-  function addStyles() {
-    if (document.getElementById('phase12a41-mvr-style')) return;
-    const style = document.createElement('style');
-    style.id = 'phase12a41-mvr-style';
-    style.textContent = `
-      .phase12a41-mvr-header,
-      .phase12a41-mvr-cell {
-        white-space: nowrap;
-      }
-
-      .phase12a41-mvr-button {
-        display: inline-flex;
-        align-items: center;
-        justify-content: center;
-        border: 1px solid #16a34a;
-        background: #ecfdf5;
-        color: #166534;
-        border-radius: 999px;
-        padding: 7px 10px;
-        font-size: 12px;
-        font-weight: 1000;
-        text-decoration: none;
-        white-space: nowrap;
-      }
-
-      .phase12a41-mvr-button:hover {
-        background: rgba(31, 255, 0, .18);
-        border-color: #1fff00;
-      }
-
-      .phase12a41-mvr-missing {
-        color: #94a3b8;
-        font-size: 12px;
-        font-weight: 800;
-      }
-    `;
-    document.head.appendChild(style);
-  }
-
-  function boot() {
-    addStyles();
-    refreshTables();
-    setInterval(refreshTables, 800);
-  }
-
-  if (document.readyState === 'loading') {
-    document.addEventListener('DOMContentLoaded', boot);
-  } else {
-    boot();
-  }
-})();
-
-</script>
-<script>
-
-// Phase 12A-42: place Order MVR button inside the MVR Status column
-(function () {
-  const MVR_BASE = 'https://saffhiresecure.com/app/client/driverpipeline/mvr/';
-
-  function text(el) {
-    return (el && el.textContent ? el.textContent : '').trim();
-  }
-
-  function normalize(value) {
-    return String(value || '')
-      .replace(/[↕↑↓▲▼]/g, '')
-      .replace(/\s+/g, ' ')
-      .trim()
-      .toLowerCase();
-  }
-
-  function currentTitle() {
-    return text(document.querySelector('.page-header h1')) || text(document.querySelector('.head h2'));
-  }
-
-  function activePortalPage() {
-    const active = Array.from(document.querySelectorAll('nav button')).find((button) => button.classList.contains('active'));
-    return active ? active.dataset.p : '';
-  }
-
-  function isMonitoringContext() {
-    const title = currentTitle();
-    return title === 'Monitoring' || activePortalPage() === 'mon' || title === 'Client View';
-  }
-
-  function getMonitoringTables() {
-    if (!isMonitoringContext()) return [];
-
-    return Array.from(document.querySelectorAll('table')).filter((table) => {
-      const headers = Array.from(table.querySelectorAll('thead th')).map((th) => normalize(text(th)));
-      return headers.includes('file #') &&
-        (headers.includes('mvr status') || headers.includes('mvr') || headers.includes('order mvr')) &&
-        (headers.includes('monitoring') || headers.includes('monitor status'));
-    });
-  }
-
-  function headerIndexes(table) {
-    const headers = Array.from(table.querySelectorAll('thead th')).map((th) => normalize(text(th)));
-
-    return {
-      headers,
-      fileIndex: headers.indexOf('file #'),
-      mvrIndex: headers.includes('mvr status') ? headers.indexOf('mvr status') : headers.indexOf('mvr'),
-      orderMvrIndex: headers.indexOf('order mvr')
-    };
-  }
-
-  function removeOldSeparateOrderMvrColumn(table) {
-    const indexes = headerIndexes(table);
-
-    // If Order MVR is already the renamed MVR column, do not remove it.
-    if (indexes.orderMvrIndex < 0 || indexes.mvrIndex < 0) return;
-
-    const oldOrderIndex = indexes.orderMvrIndex;
-
-    const headerRow = table.querySelector('thead tr');
-    if (headerRow && headerRow.children[oldOrderIndex]) {
-      headerRow.children[oldOrderIndex].remove();
-    }
-
-    Array.from(table.querySelectorAll('tbody tr')).forEach((row) => {
-      if (row.children[oldOrderIndex]) row.children[oldOrderIndex].remove();
-    });
-  }
-
-  function fileNumberFromRow(row, fileIndex) {
-    const cell = row.children[fileIndex];
-    const raw = text(cell);
-    const match = raw.match(/[0-9]+/);
-    return match ? match[0] : '';
-  }
-
-  function makeMvrButton(fileNumber) {
-    const a = document.createElement('a');
-    a.href = MVR_BASE + encodeURIComponent(fileNumber);
-    a.target = '_blank';
-    a.rel = 'noopener';
-    a.className = 'phase12a42-mvr-button';
-    a.textContent = 'Order MVR';
-    a.title = 'Order MVR for file ' + fileNumber;
-    return a;
-  }
-
-  function enhanceTable(table) {
-    if (!table) return;
-
-    // Remove the old extra column from Phase 12A-41 if it exists.
-    removeOldSeparateOrderMvrColumn(table);
-
-    const indexes = headerIndexes(table);
-    const fileIndex = indexes.fileIndex;
-    let mvrIndex = indexes.mvrIndex;
-
-    // If it has already been changed to Order MVR, use that same column.
-    if (mvrIndex < 0 && indexes.orderMvrIndex >= 0) {
-      mvrIndex = indexes.orderMvrIndex;
-    }
-
-    if (fileIndex < 0 || mvrIndex < 0) return;
-
-    const header = table.querySelectorAll('thead th')[mvrIndex];
-    if (header && normalize(text(header)) !== 'order mvr') {
-      header.textContent = 'Order MVR';
-    }
-
-    Array.from(table.querySelectorAll('tbody tr')).forEach((row) => {
-      const fileNumber = fileNumberFromRow(row, fileIndex);
-      const cell = row.children[mvrIndex];
-
-      if (!cell || !fileNumber) return;
-
-      const existing = cell.querySelector('.phase12a42-mvr-button');
-      if (existing && existing.href.includes('/' + encodeURIComponent(fileNumber))) return;
-
-      cell.innerHTML = '';
-      cell.classList.add('phase12a42-mvr-cell');
-      cell.appendChild(makeMvrButton(fileNumber));
-    });
-
-    table.dataset.phase12a42MvrPosition = '1';
-  }
-
-  function refreshTables() {
-    getMonitoringTables().forEach(enhanceTable);
-  }
-
-  function addStyles() {
-    if (document.getElementById('phase12a42-mvr-style')) return;
-
-    const style = document.createElement('style');
-    style.id = 'phase12a42-mvr-style';
-    style.textContent = `
-      .phase12a42-mvr-cell {
-        white-space: nowrap;
-      }
-
-      .phase12a42-mvr-button {
-        display: inline-flex;
-        align-items: center;
-        justify-content: center;
-        border: 1px solid #16a34a;
-        background: #ecfdf5;
-        color: #166534;
-        border-radius: 999px;
-        padding: 7px 10px;
-        font-size: 12px;
-        font-weight: 1000;
-        text-decoration: none;
-        white-space: nowrap;
-      }
-
-      .phase12a42-mvr-button:hover {
-        background: rgba(31, 255, 0, .18);
-        border-color: #1fff00;
-      }
-    `;
-
-    document.head.appendChild(style);
-  }
-
-  function boot() {
-    addStyles();
-    refreshTables();
-    setInterval(refreshTables, 800);
-  }
-
-  if (document.readyState === 'loading') {
-    document.addEventListener('DOMContentLoaded', boot);
-  } else {
-    boot();
-  }
-})();
-
-</script>
-<script>
-
-// Phase 12A-44: Stable Monitoring search by file number or name
-(function () {
-  let searchValue = '';
-
-  function text(el) {
-    return (el && el.textContent ? el.textContent : '').trim();
-  }
-
-  function currentTitle() {
-    return text(document.querySelector('.page-header h1')) || text(document.querySelector('.head h2'));
-  }
-
-  function activePortalPage() {
-    const active = Array.from(document.querySelectorAll('nav button')).find((button) => button.classList.contains('active'));
-    return active ? active.dataset.p : '';
-  }
-
-  function isMonitoringContext() {
-    const title = currentTitle();
-    return title === 'Monitoring' || activePortalPage() === 'mon' || title === 'Client View';
-  }
-
-  function normalizeHeader(value) {
-    return String(value || '')
-      .replace(/[↕↑↓▲▼]/g, '')
-      .replace(/\s+/g, ' ')
-      .trim()
-      .toLowerCase();
-  }
-
-  function findMonitoringTables() {
-    if (!isMonitoringContext()) return [];
-
-    return Array.from(document.querySelectorAll('table')).filter((table) => {
-      const headers = Array.from(table.querySelectorAll('thead th')).map((th) => normalizeHeader(text(th)));
-      return headers.includes('file #') &&
-        headers.includes('name') &&
-        (headers.includes('monitoring') || headers.includes('monitor status')) &&
-        headers.includes('med expire');
-    });
-  }
-
-  function getIndexes(table) {
-    const headers = Array.from(table.querySelectorAll('thead th')).map((th) => normalizeHeader(text(th)));
-    return {
-      file: headers.indexOf('file #'),
-      name: headers.includes('name') ? headers.indexOf('name') : headers.indexOf('applicant name')
-    };
-  }
-
-  function rowSearchText(row, indexes) {
-    const fileText = indexes.file >= 0 && row.children[indexes.file] ? text(row.children[indexes.file]) : '';
-    const nameText = indexes.name >= 0 && row.children[indexes.name] ? text(row.children[indexes.name]) : '';
-    return `${fileText} ${nameText}`.toLowerCase();
-  }
-
-  function applyFilter(table) {
-    const indexes = getIndexes(table);
-    const query = searchValue.trim().toLowerCase();
-    let visible = 0;
-
-    Array.from(table.querySelectorAll('tbody tr')).forEach((row) => {
-      const show = !query || rowSearchText(row, indexes).includes(query);
-
-      if (show) {
-        row.removeAttribute('data-phase12a44-search-hidden');
-        visible++;
-      } else {
-        row.setAttribute('data-phase12a44-search-hidden', '1');
-      }
-    });
-
-    const count = document.querySelector('[data-phase12a44-count]');
-    if (count) count.textContent = `${visible} visible`;
-  }
-
-  function applyAllFilters() {
-    findMonitoringTables().forEach(applyFilter);
-  }
-
-  function ensureSearchBox() {
-    const tables = findMonitoringTables();
-
-    if (!tables.length) {
-      document.querySelectorAll('[data-phase12a44-search-wrap]').forEach((el) => el.remove());
-      return;
-    }
-
-    const table = tables[0];
-
-    if (document.querySelector('[data-phase12a44-search-wrap]')) {
-      applyAllFilters();
-      return;
-    }
-
-    const container = table.closest('.table-wrap, .phase12a24-table-wrap, .card, section') || table.parentElement;
-    if (!container || !container.parentElement) return;
-
-    const wrap = document.createElement('div');
-    wrap.className = 'phase12a44-search-wrap';
-    wrap.setAttribute('data-phase12a44-search-wrap', '1');
-    wrap.innerHTML = `
-      <div class="phase12a44-search-box">
-        <strong>Search</strong>
-        <input data-phase12a44-search type="search" placeholder="Search by file number or name..." />
-        <button type="button" data-phase12a44-clear>Clear</button>
-        <span data-phase12a44-count></span>
-      </div>
-    `;
-
-    container.parentElement.insertBefore(wrap, container);
-
-    const input = wrap.querySelector('[data-phase12a44-search]');
-    const clear = wrap.querySelector('[data-phase12a44-clear]');
-
-    input.value = searchValue;
-
-    input.addEventListener('input', () => {
-      searchValue = input.value || '';
-      applyAllFilters();
-    });
-
-    clear.addEventListener('click', () => {
-      searchValue = '';
-      input.value = '';
-      applyAllFilters();
-      input.focus();
-    });
-
-    applyAllFilters();
-  }
-
-  function addStyles() {
-    if (document.getElementById('phase12a44-search-style')) return;
-
-    const style = document.createElement('style');
-    style.id = 'phase12a44-search-style';
-    style.textContent = `
-      tr[data-phase12a44-search-hidden="1"] {
-        display: none !important;
-      }
-
-      .phase12a44-search-wrap {
-        margin: 0 0 12px;
-      }
-
-      .phase12a44-search-box {
-        display: flex;
-        align-items: center;
-        gap: 10px;
-        flex-wrap: wrap;
-        border: 1px solid #dbe3ef;
-        background: #fff;
-        border-radius: 16px;
-        padding: 12px;
-      }
-
-      .phase12a44-search-box strong {
-        color: #475569;
-        font-weight: 1000;
-      }
-
-      .phase12a44-search-box input {
-        flex: 1;
-        min-width: 240px;
-        border: 1px solid #cbd5e1;
-        border-radius: 12px;
-        padding: 10px 12px;
-        font: inherit;
-      }
-
-      .phase12a44-search-box button {
-        border: 1px solid #38bdf8;
-        background: #f0f9ff;
-        color: #075985;
-        border-radius: 999px;
-        padding: 8px 11px;
-        font-weight: 1000;
-        cursor: pointer;
-      }
-
-      .phase12a44-search-box span {
-        color: #166534;
-        font-size: 13px;
-        font-weight: 900;
-      }
-    `;
-
-    document.head.appendChild(style);
-  }
-
-  function boot() {
-    addStyles();
-    ensureSearchBox();
-
-    // Only ensure the search box exists on page/table changes.
-    // The hidden row state is controlled by CSS, so it will not flash.
-    setInterval(() => {
-      ensureSearchBox();
-      applyAllFilters();
-    }, 1000);
-  }
-
-  if (document.readyState === 'loading') {
-    document.addEventListener('DOMContentLoaded', boot);
-  } else {
-    boot();
-  }
-})();
-
-</script>
-<script>
-
-// Phase 12A-45: Terminated checkbox column
-(function () {
-  let applicantMap = new Map();
-  let lastFetchAt = 0;
-
-  function text(el) {
-    return (el && el.textContent ? el.textContent : '').trim();
-  }
-
-  function normalize(value) {
-    return String(value || '')
-      .replace(/[↕↑↓▲▼]/g, '')
-      .replace(/\s+/g, ' ')
-      .trim()
-      .toLowerCase();
-  }
-
-  function currentTitle() {
-    return text(document.querySelector('.page-header h1')) || text(document.querySelector('.head h2'));
-  }
-
-  function activePortalPage() {
-    const active = Array.from(document.querySelectorAll('nav button')).find((button) => button.classList.contains('active'));
-    return active ? active.dataset.p : '';
-  }
-
-  function isPortal() {
-    return location.pathname.includes('client-portal');
-  }
-
-  function isMonitoringContext() {
-    const title = currentTitle();
-    return title === 'Monitoring' || activePortalPage() === 'mon' || title === 'Client View';
-  }
-
-  function endpoint(path) {
-    return '/api/index?path=' + encodeURIComponent(path);
-  }
-
-  async function refreshApplicantMap(force) {
-    const now = Date.now();
-    if (!force && now - lastFetchAt < 5000 && applicantMap.size) return;
-    lastFetchAt = now;
-
-    try {
-      const path = isPortal() ? 'client-dashboard' : 'applicants';
-      const res = await fetch(endpoint(path), { credentials: 'include' });
-      const raw = await res.text();
-      let data = {};
-      try { data = raw ? JSON.parse(raw) : {}; } catch {}
-      if (!res.ok) return;
-
-      const rows = isPortal() ? (data.recentApplicants || []) : (data.applicants || []);
-      applicantMap = new Map();
-      rows.forEach((row) => {
-        const file = String(row.fileNumber || '').trim();
-        if (!file) return;
-        applicantMap.set(file, {
-          id: row.id,
-          terminated: Boolean(row.terminated)
-        });
-      });
-    } catch {}
-  }
-
-  function findMonitoringTables() {
-    if (!isMonitoringContext()) return [];
-    return Array.from(document.querySelectorAll('table')).filter((table) => {
-      const headers = Array.from(table.querySelectorAll('thead th')).map((th) => normalize(text(th)));
-      return headers.includes('file #') &&
-        headers.includes('notes') &&
-        (headers.includes('monitoring') || headers.includes('monitor status')) &&
-        headers.includes('med expire');
-    });
-  }
-
-  function indexes(table) {
-    const headers = Array.from(table.querySelectorAll('thead th')).map((th) => normalize(text(th)));
-    return {
-      file: headers.indexOf('file #'),
-      notes: headers.indexOf('notes'),
-      save: headers.indexOf('save'),
-      terminated: headers.indexOf('terminated')
-    };
-  }
-
-  function fileNumber(row, fileIndex) {
-    const raw = fileIndex >= 0 && row.children[fileIndex] ? text(row.children[fileIndex]) : '';
-    const match = raw.match(/[0-9]+/);
-    return match ? match[0] : '';
-  }
-
-  function insertCell(row, index, cell) {
-    if (index >= row.children.length) row.appendChild(cell);
-    else row.insertBefore(cell, row.children[index]);
-  }
-
-  async function saveTerminated(file, checked, checkbox) {
-    const found = applicantMap.get(file);
-    if (!found || !found.id) {
-      await refreshApplicantMap(true);
-    }
-
-    const row = applicantMap.get(file);
-    if (!row || !row.id) {
-      alert('Could not find applicant id for file ' + file);
-      checkbox.checked = !checked;
-      return;
-    }
-
-    checkbox.disabled = true;
-
-    try {
-      const path = isPortal() ? 'client-applicant' : 'applicants';
-      const res = await fetch(endpoint(path), {
-        method: 'PATCH',
-        credentials: 'include',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ id: row.id, terminated: checked })
-      });
-
-      const raw = await res.text();
-      let data = {};
-      try { data = raw ? JSON.parse(raw) : {}; } catch {}
-      if (!res.ok) throw new Error(data.message || raw || 'Could not save terminated flag');
-
-      row.terminated = checked;
-      applicantMap.set(file, row);
-      checkbox.closest('tr')?.classList.toggle('phase12a45-terminated-row', checked);
+      const result = await api('client-applicant', {method:'PATCH', body: JSON.stringify(payload)});
+      const index = recentApplicants().findIndex(item => Number(item.id) === Number(payload.id));
+      if (index >= 0 && result.applicant) state.data.recentApplicants[index] = result.applicant;
+      row.classList.remove('dirty');
+      toast('Monitoring record saved.');
+      renderMonitoring();
     } catch (error) {
-      alert(error.message || 'Could not save terminated flag');
-      checkbox.checked = !checked;
+      toast(error.message || 'Could not save monitoring record.', true);
     } finally {
-      checkbox.disabled = false;
+      if (button) { button.disabled = false; button.textContent = old; }
     }
   }
+  async function saveAllMonitoring() {
+    const dirtyRows = Array.from(app.querySelectorAll('tr.dirty[data-id]'));
+    if (!dirtyRows.length) return toast('No changes to save.');
+    for (const row of dirtyRows) await saveMonitoringRow(row);
+    await load();
+  }
 
-  function enhanceTable(table) {
-    const idx = indexes(table);
-    if (idx.file < 0 || idx.notes < 0) return;
+  function safetyRowsFiltered() {
+    const term = state.filters.safetySearch;
+    const status = state.filters.safetyStatus;
+    return recentSafety().filter(row => {
+      if (status !== 'all' && String(row.status || '') !== status) return false;
+      return matchesSearch(row, term, ['fileNumber', 'applicantName', 'status', 'prevEmployerName', 'notes']);
+    });
+  }
+  function safetyTable(rows) {
+    if (!rows.length) return '<p class="empty">No safety reports found.</p>';
+    return `<div class="table-wrap"><table><thead><tr><th>File #</th><th>Applicant</th><th>Created</th><th>Status</th><th>Previous Employer</th><th>Client Notes</th><th>PDF</th></tr></thead><tbody>${rows.map(row => `<tr><td><b>${esc(row.fileNumber)}</b></td><td>${esc(row.applicantName)}</td><td>${esc(fmt(row.created))}</td><td>${statusPill(row.status)}</td><td>${esc(row.prevEmployerName)}</td><td>${esc(row.notes)}</td><td>${String(row.status || '') === 'Completed' ? `<button class="btn purple" data-action="download-pdf" data-id="${esc(row.id)}">Download PDF</button>` : '<span class="small">Available when completed</span>'}</td></tr>`).join('')}</tbody></table></div>`;
+  }
+  function renderSafety() {
+    const rows = safetyRowsFiltered();
+    const statuses = ['all','Consent Needed','Consent Given','S1 Complete','Emp Sent','Emp Complete','Completed'];
+    app.className = '';
+    app.innerHTML = header('Safety Reports', 'Read-only client-scoped Safety Performance reports.') +
+      `<section class="card"><div class="toolbar"><input id="safety-search" type="search" placeholder="Search by file number, applicant, employer, notes..." value="${esc(state.filters.safetySearch)}"><select id="safety-filter">${statuses.map(status => `<option value="${esc(status)}" ${state.filters.safetyStatus === status ? 'selected' : ''}>${esc(status === 'all' ? 'All statuses' : status)}</option>`).join('')}</select><span class="small">Showing ${rows.length} of ${recentSafety().length}</span></div>${safetyTable(rows)}</section>`;
+    bindHeaderButtons();
+    document.getElementById('safety-search')?.addEventListener('input', event => { state.filters.safetySearch = event.target.value; renderSafety(); });
+    document.getElementById('safety-filter')?.addEventListener('change', event => { state.filters.safetyStatus = event.target.value; renderSafety(); });
+    app.querySelectorAll('[data-action="download-pdf"]').forEach(button => button.addEventListener('click', () => downloadSafetyPdf(button.dataset.id)));
+  }
+  function downloadSafetyPdf(id) {
+    if (!id) return toast('Safety report id is missing.', true);
+    window.open(endpoint('client-safety-pdf?id=' + encodeURIComponent(id)), '_blank', 'noopener');
+  }
 
-    let insertIndex = idx.notes + 1;
-
-    if (idx.terminated < 0) {
-      const headerRow = table.querySelector('thead tr');
-      const th = document.createElement('th');
-      th.textContent = 'Terminated';
-      th.className = 'phase12a45-terminated-header';
-      insertCell(headerRow, insertIndex, th);
-    } else {
-      insertIndex = idx.terminated;
+  async function renderUsers() {
+    if (!canManageUsers()) {
+      app.className = '';
+      app.innerHTML = header('User Admin', 'Client admin access required.') + '<section class="card"><p class="empty">Your account does not have access to manage users.</p></section>';
+      bindHeaderButtons();
+      return;
     }
-
-    const fresh = indexes(table);
-
-    Array.from(table.querySelectorAll('tbody tr')).forEach((row) => {
-      const file = fileNumber(row, fresh.file);
-      if (!file) return;
-
-      if (row.querySelector('[data-phase12a45-terminated]')) {
-        const cb = row.querySelector('[data-phase12a45-terminated]');
-        const found = applicantMap.get(file);
-        if (found) {
-          cb.checked = Boolean(found.terminated);
-          row.classList.toggle('phase12a45-terminated-row', Boolean(found.terminated));
-        }
-        return;
-      }
-
-      const td = document.createElement('td');
-      td.className = 'phase12a45-terminated-cell';
-
-      const label = document.createElement('label');
-      label.className = 'phase12a45-terminated-label';
-
-      const checkbox = document.createElement('input');
-      checkbox.type = 'checkbox';
-      checkbox.setAttribute('data-phase12a45-terminated', '1');
-
-      const found = applicantMap.get(file);
-      checkbox.checked = Boolean(found?.terminated);
-      row.classList.toggle('phase12a45-terminated-row', Boolean(found?.terminated));
-
-      const span = document.createElement('span');
-      span.textContent = 'Terminated';
-
-      label.appendChild(checkbox);
-      label.appendChild(span);
-      td.appendChild(label);
-
-      checkbox.addEventListener('change', () => {
-        saveTerminated(file, checkbox.checked, checkbox);
-      });
-
-      insertCell(row, fresh.terminated >= 0 ? fresh.terminated : insertIndex, td);
+    app.className = '';
+    app.innerHTML = header('User Admin', 'Add, edit, reset, deactivate, or delete client users.') + '<section class="card">Loading users...</section>';
+    bindHeaderButtons();
+    try {
+      const result = await api('client-users');
+      const users = result.users || [];
+      const roleOptions = state.user?.role === 'admin'
+        ? ['client_admin', 'client_user', 'viewer', 'user']
+        : ['client_user', 'viewer'];
+      app.innerHTML = header('User Admin', 'Add, edit, reset, deactivate, or delete client users.') +
+        `<section class="card"><h3>Add Client User</h3><form id="add-user-form" class="form-grid"><label>Display Name<input name="displayName" autocomplete="off"></label><label>Email / Username<input name="username" required autocomplete="off"></label><label>Temporary Password<input name="password" required minlength="8" type="password"></label><label>Role<select name="role">${roleOptions.map(role => `<option value="${role}">${roleLabel(role)}</option>`).join('')}</select></label><button class="btn">Add User</button></form><p class="role-note">Temporary passwords must be at least 8 characters. Client admins can create Client User or Viewer accounts.</p></section>` +
+        `<section class="card"><h3>Client Users</h3>${usersTable(users, roleOptions)}</section>`;
+      bindHeaderButtons();
+      bindUsers(roleOptions);
+    } catch (error) {
+      app.innerHTML = header('User Admin', '') + `<section class="card"><p class="empty">${esc(error.message)}</p></section>`;
+      bindHeaderButtons();
+    }
+  }
+  function usersTable(users, roleOptions) {
+    if (!users.length) return '<p class="empty">No client users found.</p>';
+    return `<div class="table-wrap"><table><thead><tr><th>Name</th><th>Username</th><th>Role</th><th>Status</th><th>Last Sign In</th><th>Actions</th></tr></thead><tbody>${users.map(user => `<tr data-user-id="${esc(user.id)}"><td><input data-field="displayName" value="${esc(user.displayName || '')}"></td><td>${esc(user.username)}</td><td><select data-field="role">${roleOptions.map(role => `<option value="${role}" ${user.role === role ? 'selected' : ''}>${roleLabel(role)}</option>`).join('')}</select></td><td><select data-field="isActive"><option value="true" ${user.isActive !== false ? 'selected' : ''}>Active</option><option value="false" ${user.isActive === false ? 'selected' : ''}>Inactive</option></select></td><td>${esc(user.lastSignedIn ? new Date(user.lastSignedIn).toLocaleString() : '')}</td><td><button class="btn" data-action="save-user">Save</button> <button class="btn neutral" data-action="reset-user">Reset Password</button> <button class="btn danger" data-action="delete-user">Delete</button></td></tr>`).join('')}</tbody></table></div>`;
+  }
+  function bindUsers(roleOptions) {
+    document.getElementById('add-user-form')?.addEventListener('submit', async event => {
+      event.preventDefault();
+      const body = Object.fromEntries(new FormData(event.target).entries());
+      try {
+        await api('client-users', {method:'POST', body: JSON.stringify(body)});
+        toast('Client user added.');
+        await load();
+        state.page = 'users';
+        renderUsers();
+      } catch (error) { toast(error.message, true); }
     });
-  }
-
-  async function refresh() {
-    const tables = findMonitoringTables();
-    if (!tables.length) return;
-    await refreshApplicantMap(false);
-    tables.forEach(enhanceTable);
-  }
-
-  function addStyles() {
-    if (document.getElementById('phase12a45-terminated-style')) return;
-
-    const style = document.createElement('style');
-    style.id = 'phase12a45-terminated-style';
-    style.textContent = `
-      .phase12a45-terminated-header,
-      .phase12a45-terminated-cell {
-        white-space: nowrap;
-        text-align: center;
-      }
-
-      .phase12a45-terminated-label {
-        display: inline-flex;
-        align-items: center;
-        gap: 7px;
-        border: 1px solid #cbd5e1;
-        border-radius: 999px;
-        padding: 6px 9px;
-        font-size: 12px;
-        font-weight: 900;
-        color: #475569;
-        background: #fff;
-        cursor: pointer;
-      }
-
-      .phase12a45-terminated-label input {
-        width: auto !important;
-        margin: 0;
-      }
-
-      .phase12a45-terminated-row td {
-        background: #fff7ed !important;
-      }
-
-      .phase12a45-terminated-row .phase12a45-terminated-label {
-        border-color: #f97316;
-        background: #ffedd5;
-        color: #9a3412;
-      }
-    `;
-
-    document.head.appendChild(style);
-  }
-
-  function boot() {
-    addStyles();
-    refresh();
-    setInterval(refresh, 1000);
-  }
-
-  if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', boot);
-  else boot();
-})();
-
-</script>
-
-<script>
-// Phase 12A-46: Terminated page for client portal
-(function () {
-  function text(el) { return (el && el.textContent ? el.textContent : '').trim(); }
-  function esc(value) { return String(value ?? '').replaceAll('&','&amp;').replaceAll('<','&lt;').replaceAll('>','&gt;').replaceAll('"','&quot;').replaceAll("'","&#039;"); }
-  function fmt(value) { if (!value) return ''; const d = new Date(value); return Number.isNaN(d.getTime()) ? String(value) : d.toLocaleDateString(); }
-  function endpoint(path) { return '/api/index?path=' + encodeURIComponent(path); }
-  function app() { return document.getElementById('app'); }
-  let rows = [];
-
-  async function api(path, options) {
-    const res = await fetch(endpoint(path), Object.assign({ credentials: 'include' }, options || {}, {
-      headers: Object.assign({ 'Content-Type': 'application/json' }, (options && options.headers) || {})
-    }));
-    const raw = await res.text();
-    let data = {};
-    try { data = raw ? JSON.parse(raw) : {}; } catch {}
-    if (!res.ok) throw new Error(data.message || raw || 'Request failed');
-    return data;
-  }
-
-  function addNav() {
-    if (document.querySelector('[data-p="term"]')) return;
-    const nav = document.querySelector('nav');
-    if (!nav) return;
-    const button = document.createElement('button');
-    button.dataset.p = 'term';
-    button.textContent = 'Terminated';
-    button.addEventListener('click', renderTerminated);
-    nav.appendChild(button);
-  }
-
-  function hideTerminatedFromMonitoring() {
-    const active = document.querySelector('nav button.active');
-    if (!active || active.dataset.p !== 'mon') return;
-
-    const terminatedFiles = new Set(rows.filter((row) => row.terminated).map((row) => String(row.fileNumber)));
-
-    Array.from(document.querySelectorAll('table tbody tr')).forEach((tr) => {
-      const file = text(tr.children[0]);
-      const match = file.match(/[0-9]+/);
-      const fileNumber = match ? match[0] : '';
-      tr.toggleAttribute('data-phase12a46-client-monitoring-hidden', terminatedFiles.has(fileNumber));
-    });
-  }
-
-  async function loadRows() {
-    const data = await api('client-dashboard');
-    rows = data.recentApplicants || [];
-  }
-
-  function header() {
-    return `
-      <div class="head">
-        <div>
-          <h2>Terminated</h2>
-          <p>People removed from active Monitoring</p>
-        </div>
-        <div>
-          <button class="btn" id="term-refresh">Refresh</button>
-          <button class="btn danger" onclick="logout()">Logout</button>
-        </div>
-      </div>
-    `;
-  }
-
-  function tableHtml(list) {
-    if (!list.length) return '<section class="card">No terminated people found.</section>';
-
-    return `
-      <section class="card">
-        <div class="term-toolbar">
-          <input id="term-search" type="search" placeholder="Search file number or name..." />
-          <span id="term-count"></span>
-        </div>
-        <div class="table">
-          <table>
-            <thead>
-              <tr><th>File #</th><th>Name</th><th>Order Date</th><th>Monitoring</th><th>Med Expire</th><th>Notes</th><th>Terminated</th></tr>
-            </thead>
-            <tbody>
-              ${list.map((row) => `
-                <tr data-id="${esc(row.id)}">
-                  <td><b>${esc(row.fileNumber)}</b></td>
-                  <td>${esc(row.name)}</td>
-                  <td>${esc(fmt(row.orderDate))}</td>
-                  <td>${esc(row.monitorStatus)}</td>
-                  <td>${esc(row.medExpire || '')}</td>
-                  <td>${esc(row.notes || '')}</td>
-                  <td><label class="term-check"><input type="checkbox" checked data-unterm /><span>Terminated</span></label></td>
-                </tr>
-              `).join('')}
-            </tbody>
-          </table>
-        </div>
-      </section>
-    `;
-  }
-
-  async function renderTerminated() {
-    document.querySelectorAll('nav button').forEach((b) => b.classList.toggle('active', b.dataset.p === 'term'));
-    app().innerHTML = '<section class="card">Loading terminated people...</section>';
-
-    await loadRows();
-    const terminated = rows.filter((row) => row.terminated);
-
-    app().innerHTML = header() + tableHtml(terminated);
-    document.getElementById('term-refresh')?.addEventListener('click', renderTerminated);
-    document.getElementById('term-search')?.addEventListener('input', filterRows);
-
-    Array.from(document.querySelectorAll('[data-unterm]')).forEach((checkbox) => {
-      checkbox.addEventListener('change', async () => {
-        if (checkbox.checked) return;
-        const tr = checkbox.closest('tr');
-        const id = tr?.dataset.id;
-        checkbox.disabled = true;
+    app.querySelectorAll('tr[data-user-id]').forEach(row => {
+      row.querySelector('[data-action="save-user"]')?.addEventListener('click', async () => {
         try {
-          await api('client-applicant', { method: 'PATCH', body: JSON.stringify({ id, terminated: false }) });
-          tr.remove();
-          await loadRows();
-          filterRows();
-        } catch (error) {
-          alert(error.message || 'Could not move person back to Monitoring');
-          checkbox.checked = true;
-          checkbox.disabled = false;
-        }
+          await api('client-users', {method:'PATCH', body: JSON.stringify({
+            id: Number(row.dataset.userId),
+            displayName: row.querySelector('[data-field="displayName"]').value,
+            role: row.querySelector('[data-field="role"]').value,
+            isActive: row.querySelector('[data-field="isActive"]').value === 'true'
+          })});
+          toast('User saved.');
+          await load();
+          state.page = 'users';
+          renderUsers();
+        } catch (error) { toast(error.message, true); }
+      });
+      row.querySelector('[data-action="reset-user"]')?.addEventListener('click', async () => {
+        const password = prompt('New temporary password, at least 8 characters:');
+        if (!password) return;
+        try {
+          await api('client-users', {method:'PATCH', body: JSON.stringify({ id: Number(row.dataset.userId), password })});
+          toast('Temporary password updated.');
+          await load();
+          state.page = 'users';
+          renderUsers();
+        } catch (error) { toast(error.message, true); }
+      });
+      row.querySelector('[data-action="delete-user"]')?.addEventListener('click', async () => {
+        if (!confirm('Delete this client user?')) return;
+        try {
+          await api('client-users?id=' + encodeURIComponent(row.dataset.userId), {method:'DELETE'});
+          toast('Client user deleted.');
+          await load();
+          state.page = 'users';
+          renderUsers();
+        } catch (error) { toast(error.message, true); }
       });
     });
-
-    filterRows();
   }
 
-  function filterRows() {
-    const input = document.getElementById('term-search');
-    const q = String(input?.value || '').trim().toLowerCase();
-    let visible = 0;
-    Array.from(document.querySelectorAll('#app table tbody tr')).forEach((tr) => {
-      const haystack = `${text(tr.children[0])} ${text(tr.children[1])}`.toLowerCase();
-      const show = !q || haystack.includes(q);
-      tr.style.display = show ? '' : 'none';
-      if (show) visible++;
+  document.querySelectorAll('nav button[data-page]').forEach(button => {
+    button.addEventListener('click', () => {
+      state.page = button.dataset.page;
+      render();
     });
-    const count = document.getElementById('term-count');
-    if (count) count.textContent = `${visible} visible`;
-  }
-
-  function addStyles() {
-    if (document.getElementById('phase12a46-client-style')) return;
-    const style = document.createElement('style');
-    style.id = 'phase12a46-client-style';
-    style.textContent = `
-      tr[data-phase12a46-client-monitoring-hidden] {
-        display: none !important;
-      }
-      .term-toolbar {
-        display: flex;
-        align-items: center;
-        gap: 12px;
-        margin-bottom: 12px;
-      }
-      .term-toolbar input {
-        flex: 1;
-        min-width: 240px;
-        border: 1px solid #cbd5e1;
-        border-radius: 12px;
-        padding: 10px 12px;
-        font: inherit;
-      }
-      .term-check {
-        display: inline-flex;
-        align-items: center;
-        gap: 7px;
-        font-weight: 900;
-      }
-    `;
-    document.head.appendChild(style);
-  }
-
-  function boot() {
-    addStyles();
-    addNav();
-    setInterval(async () => {
-      addNav();
-      if (!rows.length) {
-        try { await loadRows(); } catch {}
-      }
-      hideTerminatedFromMonitoring();
-    }, 1000);
-  }
-
-  if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', boot);
-  else boot();
+  });
+  boot();
 })();
 </script>
-
-
-<script>
-
-// Phase 12A-51: Save notes when terminated changes without touching alert totals
-(function () {
-  function text(el) {
-    return (el && el.textContent ? el.textContent : '').trim();
-  }
-
-  function isPortal() {
-    return location.pathname.includes('client-portal');
-  }
-
-  function endpoint(path) {
-    return '/api/index?path=' + encodeURIComponent(path);
-  }
-
-  function normalizeHeader(value) {
-    return String(value || '')
-      .replace(/[↕↑↓▲▼]/g, '')
-      .replace(/\s+/g, ' ')
-      .trim()
-      .toLowerCase();
-  }
-
-  function indexes(table) {
-    const headers = Array.from(table.querySelectorAll('thead th')).map((th) => normalizeHeader(text(th)));
-    return {
-      file: headers.indexOf('file #'),
-      notes: headers.indexOf('notes')
-    };
-  }
-
-  function cellValue(row, index) {
-    if (index < 0 || !row.children[index]) return '';
-    const cell = row.children[index];
-    const textarea = cell.querySelector('textarea');
-    if (textarea) return textarea.value || '';
-    const input = cell.querySelector('input:not([type="checkbox"])');
-    if (input) return input.value || '';
-    const select = cell.querySelector('select');
-    if (select) return select.value || '';
-    return text(cell);
-  }
-
-  function fileNumberFromRow(row, index) {
-    const raw = cellValue(row, index);
-    const match = raw.match(/[0-9]+/);
-    return match ? match[0] : '';
-  }
-
-  async function readJsonResponse(res) {
-    const raw = await res.text();
-    let data = {};
-    try { data = raw ? JSON.parse(raw) : {}; } catch {}
-    if (!res.ok) throw new Error(data.message || raw || 'Request failed');
-    return data;
-  }
-
-  async function api(path, options) {
-    const res = await fetch(endpoint(path), Object.assign({ credentials: 'include' }, options || {}, {
-      headers: Object.assign({ 'Content-Type': 'application/json' }, (options && options.headers) || {})
-    }));
-    return readJsonResponse(res);
-  }
-
-  async function findApplicantId(fileNumber) {
-    const data = await api(isPortal() ? 'client-dashboard' : 'applicants');
-    const rows = isPortal() ? (data.recentApplicants || []) : (data.applicants || []);
-    const found = rows.find((item) => String(item.fileNumber) === String(fileNumber));
-    return Number(found && found.id ? found.id : 0);
-  }
-
-  async function saveTerminatedAndNotes(row, checked) {
-    const table = row.closest('table');
-    if (!table) throw new Error('Could not find monitoring table');
-
-    const idx = indexes(table);
-    const fileNumber = fileNumberFromRow(row, idx.file);
-    const notes = cellValue(row, idx.notes);
-
-    let id = Number(row.dataset.applicantId || row.dataset.id || 0);
-    if (!id) id = await findApplicantId(fileNumber);
-    if (!id) throw new Error('Could not find applicant id for file ' + fileNumber);
-
-    await api(isPortal() ? 'client-applicant' : 'applicants', {
-      method: 'PATCH',
-      body: JSON.stringify({ id, terminated: checked, notes })
-    });
-
-    row.toggleAttribute(isPortal() ? 'data-phase12a46-client-monitoring-hidden' : 'data-phase12a46-monitoring-hidden', checked);
-  }
-
-  document.addEventListener('change', async function (event) {
-    const checkbox = event.target && event.target.closest ? event.target.closest('[data-phase12a45-terminated]') : null;
-    if (!checkbox) return;
-
-    // Stop the older terminated handler so it does not save a second request without notes.
-    event.preventDefault();
-    event.stopImmediatePropagation();
-
-    const row = checkbox.closest('tr');
-    if (!row) return;
-
-    const checked = checkbox.checked;
-    checkbox.disabled = true;
-
-    try {
-      await saveTerminatedAndNotes(row, checked);
-    } catch (error) {
-      alert(error.message || 'Could not save terminated status');
-      checkbox.checked = !checked;
-    } finally {
-      checkbox.disabled = false;
-    }
-  }, true);
-})();
-
-</script>
-</body></html>
+</body>
+</html>
