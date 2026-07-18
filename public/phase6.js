@@ -29,6 +29,13 @@
     return titles.some((title) => /^settings$/i.test(title));
   }
 
+  function isMonitoringPage() {
+    const titles = Array.from(document.querySelectorAll('.page-header h1, h1, .head h2'))
+      .map((el) => text(el))
+      .filter(Boolean);
+    return titles.some((title) => /^monitoring$/i.test(title));
+  }
+
 
   function isSafetyEditPage() {
     const titles = Array.from(document.querySelectorAll('.page-header h1, h1, .head h2'))
@@ -2219,6 +2226,84 @@
     }
   });
 
+
+  function findMonitoringHeaderActions() {
+    if (!isMonitoringPage()) return null;
+    return document.querySelector('.page-header .header-actions') || document.querySelector('.page-header') || null;
+  }
+
+  async function runMonitoringDataSync(button) {
+    const oldLabel = button ? button.textContent : '';
+    if (button) {
+      button.disabled = true;
+      button.textContent = 'Syncing...';
+    }
+
+    try {
+      toast('Running Monitoring Data Sync from TazWorks...');
+      const result = await apiWithFallback('tazworks-sync/run', {
+        method: 'POST',
+        body: JSON.stringify({
+          companyId: getCompanyId(),
+          maxPages: 25,
+          pageSize: 25,
+          source: 'monitoring-page-data-sync'
+        })
+      });
+
+      const message = result.message || 'Monitoring Data Sync complete.';
+      const details = ` Pulled ${result.ordersPulled || 0} order(s). Updated/created ${result.applicantsUpserted || 0} monitoring record(s). Med dates updated: ${result.medExpireUpdated || 0}. Errors: ${result.errorsCount || 0}.`;
+      toast(message + details, Number(result.errorsCount || 0) > 0);
+      setTimeout(() => window.location.reload(), 1600);
+    } catch (error) {
+      toast((error && error.message) || 'Monitoring Data Sync failed.', true);
+    } finally {
+      if (button) {
+        button.disabled = false;
+        button.textContent = oldLabel || 'Data Sync';
+      }
+    }
+  }
+
+  function hookMonitoringHeaderButtons() {
+    if (!isMonitoringPage()) return;
+    const actions = findMonitoringHeaderActions();
+    if (!actions) return;
+
+    const refreshButton = Array.from(actions.querySelectorAll('button')).find((button) => /^refresh$/i.test(text(button)) || /^page refresh$/i.test(text(button)));
+    if (refreshButton && !refreshButton.dataset.phase12a97PageRefreshHooked) {
+      refreshButton.dataset.phase12a97PageRefreshHooked = '1';
+      refreshButton.textContent = 'Page Refresh';
+      refreshButton.title = 'Reload this page from the current Supabase data.';
+      refreshButton.addEventListener('click', function (event) {
+        event.preventDefault();
+        event.stopPropagation();
+        if (typeof event.stopImmediatePropagation === 'function') event.stopImmediatePropagation();
+        window.location.reload();
+      }, true);
+    }
+
+    let dataSync = actions.querySelector('[data-phase12a97-data-sync]');
+    if (!dataSync) {
+      dataSync = document.createElement('button');
+      dataSync.type = 'button';
+      dataSync.className = 'primary-inline phase12a97-data-sync';
+      dataSync.dataset.phase12a97DataSync = '1';
+      dataSync.textContent = 'Data Sync';
+      dataSync.title = 'Pull latest Monitoring/applicant reports from TazWorks and update Supabase.';
+      actions.appendChild(dataSync);
+    }
+
+    if (!dataSync.dataset.phase12a97Hooked) {
+      dataSync.dataset.phase12a97Hooked = '1';
+      dataSync.addEventListener('click', function (event) {
+        event.preventDefault();
+        event.stopPropagation();
+        runMonitoringDataSync(dataSync);
+      });
+    }
+  }
+
   function refresh() {
     addStyles();
     ensureEmailSettingsNav();
@@ -2233,6 +2318,10 @@
       return;
     }
     document.body.classList.remove('phase12a85-edit-page');
+    if (isMonitoringPage()) {
+      hookMonitoringHeaderButtons();
+      return;
+    }
     if (!isSafetyPage()) return;
     startLegacyButtonObserver();
     addPanel();
