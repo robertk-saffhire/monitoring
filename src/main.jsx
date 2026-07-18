@@ -1,5 +1,6 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import { createRoot } from 'react-dom/client';
+import { createPortal } from 'react-dom';
 import { Activity, ArrowLeft, ClipboardCheck, Copy, Database, LogOut, Mail, Pencil, Plus, Printer, RefreshCw, Save, Search, Settings, ShieldCheck, Trash2, Truck, UserCog, X } from 'lucide-react';
 import SettingsManager from './SettingsPage.jsx';
 import './styles.css';
@@ -934,6 +935,69 @@ function SafetyLinks({ report, companyId, company, onReportUpdated }) {
   const recipientLabel = modal === 'fax' ? 'Fax Number' : 'Client Email';
   const recipientHelp = modal === 'fax' ? 'Gmail will open to faxnumber@efaxsend.com. Attach the downloaded PDF before sending.' : 'Gmail will open with the selected template. Attach the completed FMCSA PDF if needed.';
 
+  const linkModalNode = linkModal ? (() => {
+    const draft = buildSafetyResponseLinkDraft(linkModal.url, report, linkModal.role);
+    return createPortal((
+      <div className="safety-modal-backdrop" role="dialog" aria-modal="true">
+        <div className="safety-modal-card safety-link-modal-card" onMouseDown={(event) => event.stopPropagation()} onClick={(event) => event.stopPropagation()}>
+          <div className="safety-modal-header">
+            <h2>{linkModal.title}</h2>
+            <button type="button" className="safety-modal-close" onClick={() => setLinkModal(null)}>×</button>
+          </div>
+          <p className="safety-modal-subtitle">File #{report.fileNumber || '—'} · {report.applicantName || 'Applicant'}</p>
+          <label className="safety-modal-field">
+            <span>{linkModal.label}</span>
+            <textarea value={linkModal.url} readOnly rows={3} onFocus={(event) => event.target.select()} />
+          </label>
+          <p className="safety-modal-note">{linkModal.expiresAt ? `Expires: ${new Date(linkModal.expiresAt).toLocaleString()}` : 'Expires in 14 days.'}</p>
+          <p className="safety-modal-note">{linkModal.note}</p>
+          <div className="safety-modal-actions safety-link-modal-actions">
+            <button type="button" className="secondary-btn" onClick={() => copyToClipboard(linkModal.url).then(() => alert('Response link copied.'))}>Copy Link</button>
+            <button type="button" className="secondary-btn" onClick={() => copyToClipboard(draft.full).then(() => alert(linkModal.role === 'applicant' ? 'Applicant verification email draft copied.' : 'Employer form email draft copied.'))}>Copy Email Draft</button>
+            <button type="button" className="secondary-btn" onClick={() => window.open(linkModal.url, '_blank', 'noopener,noreferrer')}>Open Form</button>
+            <button type="button" className="primary-inline" onClick={() => { copyToClipboard(draft.full); window.open(draft.gmailUrl, '_blank', 'noopener,noreferrer'); }}>Open Gmail</button>
+            <button type="button" className="secondary-btn" onClick={() => setLinkModal(null)}>Close</button>
+          </div>
+        </div>
+      </div>
+    ), document.body);
+  })() : null;
+
+  const actionModalNode = modal ? createPortal((
+    <div className="safety-modal-backdrop" role="dialog" aria-modal="true">
+      <div className="safety-modal-card" onMouseDown={(event) => event.stopPropagation()} onClick={(event) => event.stopPropagation()}>
+        <div className="safety-modal-header">
+          <h2>{modalTitle}</h2>
+          <button type="button" className="safety-modal-close" onClick={() => setModal(null)}>×</button>
+        </div>
+        <p className="safety-modal-subtitle">File #{report.fileNumber || '—'} · {report.applicantName || 'Applicant'}</p>
+        <label className="safety-modal-field">
+          <span>{recipientLabel}</span>
+          <input value={recipient} onChange={(event) => setRecipient(event.target.value)} placeholder={modal === 'fax' ? '12145551234' : 'client@email.com'} autoFocus={modal === 'fax'} />
+        </label>
+        <label className="safety-modal-field">
+          <span>Email Template</span>
+          <select value={templateId} onChange={(event) => handleTemplateChange(event.target.value)} disabled={templatesLoading}>
+            {templates.map((template) => <option key={String(template.id ?? 'default')} value={String(template.id ?? 'default')}>{template.name}</option>)}
+          </select>
+        </label>
+        <label className="safety-modal-field">
+          <span>Subject</span>
+          <input value={subject} onChange={(event) => { setModalDraftTouched(true); setSubject(event.target.value); }} />
+        </label>
+        <label className="safety-modal-field">
+          <span>Body</span>
+          <textarea value={body} onChange={(event) => { setModalDraftTouched(true); setBody(event.target.value); }} rows={8} />
+        </label>
+        <p className="safety-modal-note">{recipientHelp}</p>
+        <div className="safety-modal-actions">
+          <button type="button" className="secondary-btn" onClick={() => setModal(null)}>Cancel</button>
+          <button type="button" className="primary-inline" onClick={() => run(modalPrimaryText, modal === 'fax' ? openFaxGmail : openClientGmail)}>{modalPrimaryText}</button>
+        </div>
+      </div>
+    </div>
+  ), document.body) : null;
+
   return (
     <>
       <div className="safety-links-native">
@@ -945,67 +1009,8 @@ function SafetyLinks({ report, companyId, company, onReportUpdated }) {
         <button type="button" className="safety-native-button mark-completed" disabled={disabled} onClick={() => run('Mark Completed', markCompleted)}>Mark Completed</button>
         {busyAction ? <small>Working on {busyAction}...</small> : null}
       </div>
-      {linkModal ? (() => {
-        const draft = buildSafetyResponseLinkDraft(linkModal.url, report, linkModal.role);
-        return (
-          <div className="safety-modal-backdrop" role="dialog" aria-modal="true">
-            <div className="safety-modal-card safety-link-modal-card">
-              <div className="safety-modal-header">
-                <h2>{linkModal.title}</h2>
-                <button type="button" className="safety-modal-close" onClick={() => setLinkModal(null)}>×</button>
-              </div>
-              <p className="safety-modal-subtitle">File #{report.fileNumber || '—'} · {report.applicantName || 'Applicant'}</p>
-              <label className="safety-modal-field">
-                <span>{linkModal.label}</span>
-                <textarea value={linkModal.url} readOnly rows={3} onFocus={(event) => event.target.select()} />
-              </label>
-              <p className="safety-modal-note">{linkModal.expiresAt ? `Expires: ${new Date(linkModal.expiresAt).toLocaleString()}` : 'Expires in 14 days.'}</p>
-              <p className="safety-modal-note">{linkModal.note}</p>
-              <div className="safety-modal-actions safety-link-modal-actions">
-                <button type="button" className="secondary-btn" onClick={() => copyToClipboard(linkModal.url).then(() => alert('Response link copied.'))}>Copy Link</button>
-                <button type="button" className="secondary-btn" onClick={() => copyToClipboard(draft.full).then(() => alert(linkModal.role === 'applicant' ? 'Applicant verification email draft copied.' : 'Employer form email draft copied.'))}>Copy Email Draft</button>
-                <button type="button" className="secondary-btn" onClick={() => window.open(linkModal.url, '_blank', 'noopener,noreferrer')}>Open Form</button>
-                <button type="button" className="primary-inline" onClick={() => { copyToClipboard(draft.full); window.open(draft.gmailUrl, '_blank', 'noopener,noreferrer'); }}>Open Gmail</button>
-                <button type="button" className="secondary-btn" onClick={() => setLinkModal(null)}>Close</button>
-              </div>
-            </div>
-          </div>
-        );
-      })() : null}
-      {modal ? (
-        <div className="safety-modal-backdrop" role="dialog" aria-modal="true">
-          <div className="safety-modal-card">
-            <div className="safety-modal-header">
-              <h2>{modalTitle}</h2>
-              <button type="button" className="safety-modal-close" onClick={() => setModal(null)}>×</button>
-            </div>
-            <p className="safety-modal-subtitle">File #{report.fileNumber || '—'} · {report.applicantName || 'Applicant'}</p>
-            <label className="safety-modal-field">
-              <span>{recipientLabel}</span>
-              <input value={recipient} onChange={(event) => setRecipient(event.target.value)} placeholder={modal === 'fax' ? '12145551234' : 'client@email.com'} />
-            </label>
-            <label className="safety-modal-field">
-              <span>Email Template</span>
-              <select value={templateId} onChange={(event) => handleTemplateChange(event.target.value)} disabled={templatesLoading}>
-                {templates.map((template) => <option key={String(template.id ?? 'default')} value={String(template.id ?? 'default')}>{template.name}</option>)}
-              </select>
-            </label>
-            <label className="safety-modal-field">
-              <span>Subject</span>
-              <input value={subject} onChange={(event) => { setModalDraftTouched(true); setSubject(event.target.value); }} />
-            </label>
-            <label className="safety-modal-field">
-              <span>Body</span>
-              <textarea value={body} onChange={(event) => { setModalDraftTouched(true); setBody(event.target.value); }} rows={8} />
-            </label>
-            <p className="safety-modal-note">{recipientHelp}</p>
-            <div className="safety-modal-actions">
-              <button type="button" className="secondary-btn" onClick={() => setModal(null)}>Cancel</button>
-              <button type="button" className="primary-inline" onClick={() => run(modalPrimaryText, modal === 'fax' ? openFaxGmail : openClientGmail)}>{modalPrimaryText}</button>
-            </div>
-          </div>
-        </div>
-      ) : null}
+      {linkModalNode}
+      {actionModalNode}
     </>
   );
 }
