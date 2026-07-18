@@ -1,13 +1,14 @@
-Phase 12A-95 — Fax via Gmail Compose
+Phase 12A-97 — Monitoring Page Refresh + Data Sync
 
-Upload only:
+Upload only these files:
+- api/index.ts
 - public/phase6.js
 
-What changed:
-- Fax FMCSA no longer sends through Resend/eFax server-side.
-- Fax FMCSA now downloads the completed FMCSA PDF and opens Gmail with the eFax address, subject, and body filled in.
-- You must attach the downloaded PDF in Gmail before sending.
-- Uses efaxsend.com by default, with an editable eFax domain field in the fax popup.
+No SQL migration needed.
+No Vercel ENV changes needed, assuming the existing TazWorks ENV variables are already set.
 
-No SQL changes.
-No Vercel ENV changes.
+After upload and redeploy:
+1. Go to Monitoring.
+2. You should see Page Refresh and Data Sync in the header.
+3. Page Refresh reloads the page/current Supabase data.
+4. Data Sync pulls recent TazWorks orders, updates/creates Monitoring records, then reloads the page.
