@@ -9,6 +9,26 @@ let pool: any;
 const SESSION_COOKIE = 'saffhire_session';
 const SAFETY_STATUSES = new Set(['Consent Needed', 'Consent Given', 'S1 Complete', 'Emp Sent', 'Emp Complete', 'Completed']);
 const USER_ROLES = new Set(['admin', 'user', 'viewer', 'client_admin', 'client_user']);
+const DEFAULT_CLIENT_ACCESS = {
+  dashboard: true,
+  monitoring: true,
+  safetyReports: true,
+  userAdmin: true,
+  editMonitoring: true,
+};
+const CLIENT_ACCESS_KEYS = Object.keys(DEFAULT_CLIENT_ACCESS);
+function normalizeClientAccess(value: any) {
+  let input = value;
+  if (typeof input === 'string') {
+    try { input = JSON.parse(input); } catch { input = {}; }
+  }
+  if (!input || typeof input !== 'object' || Array.isArray(input)) input = {};
+  const out: any = { ...DEFAULT_CLIENT_ACCESS };
+  for (const key of CLIENT_ACCESS_KEYS) {
+    if (Object.prototype.hasOwnProperty.call(input, key)) out[key] = input[key] !== false;
+  }
+  return out;
+}
 const BOOL_REPORT_FIELDS = new Set([
   'vehicleStraightTruck', 'vehicleTractorSemitrailer', 'vehicleBus', 'vehicleCargoTank', 'vehicleDoublesTriples', 'vehicleOther',
   'dotAlcoholTestPositive', 'dotDrugTestPositive', 'dotRefusedTest', 'dotOtherViolations',
@@ -80,14 +100,19 @@ function secret() { if (!process.env.JWT_SECRET) throw new Error('JWT_SECRET is 
 function parseCookies(req: any) { const header = req.headers?.cookie || ''; const out: any = {}; for (const part of header.split(';')) { const idx = part.indexOf('='); if (idx === -1) continue; const key = part.slice(0, idx).trim(); const val = part.slice(idx + 1).trim(); if (!key) continue; try { out[key] = decodeURIComponent(val); } catch { out[key] = val; } } return out; }
 function setSessionCookie(res: any, token: string, maxAgeSeconds: number) { res.setHeader('Set-Cookie', [`${SESSION_COOKIE}=${encodeURIComponent(token)}`, 'Path=/', 'HttpOnly', 'SameSite=Lax', 'Secure', `Max-Age=${maxAgeSeconds}`].join('; ')); }
 function clearSessionCookie(res: any) { res.setHeader('Set-Cookie', `${SESSION_COOKIE}=; Path=/; HttpOnly; SameSite=Lax; Secure; Max-Age=0`); }
-function publicUser(user: any) { if (!user) return null; return { id: user.id, username: user.username, displayName: user.displayName || user.username, role: user.role, companyId: user.companyId ?? null, isActive: user.isActive, mustChangePassword: user.mustChangePassword || false, lastSignedIn: user.lastSignedIn || null }; }
-async function getUserFromRequest(req: any) { const token = parseCookies(req)[SESSION_COOKIE]; if (!token) return null; try { const { payload } = await jwtVerify(token, secret()); const id = Number(payload.sub); const result = await query('select id, username, "displayName", role, "companyId", "isActive", "mustChangePassword", "lastSignedIn" from local_users where id=$1 limit 1', [id]); const user = result.rows[0] || null; if (!user || !user.isActive) return null; return user; } catch { return null; } }
+function publicUser(user: any) { if (!user) return null; return { id: user.id, username: user.username, displayName: user.displayName || user.username, role: user.role, companyId: user.companyId ?? null, isActive: user.isActive, mustChangePassword: user.mustChangePassword || false, lastSignedIn: user.lastSignedIn || null, clientAccess: normalizeClientAccess(user.clientAccess) }; }
+async function getUserFromRequest(req: any) { const token = parseCookies(req)[SESSION_COOKIE]; if (!token) return null; try { const { payload } = await jwtVerify(token, secret()); const id = Number(payload.sub); const result = await query('select id, username, "displayName", role, "companyId", "isActive", "mustChangePassword", "lastSignedIn", to_jsonb(local_users)->\'clientAccess\' as "clientAccess" from local_users where id=$1 limit 1', [id]); const user = result.rows[0] || null; if (!user || !user.isActive) return null; return user; } catch { return null; } }
 async function requireUser(req: any, res: any) { const user = await getUserFromRequest(req); if (!user) { json(res, 401, { status: 'error', message: 'Login required' }); return null; } return user; }
 function requireAdmin(user: any, res: any) { if (user.role !== 'admin') { json(res, 403, { status: 'error', message: 'Admin access required' }); return false; } return true; }
 function isAdmin(user: any) { return user?.role === 'admin'; }
 function isClientAdmin(user: any) { return user?.role === 'client_admin'; }
-function canManageClientUsers(user: any) { return isAdmin(user) || isClientAdmin(user); }
-function canEditClientMonitoring(user: any) { return ['admin', 'user', 'client_admin', 'client_user'].includes(String(user?.role || '')); }
+function clientAccess(user: any) { return normalizeClientAccess(user?.clientAccess); }
+function clientHasAccess(user: any, key: string) { return isAdmin(user) || clientAccess(user)[key] !== false; }
+function canViewClientDashboard(user: any) { return clientHasAccess(user, 'dashboard'); }
+function canViewClientMonitoring(user: any) { return clientHasAccess(user, 'monitoring'); }
+function canViewClientSafety(user: any) { return clientHasAccess(user, 'safetyReports'); }
+function canManageClientUsers(user: any) { return isAdmin(user) || (isClientAdmin(user) && clientHasAccess(user, 'userAdmin')); }
+function canEditClientMonitoring(user: any) { return ['admin', 'user', 'client_admin', 'client_user'].includes(String(user?.role || '')) && canViewClientMonitoring(user) && clientHasAccess(user, 'editMonitoring'); }
 function requestedCompanyId(req: any, user: any) {
   const url = new URL(req.url || '/', 'https://local.test');
   const requested = Number(url.searchParams.get('companyId') || user.companyId || 1);
@@ -178,7 +203,7 @@ async function clientAuth(req: any, res: any, route: string) {
     const password = String(body.password || '');
 
     const result = await query(
-      'select id, username, "passwordHash", "displayName", role, "companyId", "isActive", "mustChangePassword", "lastSignedIn" from local_users where lower(username)=lower($1) limit 1',
+      'select id, username, "passwordHash", "displayName", role, "companyId", "isActive", "mustChangePassword", "lastSignedIn", to_jsonb(local_users)->\'clientAccess\' as "clientAccess" from local_users where lower(username)=lower($1) limit 1',
       [username]
     );
 
@@ -230,8 +255,8 @@ async function clientAuth(req: any, res: any, route: string) {
 async function auth(req: any, res: any, route: string) {
   if (route === 'debug' && req.method === 'GET') return json(res, 200, { status: 'ok', route, hasDatabaseUrl: Boolean(process.env.DATABASE_URL), hasJwtSecret: Boolean(process.env.JWT_SECRET) });
   if (route === 'auth/setup-status' && req.method === 'GET') { const result = await query("select count(*)::int as count from local_users where role='admin'"); return json(res, 200, { status: 'ok', hasAdmin: Number(result.rows[0]?.count || 0) > 0 }); }
-  if (route === 'auth/setup-admin' && req.method === 'POST') { const count = await query("select count(*)::int as count from local_users where role='admin'"); if (Number(count.rows[0]?.count || 0) > 0) return json(res, 400, { status: 'error', message: 'Admin already exists' }); const body = await readBody(req); const username = String(body.username || '').trim().toLowerCase(); const password = String(body.password || ''); if (username.length < 3 || password.length < 6) return json(res, 400, { status: 'error', message: 'Username and password are required' }); const company = await query("select id from companies where slug='driver-pipeline' limit 1"); const companyId = company.rows[0]?.id || null; const passwordHash = await bcrypt.hash(password, 12); const result = await query('insert into local_users (username, "passwordHash", "displayName", role, "companyId", "isActive") values ($1,$2,$3,$4,$5,true) returning id, username, "displayName", role, "companyId", "isActive", "mustChangePassword", "lastSignedIn"', [username, passwordHash, username, 'admin', companyId]); const user = result.rows[0]; const token = await new SignJWT({ sub: String(user.id), role: user.role, name: user.displayName || user.username }).setProtectedHeader({ alg: 'HS256' }).setIssuedAt().setExpirationTime('30d').sign(secret()); setSessionCookie(res, token, 60 * 60 * 24 * 30); return json(res, 200, { status: 'ok', user: publicUser(user) }); }
-  if (route === 'auth/login' && req.method === 'POST') { const body = await readBody(req); const username = String(body.username || '').trim().toLowerCase(); const password = String(body.password || ''); const result = await query('select id, username, "passwordHash", "displayName", role, "companyId", "isActive", "mustChangePassword", "lastSignedIn" from local_users where lower(username)=lower($1) limit 1', [username]); const user = result.rows[0]; if (!user || !user.isActive || !(await bcrypt.compare(password, user.passwordHash))) return json(res, 401, { status: 'error', message: 'Invalid username or password' }); await query('update local_users set "lastSignedIn"=now() where id=$1', [user.id]); const token = await new SignJWT({ sub: String(user.id), role: user.role, name: user.displayName || user.username }).setProtectedHeader({ alg: 'HS256' }).setIssuedAt().setExpirationTime(body.rememberMe ? '30d' : '1d').sign(secret()); setSessionCookie(res, token, body.rememberMe ? 60 * 60 * 24 * 30 : 60 * 60 * 24); return json(res, 200, { status: 'ok', user: publicUser(user) }); }
+  if (route === 'auth/setup-admin' && req.method === 'POST') { const count = await query("select count(*)::int as count from local_users where role='admin'"); if (Number(count.rows[0]?.count || 0) > 0) return json(res, 400, { status: 'error', message: 'Admin already exists' }); const body = await readBody(req); const username = String(body.username || '').trim().toLowerCase(); const password = String(body.password || ''); if (username.length < 3 || password.length < 6) return json(res, 400, { status: 'error', message: 'Username and password are required' }); const company = await query("select id from companies where slug='driver-pipeline' limit 1"); const companyId = company.rows[0]?.id || null; const passwordHash = await bcrypt.hash(password, 12); const result = await query('insert into local_users (username, "passwordHash", "displayName", role, "companyId", "isActive") values ($1,$2,$3,$4,$5,true) returning id, username, "displayName", role, "companyId", "isActive", "mustChangePassword", "lastSignedIn", "clientAccess"', [username, passwordHash, username, 'admin', companyId]); const user = result.rows[0]; const token = await new SignJWT({ sub: String(user.id), role: user.role, name: user.displayName || user.username }).setProtectedHeader({ alg: 'HS256' }).setIssuedAt().setExpirationTime('30d').sign(secret()); setSessionCookie(res, token, 60 * 60 * 24 * 30); return json(res, 200, { status: 'ok', user: publicUser(user) }); }
+  if (route === 'auth/login' && req.method === 'POST') { const body = await readBody(req); const username = String(body.username || '').trim().toLowerCase(); const password = String(body.password || ''); const result = await query('select id, username, "passwordHash", "displayName", role, "companyId", "isActive", "mustChangePassword", "lastSignedIn", to_jsonb(local_users)->\'clientAccess\' as "clientAccess" from local_users where lower(username)=lower($1) limit 1', [username]); const user = result.rows[0]; if (!user || !user.isActive || !(await bcrypt.compare(password, user.passwordHash))) return json(res, 401, { status: 'error', message: 'Invalid username or password' }); await query('update local_users set "lastSignedIn"=now() where id=$1', [user.id]); const token = await new SignJWT({ sub: String(user.id), role: user.role, name: user.displayName || user.username }).setProtectedHeader({ alg: 'HS256' }).setIssuedAt().setExpirationTime(body.rememberMe ? '30d' : '1d').sign(secret()); setSessionCookie(res, token, body.rememberMe ? 60 * 60 * 24 * 30 : 60 * 60 * 24); return json(res, 200, { status: 'ok', user: publicUser(user) }); }
   if (route === 'auth/me' && req.method === 'GET') { const user = await getUserFromRequest(req); return json(res, 200, { status: 'ok', user: publicUser(user) }); }
   if (route === 'auth/logout' && req.method === 'POST') { clearSessionCookie(res); return json(res, 200, { status: 'ok' }); }
   return false;
@@ -345,10 +370,10 @@ async function importSafetyReports(req: any, res: any, user: any) {
 
 async function users(req: any, res: any, user: any) {
   if (!requireAdmin(user, res)) return;
-  if (req.method === 'GET') { const r = await query('select id, username, "displayName", role, "companyId", "isActive", "mustChangePassword", "lastSignedIn" from local_users order by id asc'); return json(res, 200, { status: 'ok', users: r.rows.map(publicUser) }); }
+  if (req.method === 'GET') { const r = await query('select id, username, "displayName", role, "companyId", "isActive", "mustChangePassword", "lastSignedIn", to_jsonb(local_users)->\'clientAccess\' as "clientAccess" from local_users order by id asc'); return json(res, 200, { status: 'ok', users: r.rows.map(publicUser) }); }
   const body = await readBody(req);
-  if (req.method === 'POST') { const username = String(body.username || '').trim().toLowerCase(); const rawPassword = String(body.password || ''); if (username.length < 3 || rawPassword.length < 6) return json(res, 400, { status: 'error', message: 'Username and password are required' }); const role = USER_ROLES.has(body.role) ? body.role : 'user'; const passwordHash = await bcrypt.hash(rawPassword, 12); const r = await query('insert into local_users (username,"passwordHash","displayName",role,"companyId","isActive","mustChangePassword") values ($1,$2,$3,$4,$5,true,false) returning id, username, "displayName", role, "companyId", "isActive", "mustChangePassword", "lastSignedIn"', [username, passwordHash, String(body.displayName || username), role, body.companyId ? Number(body.companyId) : null]); return json(res, 200, { status: 'ok', user: publicUser(r.rows[0]) }); }
-  if (req.method === 'PATCH') { const id = Number(body.id); const role = USER_ROLES.has(body.role) ? body.role : 'user'; const baseParams: any[] = [String(body.displayName || ''), role, body.companyId ? Number(body.companyId) : null, body.isActive !== false]; let sql = 'update local_users set "displayName"=$1, role=$2, "companyId"=$3, "isActive"=$4, "updatedAt"=now()'; if (body.password) { baseParams.push(await bcrypt.hash(String(body.password), 12)); sql += `, "passwordHash"=$${baseParams.length}, "mustChangePassword"=false`; } baseParams.push(id); sql += ` where id=$${baseParams.length} returning id, username, "displayName", role, "companyId", "isActive", "mustChangePassword", "lastSignedIn"`; const r = await query(sql, baseParams); return json(res, 200, { status: 'ok', user: publicUser(r.rows[0]) }); }
+  if (req.method === 'POST') { const username = String(body.username || '').trim().toLowerCase(); const rawPassword = String(body.password || ''); if (username.length < 3 || rawPassword.length < 6) return json(res, 400, { status: 'error', message: 'Username and password are required' }); const role = USER_ROLES.has(body.role) ? body.role : 'user'; const passwordHash = await bcrypt.hash(rawPassword, 12); const r = await query('insert into local_users (username,"passwordHash","displayName",role,"companyId","isActive","mustChangePassword") values ($1,$2,$3,$4,$5,true,false) returning id, username, "displayName", role, "companyId", "isActive", "mustChangePassword", "lastSignedIn", "clientAccess"', [username, passwordHash, String(body.displayName || username), role, body.companyId ? Number(body.companyId) : null]); return json(res, 200, { status: 'ok', user: publicUser(r.rows[0]) }); }
+  if (req.method === 'PATCH') { const id = Number(body.id); const role = USER_ROLES.has(body.role) ? body.role : 'user'; const baseParams: any[] = [String(body.displayName || ''), role, body.companyId ? Number(body.companyId) : null, body.isActive !== false]; let sql = 'update local_users set "displayName"=$1, role=$2, "companyId"=$3, "isActive"=$4, "updatedAt"=now()'; if (body.password) { baseParams.push(await bcrypt.hash(String(body.password), 12)); sql += `, "passwordHash"=$${baseParams.length}, "mustChangePassword"=false`; } baseParams.push(id); sql += ` where id=$${baseParams.length} returning id, username, "displayName", role, "companyId", "isActive", "mustChangePassword", "lastSignedIn", "clientAccess"`; const r = await query(sql, baseParams); return json(res, 200, { status: 'ok', user: publicUser(r.rows[0]) }); }
   if (req.method === 'DELETE') { const url = new URL(req.url || '/', 'https://local.test'); const id = Number(url.searchParams.get('id')); if (id === user.id) return json(res, 400, { status: 'error', message: 'You cannot delete your own account' }); await query('delete from local_users where id=$1', [id]); return json(res, 200, { status: 'ok', success: true }); }
   return json(res, 405, { status: 'error', message: 'Method not allowed' });
 }
@@ -632,6 +657,7 @@ async function changePassword(req: any, res: any, user: any) {
 
 async function clientApplicantUpdate(req: any, res: any, user: any) {
   if (req.method !== 'PATCH') return json(res, 405, { status: 'error', message: 'Method not allowed' });
+  if (!canViewClientMonitoring(user)) return json(res, 403, { status: 'error', message: 'This client account does not have Monitoring access' });
   if (!canEditClientMonitoring(user)) return json(res, 403, { status: 'error', message: 'This client account is view-only' });
   if (!requireCompanyScope(user, res)) return;
 
@@ -676,16 +702,19 @@ async function clientDashboard(req: any, res: any, user: any) {
   if (req.method !== 'GET') return json(res, 405, { status: 'error', message: 'Method not allowed' });
   if (!requireCompanyScope(user, res)) return;
   const companyId = requestedCompanyId(req, user);
+  const showDashboard = canViewClientDashboard(user);
+  const showMonitoring = canViewClientMonitoring(user);
+  const showSafety = canViewClientSafety(user);
 
   const company = await query('select id, name, slug, "isActive" from companies where id=$1 limit 1', [companyId]);
 
-  const recentApplicants = await query(
+  const recentApplicants = showMonitoring ? await query(
     `select id, "fileNumber", "applicantName" as name, "orderDate", "monitorStatus", "mvrStatus", "medExpire", "terminated", notes
-     from applicants where "companyId"=$1 order by id desc limit 1000`, [companyId]);
+     from applicants where "companyId"=$1 order by id desc limit 1000`, [companyId]) : { rows: [] };
 
-  const recentSafety = await query(
+  const recentSafety = showSafety ? await query(
     `select id, "fileNumber", "applicantName", created, status, "followUpDate", "prevEmployerName", notes
-     from safety_reports where "companyId"=$1 order by id desc limit 1000`, [companyId]);
+     from safety_reports where "companyId"=$1 order by id desc limit 1000`, [companyId]) : { rows: [] };
 
   function clientDateOnly(value: any) {
     const raw = String(value || '').trim();
@@ -733,7 +762,7 @@ async function clientDashboard(req: any, res: any, user: any) {
     return out;
   }, { total: 0, consent_needed: 0, consent_given: 0, s1_complete: 0, emp_sent: 0, emp_complete: 0, completed: 0, open: 0 });
 
-  const clientVisibleSafetyNotes = await getClientVisibleSafetyNotes(companyId);
+  const clientVisibleSafetyNotes = showSafety ? await getClientVisibleSafetyNotes(companyId) : new Map();
   const clientSafeSafetyReports = safetyRows.map((row: any) => ({
     ...row,
     notes: clientVisibleSafetyNotes.get(Number(row.id)) || ''
@@ -756,6 +785,9 @@ async function clientDashboard(req: any, res: any, user: any) {
     recentApplicants: applicants,
     recentSafetyReports: clientSafeSafetyReports,
     users,
+    canViewDashboard: showDashboard,
+    canViewMonitoring: showMonitoring,
+    canViewSafety: showSafety,
     canManageUsers: canManageClientUsers(user),
     canEditMonitoring: canEditClientMonitoring(user)
   });
@@ -767,8 +799,8 @@ async function clientUsers(req: any, res: any, user: any) {
   const companyId = requestedCompanyId(req, user);
 
   if (req.method === 'GET') {
-    const r = await query(`select id, username, "displayName", role, "companyId", "isActive", "mustChangePassword", "lastSignedIn" from local_users where "companyId"=$1 order by id asc`, [companyId]);
-    return json(res, 200, { status: 'ok', users: r.rows.map(publicUser) });
+    const r = await query(`select id, username, "displayName", role, "companyId", "isActive", "mustChangePassword", "lastSignedIn", to_jsonb(local_users)->\'clientAccess\' as "clientAccess" from local_users where "companyId"=$1 order by id asc`, [companyId]);
+    return json(res, 200, { status: 'ok', users: r.rows.map(publicUser), accessOptions: CLIENT_ACCESS_KEYS });
   }
 
   const body = await readBody(req);
@@ -780,26 +812,28 @@ async function clientUsers(req: any, res: any, user: any) {
     let role = String(body.role || 'client_user');
     const allowed = isAdmin(user) ? new Set(['client_admin','client_user','viewer','user']) : new Set(['client_user','viewer']);
     if (!allowed.has(role)) role = 'client_user';
+    const access = normalizeClientAccess(body.clientAccess || {});
     const hash = await bcrypt.hash(password, 12);
-    const r = await query(`insert into local_users (username,"passwordHash","displayName",role,"companyId","isActive","mustChangePassword") values ($1,$2,$3,$4,$5,true,true) returning id, username, "displayName", role, "companyId", "isActive", "mustChangePassword", "lastSignedIn"`, [username, hash, String(body.displayName || username), role, companyId]);
+    const r = await query(`insert into local_users (username,"passwordHash","displayName",role,"companyId","clientAccess","isActive","mustChangePassword") values ($1,$2,$3,$4,$5,$6::jsonb,true,true) returning id, username, "displayName", role, "companyId", "isActive", "mustChangePassword", "lastSignedIn", "clientAccess"`, [username, hash, String(body.displayName || username), role, companyId, JSON.stringify(access)]);
     return json(res, 200, { status: 'ok', user: publicUser(r.rows[0]) });
   }
 
   if (req.method === 'PATCH') {
     const id = Number(body.id);
     if (!id) return json(res, 400, { status: 'error', message: 'User id is required' });
-    const current = await query('select id, role from local_users where id=$1 and "companyId"=$2 limit 1', [id, companyId]);
+    const current = await query('select id, role, to_jsonb(local_users)->\'clientAccess\' as "clientAccess" from local_users where id=$1 and "companyId"=$2 limit 1', [id, companyId]);
     if (!current.rows[0]) return json(res, 404, { status: 'error', message: 'User not found for this client' });
     let role = String(body.role || current.rows[0].role || 'client_user');
     const allowed = isAdmin(user) ? new Set(['client_admin','client_user','viewer','user']) : new Set(['client_user','viewer']);
     if (!allowed.has(role)) role = current.rows[0].role || 'client_user';
     const nextActive = body.isActive !== false;
-    if (id === user.id && (!nextActive || role === 'viewer')) {
+    const access = body.clientAccess === undefined ? normalizeClientAccess(current.rows[0].clientAccess) : normalizeClientAccess(body.clientAccess);
+    if (id === user.id && (!nextActive || role === 'viewer' || access.userAdmin === false)) {
       return json(res, 400, { status: 'error', message: 'You cannot remove your own client admin access from this page' });
     }
 
-    let params: any[] = [String(body.displayName || ''), role, nextActive];
-    let sql = 'update local_users set "displayName"=$1, role=$2, "isActive"=$3, "updatedAt"=now()';
+    let params: any[] = [String(body.displayName || ''), role, nextActive, JSON.stringify(access)];
+    let sql = 'update local_users set "displayName"=$1, role=$2, "isActive"=$3, "clientAccess"=$4::jsonb, "updatedAt"=now()';
     if (body.password) {
       const newPassword = String(body.password || '');
       if (newPassword.length < 8) return json(res, 400, { status: 'error', message: 'Temporary password must be at least 8 characters' });
@@ -807,7 +841,7 @@ async function clientUsers(req: any, res: any, user: any) {
       sql += `, "passwordHash"=$${params.length}, "mustChangePassword"=true`;
     }
     params.push(id, companyId);
-    sql += ` where id=$${params.length-1} and "companyId"=$${params.length} returning id, username, "displayName", role, "companyId", "isActive", "mustChangePassword", "lastSignedIn"`;
+    sql += ` where id=$${params.length-1} and "companyId"=$${params.length} returning id, username, "displayName", role, "companyId", "isActive", "mustChangePassword", "lastSignedIn", "clientAccess"`;
     const r = await query(sql, params);
     return json(res, 200, { status: 'ok', user: publicUser(r.rows[0]) });
   }
@@ -1031,6 +1065,7 @@ async function buildCompletedSafetyPdf(report: any) {
 async function clientSafetyPdf(req: any, res: any, user: any) {
   if (req.method !== 'GET' && req.method !== 'POST') return json(res, 405, { status: 'error', message: 'Method not allowed' });
   if (!requireCompanyScope(user, res)) return;
+  if (!canViewClientSafety(user)) return json(res, 403, { status: 'error', message: 'This client account does not have Safety Reports access' });
 
   const companyId = requestedCompanyId(req, user);
   const url = new URL(req.url || '/', 'https://local.test');
