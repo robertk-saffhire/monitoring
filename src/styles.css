@@ -85,3 +85,21 @@
 .safety-modal-card{position:relative;z-index:20051!important;pointer-events:auto!important}
 .safety-modal-card input,.safety-modal-card select,.safety-modal-card textarea,.safety-modal-card button{pointer-events:auto!important;user-select:text!important}
 .safety-modal-card button{user-select:none!important}
+
+/* Phase 12A-117: native applicant signature card + delete action */
+.native-signature-card{display:flex;gap:14px;align-items:flex-start;border-radius:14px;padding:14px 16px;margin:16px 0 4px;border:1px solid #e2e8f0}
+.native-signature-card h4{margin:0 0 6px!important;padding:0!important;font-size:16px!important;text-transform:none!important;letter-spacing:0!important}
+.native-signature-card p{margin:3px 0;color:#334155;font-size:13px}
+.native-signature-icon{width:34px;height:34px;border-radius:999px;display:inline-flex;align-items:center;justify-content:center;flex:0 0 auto;font-weight:900}
+.native-signature-card.signed{border-color:#86efac;background:#f0fdf4}
+.native-signature-card.signed h4,.native-signature-card.signed .native-signature-icon{color:#166534}
+.native-signature-card.signed .native-signature-icon{background:#dcfce7}
+.native-signature-card.unsigned{border-color:#fed7aa;background:#fff7ed}
+.native-signature-card.unsigned h4,.native-signature-card.unsigned .native-signature-icon{color:#c2410c}
+.native-signature-card.unsigned .native-signature-icon{background:#ffedd5}
+.native-signature-card.warning{border-color:#fde68a;background:#fffbeb}
+.native-signature-card.warning h4,.native-signature-card.warning .native-signature-icon{color:#a16207}
+.native-signature-card.warning .native-signature-icon{background:#fef3c7}
+.danger-inline{border:1px solid #dc2626;background:#fef2f2;color:#b91c1c;border-radius:999px;font-weight:900;cursor:pointer}
+.danger-inline.small-danger{margin-top:10px;padding:7px 11px;font-size:12px}
+.danger-inline:disabled{opacity:.6;cursor:not-allowed}

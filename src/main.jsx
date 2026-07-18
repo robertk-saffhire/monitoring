@@ -687,7 +687,8 @@ async function chooseTemplate(companyId, report, purpose) {
 
 async function downloadFmcsaPdf(report, companyId) {
   const fileNumber = String(report?.fileNumber || '').trim();
-  const url = `/api/client-safety-pdf?companyId=${encodeURIComponent(companyId)}&fileNumber=${encodeURIComponent(fileNumber)}`;
+  const reportId = report?.id ? String(report.id).trim() : '';
+  const url = `/api/client-safety-pdf?companyId=${encodeURIComponent(companyId)}${reportId ? `&id=${encodeURIComponent(reportId)}` : `&fileNumber=${encodeURIComponent(fileNumber)}`}`;
   const response = await fetch(url, { credentials: 'include' });
   const contentType = response.headers.get('content-type') || '';
   if (!response.ok) {
@@ -768,6 +769,84 @@ function buildSafetyResponseLinkDraft(link, report, responseRole) {
     full: `To: ${to || (isApplicant ? '[enter applicant email]' : '[enter employer email]')}\nSubject: ${subject}\n\n${body}`,
     gmailUrl: gmailComposeUrl(to, subject, body),
   };
+}
+
+
+function parseApplicantSignatureFromNotes(notes) {
+  const text = String(notes || '');
+  const re = /\[Applicant Electronic Signature\]\s*Name:\s*([^\n|]+?)\s*\|\s*Date:\s*([^\n|]+)(?:\s*\|\s*IP:\s*([^\n]+))?/g;
+  let match;
+  let latest = null;
+  while ((match = re.exec(text)) !== null) {
+    latest = {
+      name: String(match[1] || '').trim(),
+      signedAt: String(match[2] || '').trim(),
+      ip: String(match[3] || '').trim(),
+    };
+  }
+  return latest || null;
+}
+
+function stripApplicantSignatureFromNotes(notes) {
+  return String(notes || '')
+    .split(/\n+/)
+    .filter((line) => !/\[Applicant Electronic Signature\]/i.test(line))
+    .join('\n')
+    .replace(/\n{3,}/g, '\n\n')
+    .trim();
+}
+
+function formatSignatureDate(value) {
+  if (!value) return '';
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return String(value);
+  return date.toLocaleString(undefined, { month: 'short', day: 'numeric', year: 'numeric', hour: 'numeric', minute: '2-digit' });
+}
+
+function signatureStatusForReport(report) {
+  const signature = parseApplicantSignatureFromNotes(report?.notes);
+  if (signature?.name) return { state: 'signed', signature };
+  if (/consent\s+given/i.test(String(report?.status || ''))) return { state: 'warning', signature: null };
+  return { state: 'unsigned', signature: null };
+}
+
+function ApplicantSignatureStatus({ form, saving, onClear }) {
+  const status = signatureStatusForReport(form);
+  if (status.state === 'signed') {
+    return (
+      <div className="native-signature-card signed" data-native-signature-status="1">
+        <div className="native-signature-icon">✓</div>
+        <div>
+          <h4>Applicant Signed</h4>
+          <p><b>Electronic Signature:</b> {status.signature.name}</p>
+          <p><b>Signed Date:</b> {formatSignatureDate(status.signature.signedAt)}</p>
+          {status.signature.ip ? <p><b>IP Address:</b> {status.signature.ip}</p> : null}
+          <button type="button" className="danger-inline small-danger" disabled={saving} onClick={onClear}>Delete Signature</button>
+        </div>
+      </div>
+    );
+  }
+  if (status.state === 'warning') {
+    return (
+      <div className="native-signature-card warning" data-native-signature-status="1">
+        <div className="native-signature-icon">!</div>
+        <div>
+          <h4>Consent Given — Signature Detail Not Found</h4>
+          <p>The report status is Consent Given, but no electronic signature marker was found in the notes field.</p>
+        </div>
+      </div>
+    );
+  }
+  return (
+    <div className="native-signature-card unsigned" data-native-signature-status="1">
+      <div className="native-signature-icon">!</div>
+      <div>
+        <h4>Applicant Not Signed Yet</h4>
+        <p>{form?.applicantName || 'The applicant'} has not submitted the applicant verification form yet.</p>
+        <p>Send the <b>Applicant Link</b> from the Safety Performance report list before sending the Employer Link.</p>
+      </div>
+    </div>
+  );
 }
 
 function SafetyLinks({ report, companyId, company, onReportUpdated }) {
@@ -1076,7 +1155,7 @@ function Safety({ reports, setReports, company, refresh, companyId, dashboardFil
   }
 
   if (mode === 'edit') {
-    return <SafetyForm company={company} report={editing || defaultReport(company)} onCancel={() => { setEditing(null); setMode('list'); }} onSave={saveReport} />;
+    return <SafetyForm company={company} companyId={companyId} report={editing || defaultReport(company)} onCancel={() => { setEditing(null); setMode('list'); }} onSave={saveReport} onReportUpdated={(updated) => setReports((rows) => rows.map((row) => row.id === updated.id ? updated : row))} />;
   }
 
   return (
@@ -1114,7 +1193,7 @@ function Safety({ reports, setReports, company, refresh, companyId, dashboardFil
   );
 }
 
-function SafetyForm({ company, report, onCancel, onSave }) {
+function SafetyForm({ company, companyId, report, onCancel, onSave, onReportUpdated }) {
   const [form, setForm] = useState(() => ({ ...defaultReport(company), ...report }));
   const [saving, setSaving] = useState(false);
   const set = (key, value) => setForm((f) => ({ ...f, [key]: value }));
@@ -1126,6 +1205,26 @@ function SafetyForm({ company, report, onCancel, onSave }) {
     try { await onSave(form); } catch (err) { alert(err.message); } finally { setSaving(false); }
   }
 
+  async function clearApplicantSignature() {
+    if (!form.id) return;
+    if (!window.confirm('Delete the applicant electronic signature from this Safety Performance report?')) return;
+    const nextNotes = stripApplicantSignatureFromNotes(form.notes);
+    const nextStatus = /consent\s+given/i.test(String(form.status || '')) ? 'Consent Needed' : form.status;
+    const nextForm = { ...form, notes: nextNotes, status: nextStatus };
+    setSaving(true);
+    try {
+      const data = await api(`/api/safety-reports?companyId=${encodeURIComponent(companyId)}`, { method: 'PATCH', body: JSON.stringify(nextForm) });
+      const updated = data.report || nextForm;
+      setForm((current) => ({ ...current, ...updated }));
+      onReportUpdated?.(updated);
+      alert('Applicant signature deleted.');
+    } catch (err) {
+      alert(err.message || 'Could not delete applicant signature.');
+    } finally {
+      setSaving(false);
+    }
+  }
+
   return (
     <>
       <Header title="Safety Performance Submission" subtitle={form.id ? `Editing ${form.fileNumber || form.applicantName}` : 'New report'} actions={<button className="secondary-btn" onClick={onCancel}><ArrowLeft size={16} /> Back</button>} />
@@ -1133,6 +1232,7 @@ function SafetyForm({ company, report, onCancel, onSave }) {
         <FormSection title="SECTION 1: To be Completed by Prospective Employee">
           <div className="form-grid three"><Field label="Applicant Name"><input value={form.applicantName} onChange={(e) => set('applicantName', e.target.value)} /></Field><Field label="File Number"><input value={form.fileNumber} onChange={(e) => set('fileNumber', e.target.value)} /></Field><Field label="Status"><select value={form.status} onChange={(e) => set('status', e.target.value)}>{STATUSES.map((s) => <option key={s}>{s}</option>)}</select></Field></div>
           <div className="form-grid two"><Field label="Created"><input type="date" value={form.created || ''} onChange={(e) => set('created', e.target.value)} /></Field><Field label="Follow Up Date"><input type="date" value={form.followUpDate || ''} onChange={(e) => set('followUpDate', e.target.value)} /></Field></div>
+          <ApplicantSignatureStatus form={form} saving={saving} onClear={clearApplicantSignature} />
           <Field label="Notes"><textarea value={form.notes || ''} onChange={(e) => set('notes', e.target.value)} rows={4} /></Field>
           <h4>Previous Employer</h4>
           <div className="form-grid two"><Field label="Name"><input value={form.prevEmployerName || ''} onChange={(e) => set('prevEmployerName', e.target.value)} /></Field><Field label="Email"><input value={form.prevEmployerEmail || ''} onChange={(e) => set('prevEmployerEmail', e.target.value)} /></Field><Field label="Street"><input value={form.prevEmployerStreet || ''} onChange={(e) => set('prevEmployerStreet', e.target.value)} /></Field><Field label="Phone"><input value={form.prevEmployerPhone || ''} onChange={(e) => set('prevEmployerPhone', e.target.value)} /></Field><Field label="Fax"><input value={form.prevEmployerFax || ''} onChange={(e) => set('prevEmployerFax', e.target.value)} /></Field><Field label="City / State / Zip"><input value={form.prevEmployerCityStateZip || ''} onChange={(e) => set('prevEmployerCityStateZip', e.target.value)} /></Field></div>
