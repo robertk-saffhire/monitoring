@@ -1,9 +1,7 @@
-Phase 12A-99 - Stop Sidebar Reload Monitoring Blink
+Phase 12A-100 Dashboard Safety Status Cards
 
-Upload this file:
+Upload only:
 public/phase6.js
 
-What changed:
-- Removes the old Reload Monitoring sidebar button.
-- Adds a MutationObserver cleanup so older scripts cannot reinsert it and make it blink.
-- Keeps Monitoring page Page Refresh and Data Sync buttons.
+No SQL migration is required.
+No Vercel ENV changes are required.
