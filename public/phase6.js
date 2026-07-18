@@ -2426,13 +2426,48 @@
     });
   }
 
-  function phase12a108MakeButton(item) {
+  function phase12a108RunAction(action, row) {
+    if (!row) return Promise.reject(new Error('Could not find this report row.'));
+    if (action === 'applicant') return generateLink(row, 'applicant');
+    if (action === 'employer') return generateLink(row, 'employer');
+    if (action === 'fmcsaPdf') return phase12a107DownloadFmcsa(row);
+    if (action === 'fax') return showFaxModal(row);
+    if (action === 'clientGmail') return showClientGmailModal(row);
+    if (action === 'markCompleted') return phase12a107MarkCompleted(row);
+    return Promise.reject(new Error('Unknown Safety Performance link action.'));
+  }
+
+  function phase12a108ActionFromLabel(label) {
+    const normalized = String(label || '').replace(/\s+/g, ' ').trim().toLowerCase();
+    if (normalized === 'applicant link') return 'applicant';
+    if (normalized === 'employer link') return 'employer';
+    if (normalized === 'fmcsa pdf') return 'fmcsaPdf';
+    if (normalized === 'fax fmcsa') return 'fax';
+    if (normalized === 'client gmail') return 'clientGmail';
+    if (normalized === 'mark completed') return 'markCompleted';
+    return '';
+  }
+
+  function phase12a108MakeButton(item, row) {
     const button = document.createElement('button');
     button.type = 'button';
     button.className = item.className;
     button.textContent = item.label;
     button.dataset.phase12a108Action = item.action;
     button.dataset.phase12a108Managed = '1';
+
+    // Attach a direct listener to the actual button. This is intentional.
+    // Earlier builds relied only on a document-level delegated handler, but older
+    // phase scripts also listen for clicks and can interfere. The direct listener
+    // keeps the action connected to the exact row that created this button.
+    button.addEventListener('click', (event) => {
+      event.preventDefault();
+      event.stopPropagation();
+      if (typeof event.stopImmediatePropagation === 'function') event.stopImmediatePropagation();
+      Promise.resolve(phase12a108RunAction(item.action, row)).catch((error) => {
+        toast(error?.message || 'Could not run this Safety Performance action.', true);
+      });
+    });
     return button;
   }
 
@@ -2462,7 +2497,7 @@
     Object.entries(groups).forEach(([name, group]) => {
       group.className = 'phase12a89-link-color-group ' + name;
     });
-    phase12a108Actions.forEach((item) => groups[item.group].appendChild(phase12a108MakeButton(item)));
+    phase12a108Actions.forEach((item) => groups[item.group].appendChild(phase12a108MakeButton(item, row)));
     ['blue', 'green', 'purple'].forEach((name) => main.appendChild(groups[name]));
     linksCell.appendChild(layout);
     row.dataset.phase12a108LinksReady = '1';
@@ -2518,23 +2553,25 @@
     if (phase12a108DelegatedStarted) return;
     phase12a108DelegatedStarted = true;
     document.addEventListener('click', (event) => {
-      const button = event.target && event.target.closest ? event.target.closest('[data-phase12a108-action]') : null;
+      let button = event.target && event.target.closest ? event.target.closest('[data-phase12a108-action]') : null;
+      if (!button && event.target && event.target.closest) {
+        const candidate = event.target.closest('button, a');
+        if (candidate && candidate.closest('.phase12a108-links-cell, .safety-links-cell, .phase12a89-links-cell')) {
+          const fallbackAction = phase12a108ActionFromLabel(text(candidate));
+          if (fallbackAction) {
+            candidate.dataset.phase12a108Action = fallbackAction;
+            button = candidate;
+          }
+        }
+      }
       if (!button) return;
       const row = button.closest('tr');
       if (!row) return;
       event.preventDefault();
       event.stopPropagation();
       if (typeof event.stopImmediatePropagation === 'function') event.stopImmediatePropagation();
-      const action = button.dataset.phase12a108Action;
-      const run = async () => {
-        if (action === 'applicant') return generateLink(row, 'applicant');
-        if (action === 'employer') return generateLink(row, 'employer');
-        if (action === 'fmcsaPdf') return phase12a107DownloadFmcsa(row);
-        if (action === 'fax') return showFaxModal(row);
-        if (action === 'clientGmail') return showClientGmailModal(row);
-        if (action === 'markCompleted') return phase12a107MarkCompleted(row);
-      };
-      Promise.resolve(run()).catch((error) => toast(error?.message || 'Could not run this report link.', true));
+      const action = button.dataset.phase12a108Action || phase12a108ActionFromLabel(text(button));
+      Promise.resolve(phase12a108RunAction(action, row)).catch((error) => toast(error?.message || 'Could not run this report link.', true));
     }, true);
   }
   // PHASE12A108_STABLE_SAFETY_LINKS END
