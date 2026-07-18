@@ -724,6 +724,57 @@ function gmailComposeUrl(to, subject, body) {
 
 function SafetyLinks({ report, companyId, company, onReportUpdated }) {
   const [busyAction, setBusyAction] = useState('');
+  const [modal, setModal] = useState(null);
+  const [templates, setTemplates] = useState([]);
+  const [templatesLoading, setTemplatesLoading] = useState(false);
+  const [templateId, setTemplateId] = useState('default');
+  const [recipient, setRecipient] = useState('');
+  const [subject, setSubject] = useState('');
+  const [body, setBody] = useState('');
+
+  function defaultTemplate(purpose) {
+    return {
+      id: 'default',
+      name: 'Manual/default',
+      subject: purpose === 'fax'
+        ? 'FMCSA Safety Performance Report - File #{{fileNumber}}'
+        : 'Safety Performance Report - {{applicantName}}',
+      body: purpose === 'fax'
+        ? 'Please see the attached FMCSA Safety Performance report for {{applicantName}}.\n\nFile Number: {{fileNumber}}\n\nThank you,\nSaffHire Background Screening'
+        : 'Please see the completed Safety Performance report for {{applicantName}}.\n\nFile Number: {{fileNumber}}\n\nThank you,\nSaffHire Background Screening',
+    };
+  }
+
+  function templateContext(extra = {}) {
+    return {
+      ...extra,
+      recipientName: extra.recipientName || report.prevEmployerName || company?.name || '',
+      faxNumber: extra.faxNumber || '',
+    };
+  }
+
+  function applyTemplate(template, purpose, extra = {}) {
+    const next = template || defaultTemplate(purpose);
+    setTemplateId(String(next.id ?? 'default'));
+    setSubject(replaceTemplateTokens(next.subject, report, templateContext(extra)));
+    setBody(replaceTemplateTokens(next.body, report, templateContext(extra)));
+  }
+
+  async function loadTemplatesForModal(purpose, extra = {}) {
+    setTemplatesLoading(true);
+    try {
+      const loaded = await fetchEmailTemplates(companyId);
+      const list = [defaultTemplate(purpose), ...loaded];
+      setTemplates(list);
+      applyTemplate(list[0], purpose, extra);
+    } catch {
+      const fallback = [defaultTemplate(purpose)];
+      setTemplates(fallback);
+      applyTemplate(fallback[0], purpose, extra);
+    } finally {
+      setTemplatesLoading(false);
+    }
+  }
 
   async function run(label, fn) {
     setBusyAction(label);
@@ -741,35 +792,49 @@ function SafetyLinks({ report, companyId, company, onReportUpdated }) {
     window.prompt(`${title} created and copied. Copy/send this link:`, data.formUrl);
   }
 
+  async function openClientGmailModal() {
+    setModal('client');
+    setRecipient(report.employerEmail || company?.email || '');
+    await loadTemplatesForModal('client', { clientName: company?.name || report.employerName || '', clientEmail: report.employerEmail || '' });
+  }
+
+  async function openFaxGmailModal() {
+    setModal('fax');
+    setRecipient(report.prevEmployerFax || report.employerFax || '');
+    await loadTemplatesForModal('fax', { faxNumber: '' });
+  }
+
+  function handleTemplateChange(nextId) {
+    const nextTemplate = templates.find((template) => String(template.id ?? 'default') === String(nextId)) || templates[0] || defaultTemplate(modal || 'client');
+    const faxDigits = modal === 'fax' ? String(recipient || '').replace(/[^0-9]/g, '') : '';
+    applyTemplate(nextTemplate, modal || 'client', { faxNumber: faxDigits, clientEmail: recipient });
+  }
+
   async function openClientGmail() {
-    const template = await chooseTemplate(companyId, report, 'client');
-    if (!template) return;
-    const subject = replaceTemplateTokens(template.subject, report);
-    const body = replaceTemplateTokens(template.body, report);
-    const to = report.employerEmail || '';
+    const to = String(recipient || '').trim();
     const draft = `To: ${to || '[enter client email]'}\nSubject: ${subject}\n\n${body}`;
     await copyToClipboard(draft);
     window.open(gmailComposeUrl(to, subject, body), '_blank', 'noopener,noreferrer');
+    setModal(null);
   }
 
   async function openFaxGmail() {
-    const rawFax = window.prompt('Enter recipient fax number:');
-    if (rawFax === null) return;
-    const digits = String(rawFax || '').replace(/[^0-9]/g, '');
+    const digits = String(recipient || '').replace(/[^0-9]/g, '');
     if (digits.length < 7) throw new Error('Recipient fax number is required.');
     const faxEmail = `${digits}@efaxsend.com`;
-    const template = await chooseTemplate(companyId, report, 'fax');
-    if (!template) return;
     const filename = await downloadFmcsaPdf(report, companyId);
-    const subject = replaceTemplateTokens(template.subject, report, { faxNumber: digits });
-    const body = replaceTemplateTokens(template.body, report, { faxNumber: digits });
-    const draft = `To: ${faxEmail}\nSubject: ${subject}\n\n${body}\n\nAttach downloaded file: ${filename}`;
+    const currentTemplate = templates.find((template) => String(template.id ?? 'default') === String(templateId)) || defaultTemplate('fax');
+    const nextSubject = subject || replaceTemplateTokens(currentTemplate.subject, report, { faxNumber: digits });
+    const nextBody = body || replaceTemplateTokens(currentTemplate.body, report, { faxNumber: digits });
+    const draft = `To: ${faxEmail}\nSubject: ${nextSubject}\n\n${nextBody}\n\nAttach downloaded file: ${filename}`;
     await copyToClipboard(draft);
     alert(`The FMCSA PDF was downloaded as ${filename}. Gmail will open now. Attach the downloaded PDF before sending.`);
-    window.open(gmailComposeUrl(faxEmail, subject, body), '_blank', 'noopener,noreferrer');
+    window.open(gmailComposeUrl(faxEmail, nextSubject, nextBody), '_blank', 'noopener,noreferrer');
+    setModal(null);
   }
 
   async function markCompleted() {
+    if (!window.confirm(`Mark file #${report.fileNumber || ''} as Completed?`)) return;
     const data = await api(`/api/safety-reports?companyId=${encodeURIComponent(companyId)}`, {
       method: 'PATCH',
       body: JSON.stringify({ ...report, status: 'Completed' }),
@@ -778,16 +843,57 @@ function SafetyLinks({ report, companyId, company, onReportUpdated }) {
   }
 
   const disabled = Boolean(busyAction);
+  const modalTitle = modal === 'fax' ? 'Fax FMCSA through Gmail' : 'Client Gmail Draft';
+  const modalPrimaryText = modal === 'fax' ? 'Download PDF & Open Gmail' : 'Open Gmail';
+  const recipientLabel = modal === 'fax' ? 'Fax Number' : 'Client Email';
+  const recipientHelp = modal === 'fax' ? 'Gmail will open to faxnumber@efaxsend.com. Attach the downloaded PDF before sending.' : 'Gmail will open with the selected template. Attach the completed FMCSA PDF if needed.';
+
   return (
-    <div className="safety-links-native">
-      <button type="button" className="safety-native-button applicant" disabled={disabled} onClick={() => run('Applicant Link', () => makeResponseLink('applicant'))}>Applicant Link</button>
-      <button type="button" className="safety-native-button employer" disabled={disabled} onClick={() => run('Employer Link', () => makeResponseLink('employer'))}>Employer Link</button>
-      <button type="button" className="safety-native-button fmcsa" disabled={disabled} onClick={() => run('FMCSA PDF', () => downloadFmcsaPdf(report, companyId))}>FMCSA PDF</button>
-      <button type="button" className="safety-native-button fax" disabled={disabled} onClick={() => run('Fax FMCSA', openFaxGmail)}>Fax FMCSA</button>
-      <button type="button" className="safety-native-button client-gmail" disabled={disabled} onClick={() => run('Client Gmail', openClientGmail)}>Client Gmail</button>
-      <button type="button" className="safety-native-button mark-completed" disabled={disabled} onClick={() => run('Mark Completed', markCompleted)}>Mark Completed</button>
-      {busyAction ? <small>Working on {busyAction}...</small> : null}
-    </div>
+    <>
+      <div className="safety-links-native">
+        <button type="button" className="safety-native-button applicant" disabled={disabled} onClick={() => run('Applicant Link', () => makeResponseLink('applicant'))}>Applicant Link</button>
+        <button type="button" className="safety-native-button employer" disabled={disabled} onClick={() => run('Employer Link', () => makeResponseLink('employer'))}>Employer Link</button>
+        <button type="button" className="safety-native-button fmcsa" disabled={disabled} onClick={() => run('FMCSA PDF', () => downloadFmcsaPdf(report, companyId))}>FMCSA PDF</button>
+        <button type="button" className="safety-native-button fax" disabled={disabled} onClick={() => run('Fax FMCSA', openFaxGmailModal)}>Fax FMCSA</button>
+        <button type="button" className="safety-native-button client-gmail" disabled={disabled} onClick={() => run('Client Gmail', openClientGmailModal)}>Client Gmail</button>
+        <button type="button" className="safety-native-button mark-completed" disabled={disabled} onClick={() => run('Mark Completed', markCompleted)}>Mark Completed</button>
+        {busyAction ? <small>Working on {busyAction}...</small> : null}
+      </div>
+      {modal ? (
+        <div className="safety-modal-backdrop" role="dialog" aria-modal="true">
+          <div className="safety-modal-card">
+            <div className="safety-modal-header">
+              <h2>{modalTitle}</h2>
+              <button type="button" className="safety-modal-close" onClick={() => setModal(null)}>×</button>
+            </div>
+            <p className="safety-modal-subtitle">File #{report.fileNumber || '—'} · {report.applicantName || 'Applicant'}</p>
+            <label className="safety-modal-field">
+              <span>{recipientLabel}</span>
+              <input value={recipient} onChange={(event) => setRecipient(event.target.value)} placeholder={modal === 'fax' ? '12145551234' : 'client@email.com'} />
+            </label>
+            <label className="safety-modal-field">
+              <span>Email Template</span>
+              <select value={templateId} onChange={(event) => handleTemplateChange(event.target.value)} disabled={templatesLoading}>
+                {templates.map((template) => <option key={String(template.id ?? 'default')} value={String(template.id ?? 'default')}>{template.name}</option>)}
+              </select>
+            </label>
+            <label className="safety-modal-field">
+              <span>Subject</span>
+              <input value={subject} onChange={(event) => setSubject(event.target.value)} />
+            </label>
+            <label className="safety-modal-field">
+              <span>Body</span>
+              <textarea value={body} onChange={(event) => setBody(event.target.value)} rows={8} />
+            </label>
+            <p className="safety-modal-note">{recipientHelp}</p>
+            <div className="safety-modal-actions">
+              <button type="button" className="secondary-btn" onClick={() => setModal(null)}>Cancel</button>
+              <button type="button" className="primary-inline" onClick={() => run(modalPrimaryText, modal === 'fax' ? openFaxGmail : openClientGmail)}>{modalPrimaryText}</button>
+            </div>
+          </div>
+        </div>
+      ) : null}
+    </>
   );
 }
 
