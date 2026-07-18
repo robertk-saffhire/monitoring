@@ -7,7 +7,7 @@
   <style>
     :root{--g:#1fff00;--ink:#0f172a;--muted:#64748b;--line:#dbe3ef;--bg:#f8fafc;--good:#166534;--bad:#991b1b;--warn:#92400e}
     *{box-sizing:border-box}body{margin:0;font-family:system-ui,-apple-system,Segoe UI,sans-serif;background:var(--bg);color:var(--ink)}
-    .layout{min-height:100vh;display:grid;grid-template-columns:260px 1fr}aside{background:#0f172a;color:#fff;padding:22px 14px;position:sticky;top:0;height:100vh}.brand{padding:0 10px 18px;border-bottom:1px solid rgba(255,255,255,.14);margin-bottom:16px}.brand h1{margin:0;font-size:24px}.brand p{margin:5px 0 0;color:#cbd5e1;font-weight:700;font-size:13px}.nav-label{margin:18px 10px 8px;color:#94a3b8;font-size:11px;font-weight:1000;letter-spacing:.14em;text-transform:uppercase}nav button{width:100%;border:0;border-radius:13px;color:#e2e8f0;background:transparent;padding:11px;text-align:left;font-weight:900;cursor:pointer;margin:4px 0}nav button.active,nav button:hover{background:rgba(31,255,0,.16);box-shadow:inset 4px 0 0 var(--g);color:#fff}nav button[hidden]{display:none}main{padding:24px}.head{display:flex;justify-content:space-between;gap:12px;align-items:flex-start;margin-bottom:18px}.head h2{margin:0 0 4px;font-size:28px}.head p{margin:0;color:var(--muted);font-weight:700}.actions{display:flex;gap:8px;flex-wrap:wrap;justify-content:flex-end}.card{background:#fff;border:1px solid var(--line);border-radius:18px;padding:16px;margin-bottom:16px;box-shadow:0 8px 24px rgba(15,23,42,.05)}.grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(175px,1fr));gap:14px}.metric b{display:block;font-size:28px}.metric span{color:var(--muted);font-weight:800}.table-wrap{overflow:auto;border:1px solid var(--line);border-radius:15px;background:#fff}table{width:100%;border-collapse:collapse;background:#fff}th,td{padding:10px;border-bottom:1px solid #e2e8f0;text-align:left;vertical-align:middle}th{background:#f8fafc;color:#475569;text-transform:uppercase;font-size:12px;white-space:nowrap}td{font-size:14px}.toolbar{display:flex;gap:10px;align-items:center;flex-wrap:wrap;margin-bottom:12px}.toolbar input,.toolbar select,input,select,textarea{border:1px solid #cbd5e1;border-radius:10px;padding:9px 10px;font:inherit;background:#fff}.toolbar input{min-width:260px;flex:1}textarea{width:260px;min-height:54px;resize:vertical}select.on{border-color:var(--g);background:rgba(31,255,0,.16);font-weight:1000}.btn{border:1px solid #16a34a;background:#ecfdf5;color:#166534;border-radius:999px;padding:9px 12px;font-weight:1000;cursor:pointer;text-decoration:none;display:inline-flex;align-items:center;gap:6px;justify-content:center}.btn:disabled{opacity:.55;cursor:not-allowed}.danger{border-color:#dc2626;background:#fef2f2;color:#991b1b}.neutral{border-color:#cbd5e1;background:#fff;color:#334155}.purple{border-color:#7c3aed;background:#f5f3ff;color:#5b21b6}.pill{display:inline-flex;border-radius:999px;padding:4px 9px;font-weight:900;font-size:12px;border:1px solid #cbd5e1}.pill.good{background:#ecfdf5;color:#166534;border-color:#bbf7d0}.pill.bad{background:#fef2f2;color:#991b1b;border-color:#fecaca}.pill.warn{background:#fffbeb;color:#92400e;border-color:#fde68a}.dirty td{background:#fffbeb!important}.hide{display:none!important}.toast{position:fixed;right:18px;bottom:18px;z-index:99999;background:#111827;color:#fff;border-radius:12px;padding:12px 14px;box-shadow:0 18px 45px rgba(15,23,42,.25);max-width:460px}.toast.bad{background:#991b1b}.form-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(210px,1fr));gap:12px;align-items:end}.form-grid label{font-weight:900;color:#334155;display:grid;gap:6px}.check{display:flex;align-items:center;gap:8px;font-weight:900;color:#334155}.empty{color:#64748b;font-weight:800}.small{font-size:12px;color:#64748b;font-weight:700}.role-note{color:#64748b;margin-top:8px}.status-completed{background:#ecfdf5;color:#166534;border-color:#bbf7d0}.status-open{background:#fff7ed;color:#9a3412;border-color:#fed7aa}@media(max-width:860px){.layout{grid-template-columns:1fr}aside{height:auto;position:relative}nav{display:flex;overflow:auto;gap:8px}nav button{white-space:nowrap}main{padding:14px}.head{display:block}.actions{justify-content:flex-start;margin-top:12px}.toolbar input{min-width:100%}textarea{width:220px}}
+    .layout{min-height:100vh;display:grid;grid-template-columns:260px 1fr}aside{background:#0f172a;color:#fff;padding:22px 14px;position:sticky;top:0;height:100vh}.brand{padding:0 10px 18px;border-bottom:1px solid rgba(255,255,255,.14);margin-bottom:16px}.brand h1{margin:0;font-size:24px}.brand p{margin:5px 0 0;color:#cbd5e1;font-weight:700;font-size:13px}.nav-label{margin:18px 10px 8px;color:#94a3b8;font-size:11px;font-weight:1000;letter-spacing:.14em;text-transform:uppercase}nav button{width:100%;border:0;border-radius:13px;color:#e2e8f0;background:transparent;padding:11px;text-align:left;font-weight:900;cursor:pointer;margin:4px 0}nav button.active,nav button:hover{background:rgba(31,255,0,.16);box-shadow:inset 4px 0 0 var(--g);color:#fff}nav button[hidden]{display:none}main{padding:24px}.head{display:flex;justify-content:space-between;gap:12px;align-items:flex-start;margin-bottom:18px}.head h2{margin:0 0 4px;font-size:28px}.head p{margin:0;color:var(--muted);font-weight:700}.actions{display:flex;gap:8px;flex-wrap:wrap;justify-content:flex-end}.card{background:#fff;border:1px solid var(--line);border-radius:18px;padding:16px;margin-bottom:16px;box-shadow:0 8px 24px rgba(15,23,42,.05)}.grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(175px,1fr));gap:14px}.metric b{display:block;font-size:28px}.metric span{color:var(--muted);font-weight:800}.table-wrap{overflow:auto;border:1px solid var(--line);border-radius:15px;background:#fff}table{width:100%;border-collapse:collapse;background:#fff}th,td{padding:10px;border-bottom:1px solid #e2e8f0;text-align:left;vertical-align:middle}th{background:#f8fafc;color:#475569;text-transform:uppercase;font-size:12px;white-space:nowrap}td{font-size:14px}.toolbar{display:flex;gap:10px;align-items:center;flex-wrap:wrap;margin-bottom:12px}.toolbar input,.toolbar select,input,select,textarea{border:1px solid #cbd5e1;border-radius:10px;padding:9px 10px;font:inherit;background:#fff}.toolbar input{min-width:260px;flex:1}textarea{width:260px;min-height:54px;resize:vertical}select.on{border-color:var(--g);background:rgba(31,255,0,.16);font-weight:1000}.btn{border:1px solid #16a34a;background:#ecfdf5;color:#166534;border-radius:999px;padding:9px 12px;font-weight:1000;cursor:pointer;text-decoration:none;display:inline-flex;align-items:center;gap:6px;justify-content:center}.btn:disabled{opacity:.55;cursor:not-allowed}.danger{border-color:#dc2626;background:#fef2f2;color:#991b1b}.neutral{border-color:#cbd5e1;background:#fff;color:#334155}.purple{border-color:#7c3aed;background:#f5f3ff;color:#5b21b6}.pill{display:inline-flex;border-radius:999px;padding:4px 9px;font-weight:900;font-size:12px;border:1px solid #cbd5e1}.pill.good{background:#ecfdf5;color:#166534;border-color:#bbf7d0}.pill.bad{background:#fef2f2;color:#991b1b;border-color:#fecaca}.pill.warn{background:#fffbeb;color:#92400e;border-color:#fde68a}.dirty td{background:#fffbeb!important}.hide{display:none!important}.toast{position:fixed;right:18px;bottom:18px;z-index:99999;background:#111827;color:#fff;border-radius:12px;padding:12px 14px;box-shadow:0 18px 45px rgba(15,23,42,.25);max-width:460px}.toast.bad{background:#991b1b}.form-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(210px,1fr));gap:12px;align-items:end}.form-grid label{font-weight:900;color:#334155;display:grid;gap:6px}.check{display:flex;align-items:center;gap:8px;font-weight:900;color:#334155}.empty{color:#64748b;font-weight:800}.small{font-size:12px;color:#64748b;font-weight:700}.role-note{color:#64748b;margin-top:8px}.status-completed{background:#ecfdf5;color:#166534;border-color:#bbf7d0}.status-open{background:#fff7ed;color:#9a3412;border-color:#fed7aa}.access-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(145px,1fr));gap:8px}.access-grid label{display:flex;gap:7px;align-items:center;font-size:12px;font-weight:900;color:#334155}.access-box{border:1px solid #dbe3ef;border-radius:14px;padding:10px;background:#f8fafc}.access-box legend{font-weight:1000;color:#0f172a;padding:0 6px}@media(max-width:860px){.layout{grid-template-columns:1fr}aside{height:auto;position:relative}nav{display:flex;overflow:auto;gap:8px}nav button{white-space:nowrap}main{padding:14px}.head{display:block}.actions{justify-content:flex-start;margin-top:12px}.toolbar input{min-width:100%}textarea{width:220px}}
   </style>
 </head>
 <body>
@@ -67,8 +67,50 @@
   function roleLabel(role) {
     return String(role || '').replaceAll('_', ' ').replace(/\b\w/g, c => c.toUpperCase());
   }
+  const CLIENT_ACCESS_OPTIONS = [
+    ['dashboard', 'Dashboard'],
+    ['monitoring', 'Monitoring'],
+    ['safetyReports', 'Safety Reports'],
+    ['userAdmin', 'User Admin'],
+    ['editMonitoring', 'Edit Monitoring']
+  ];
+  const DEFAULT_ACCESS = { dashboard: true, monitoring: true, safetyReports: true, userAdmin: true, editMonitoring: true };
+  function normalizeAccess(access) { return Object.assign({}, DEFAULT_ACCESS, access || {}); }
+  function canViewDashboard() { return Boolean(state.data?.canViewDashboard); }
+  function canViewMonitoring() { return Boolean(state.data?.canViewMonitoring); }
+  function canViewSafety() { return Boolean(state.data?.canViewSafety); }
   function canManageUsers() { return Boolean(state.data?.canManageUsers); }
   function canEditMonitoring() { return Boolean(state.data?.canEditMonitoring); }
+  function isPageAllowed(page) {
+    if (page === 'dashboard') return canViewDashboard();
+    if (page === 'monitoring') return canViewMonitoring();
+    if (page === 'safety') return canViewSafety();
+    if (page === 'users') return canManageUsers();
+    return false;
+  }
+  function allowedPage(page) {
+    if (isPageAllowed(page)) return page;
+    return ['dashboard', 'monitoring', 'safety', 'users'].find(isPageAllowed) || 'none';
+  }
+  function updateNavVisibility() {
+    document.querySelector('button[data-page="dashboard"]').hidden = !canViewDashboard();
+    document.querySelector('button[data-page="monitoring"]').hidden = !canViewMonitoring();
+    document.querySelector('button[data-page="safety"]').hidden = !canViewSafety();
+    usersNav.hidden = !canManageUsers();
+    adminLabel.hidden = !canManageUsers();
+  }
+  function accessFields(access, mode) {
+    const current = normalizeAccess(access);
+    return `<fieldset class="access-box"><legend>Client Access</legend><div class="access-grid">${CLIENT_ACCESS_OPTIONS.map(([key, label]) => `<label><input type="checkbox" data-access-key="${esc(key)}" ${current[key] !== false ? 'checked' : ''}> ${esc(label)}</label>`).join('')}</div><p class="small">Dashboard is the summary page. User Admin only works for Client Admin accounts. Edit Monitoring controls whether Monitoring records can be changed.</p></fieldset>`;
+  }
+  function readAccess(container) {
+    const access = {};
+    CLIENT_ACCESS_OPTIONS.forEach(([key]) => {
+      const el = container.querySelector(`[data-access-key="${key}"]`);
+      access[key] = Boolean(el?.checked);
+    });
+    return access;
+  }
 
   function header(title, subtitle) {
     return `<div class="head"><div><h2>${esc(title)}</h2><p>${esc(subtitle || '')}</p></div><div class="actions"><button class="btn neutral" id="refresh-btn">Refresh</button><button class="btn danger" id="logout-btn">Logout</button></div></div>`;
@@ -106,9 +148,8 @@
       state.user = state.data.user || state.user;
       clientName.textContent = state.data.company?.name || 'Client Portal';
       userName.textContent = state.user ? `${state.user.displayName || state.user.username} · ${roleLabel(state.user.role)}` : '';
-      usersNav.hidden = !canManageUsers();
-      adminLabel.hidden = !canManageUsers();
-      if (state.page === 'users' && !canManageUsers()) state.page = 'dashboard';
+      updateNavVisibility();
+      state.page = allowedPage(state.page);
       render();
     } catch (error) {
       app.className = 'card';
@@ -121,7 +162,15 @@
     location.href = '/client-login.html';
   }
   function render() {
+    updateNavVisibility();
+    state.page = allowedPage(state.page);
     document.querySelectorAll('nav button[data-page]').forEach(btn => btn.classList.toggle('active', btn.dataset.page === state.page));
+    if (state.page === 'none') {
+      app.className = '';
+      app.innerHTML = header('Client Portal', 'No portal sections are enabled for this account.') + '<section class="card"><p class="empty">Ask an admin to turn on Dashboard, Monitoring, or Safety Reports for this account.</p></section>';
+      bindHeaderButtons();
+      return;
+    }
     if (state.page === 'monitoring') return renderMonitoring();
     if (state.page === 'safety') return renderSafety();
     if (state.page === 'users') return renderUsers();
@@ -132,13 +181,26 @@
   function recentSafety() { return state.data?.recentSafetyReports || []; }
 
   function renderDashboard() {
+    if (!canViewDashboard()) {
+      state.page = allowedPage('dashboard');
+      if (state.page !== 'dashboard') return render();
+    }
     const a = state.data?.applicantStats || {};
     const s = state.data?.safetyStats || {};
+    const metricCards = [];
+    const sections = [];
+    if (canViewMonitoring()) {
+      metricCards.push(metric('Total Monitoring', a.total), metric('On Monitoring', a.on_monitoring), metric('Off Monitoring', a.off_monitoring), metric('Med Cert Expired', a.expired_medical), metric('Med Cert 30 Days', a.expiring_30));
+      sections.push(`<section class="card"><h3>Recent Monitoring</h3>${monitoringTable(recentApplicants().slice(0, 10), false)}</section>`);
+    }
+    if (canViewSafety()) {
+      metricCards.push(metric('Safety Reports', s.total), metric('Open Safety', s.open), metric('Completed Safety', s.completed));
+      sections.push(`<section class="card"><h3>Recent Safety Reports</h3>${safetyTable(recentSafety().slice(0, 10))}</section>`);
+    }
     app.className = '';
     app.innerHTML = header('Dashboard', state.data?.company?.name || '') +
-      `<div class="grid">${metric('Total Monitoring', a.total)}${metric('On Monitoring', a.on_monitoring)}${metric('Off Monitoring', a.off_monitoring)}${metric('Med Cert Expired', a.expired_medical)}${metric('Med Cert 30 Days', a.expiring_30)}${metric('Safety Reports', s.total)}${metric('Open Safety', s.open)}${metric('Completed Safety', s.completed)}</div>` +
-      `<section class="card"><h3>Recent Monitoring</h3>${monitoringTable(recentApplicants().slice(0, 10), false)}</section>` +
-      `<section class="card"><h3>Recent Safety Reports</h3>${safetyTable(recentSafety().slice(0, 10))}</section>`;
+      (metricCards.length ? `<div class="grid">${metricCards.join('')}</div>` : '<section class="card"><p class="empty">No dashboard sections are enabled for this account.</p></section>') +
+      sections.join('');
     bindHeaderButtons();
   }
 
@@ -167,6 +229,12 @@
     }).join('')}</tbody></table></div>`;
   }
   function renderMonitoring() {
+    if (!canViewMonitoring()) {
+      app.className = '';
+      app.innerHTML = header('Monitoring', 'Access not enabled.') + '<section class="card"><p class="empty">This account does not have Monitoring access.</p></section>';
+      bindHeaderButtons();
+      return;
+    }
     const rows = monitoringRowsFiltered();
     app.className = '';
     app.innerHTML = header('Monitoring', canEditMonitoring() ? 'Client-scoped Monitoring records. You can update Monitoring status, notes, and terminated status.' : 'Read-only client-scoped Monitoring records.') +
@@ -223,6 +291,12 @@
     return `<div class="table-wrap"><table><thead><tr><th>File #</th><th>Applicant</th><th>Created</th><th>Status</th><th>Previous Employer</th><th>Client Notes</th><th>PDF</th></tr></thead><tbody>${rows.map(row => `<tr><td><b>${esc(row.fileNumber)}</b></td><td>${esc(row.applicantName)}</td><td>${esc(fmt(row.created))}</td><td>${statusPill(row.status)}</td><td>${esc(row.prevEmployerName)}</td><td>${esc(row.notes)}</td><td>${String(row.status || '') === 'Completed' ? `<button class="btn purple" data-action="download-pdf" data-id="${esc(row.id)}">Download PDF</button>` : '<span class="small">Available when completed</span>'}</td></tr>`).join('')}</tbody></table></div>`;
   }
   function renderSafety() {
+    if (!canViewSafety()) {
+      app.className = '';
+      app.innerHTML = header('Safety Reports', 'Access not enabled.') + '<section class="card"><p class="empty">This account does not have Safety Reports access.</p></section>';
+      bindHeaderButtons();
+      return;
+    }
     const rows = safetyRowsFiltered();
     const statuses = ['all','Consent Needed','Consent Given','S1 Complete','Emp Sent','Emp Complete','Completed'];
     app.className = '';
@@ -254,8 +328,8 @@
       const roleOptions = state.user?.role === 'admin'
         ? ['client_admin', 'client_user', 'viewer', 'user']
         : ['client_user', 'viewer'];
-      app.innerHTML = header('User Admin', 'Add, edit, reset, deactivate, or delete client users.') +
-        `<section class="card"><h3>Add Client User</h3><form id="add-user-form" class="form-grid"><label>Display Name<input name="displayName" autocomplete="off"></label><label>Email / Username<input name="username" required autocomplete="off"></label><label>Temporary Password<input name="password" required minlength="8" type="password"></label><label>Role<select name="role">${roleOptions.map(role => `<option value="${role}">${roleLabel(role)}</option>`).join('')}</select></label><button class="btn">Add User</button></form><p class="role-note">Temporary passwords must be at least 8 characters. Client admins can create Client User or Viewer accounts.</p></section>` +
+      app.innerHTML = header('User Admin', 'Choose which client portal sections each account can access.') +
+        `<section class="card"><h3>Add Client User</h3><form id="add-user-form" class="form-grid"><label>Display Name<input name="displayName" autocomplete="off"></label><label>Email / Username<input name="username" required autocomplete="off"></label><label>Temporary Password<input name="password" required minlength="8" type="password"></label><label>Role<select name="role">${roleOptions.map(role => `<option value="${role}">${roleLabel(role)}</option>`).join('')}</select></label><div style="grid-column:1/-1">${accessFields(DEFAULT_ACCESS, 'add')}</div><button class="btn">Add User</button></form><p class="role-note">Access options: Dashboard, Monitoring, Safety Reports, User Admin, and Edit Monitoring. User Admin only applies to Client Admin accounts.</p></section>` +
         `<section class="card"><h3>Client Users</h3>${usersTable(users, roleOptions)}</section>`;
       bindHeaderButtons();
       bindUsers(roleOptions);
@@ -266,12 +340,13 @@
   }
   function usersTable(users, roleOptions) {
     if (!users.length) return '<p class="empty">No client users found.</p>';
-    return `<div class="table-wrap"><table><thead><tr><th>Name</th><th>Username</th><th>Role</th><th>Status</th><th>Last Sign In</th><th>Actions</th></tr></thead><tbody>${users.map(user => `<tr data-user-id="${esc(user.id)}"><td><input data-field="displayName" value="${esc(user.displayName || '')}"></td><td>${esc(user.username)}</td><td><select data-field="role">${roleOptions.map(role => `<option value="${role}" ${user.role === role ? 'selected' : ''}>${roleLabel(role)}</option>`).join('')}</select></td><td><select data-field="isActive"><option value="true" ${user.isActive !== false ? 'selected' : ''}>Active</option><option value="false" ${user.isActive === false ? 'selected' : ''}>Inactive</option></select></td><td>${esc(user.lastSignedIn ? new Date(user.lastSignedIn).toLocaleString() : '')}</td><td><button class="btn" data-action="save-user">Save</button> <button class="btn neutral" data-action="reset-user">Reset Password</button> <button class="btn danger" data-action="delete-user">Delete</button></td></tr>`).join('')}</tbody></table></div>`;
+    return `<div class="table-wrap"><table><thead><tr><th>Name</th><th>Username</th><th>Role</th><th>Access</th><th>Status</th><th>Last Sign In</th><th>Actions</th></tr></thead><tbody>${users.map(user => `<tr data-user-id="${esc(user.id)}"><td><input data-field="displayName" value="${esc(user.displayName || '')}"></td><td>${esc(user.username)}</td><td><select data-field="role">${roleOptions.map(role => `<option value="${role}" ${user.role === role ? 'selected' : ''}>${roleLabel(role)}</option>`).join('')}</select></td><td>${accessFields(user.clientAccess, 'row')}</td><td><select data-field="isActive"><option value="true" ${user.isActive !== false ? 'selected' : ''}>Active</option><option value="false" ${user.isActive === false ? 'selected' : ''}>Inactive</option></select></td><td>${esc(user.lastSignedIn ? new Date(user.lastSignedIn).toLocaleString() : '')}</td><td><button class="btn" data-action="save-user">Save</button> <button class="btn neutral" data-action="reset-user">Reset Password</button> <button class="btn danger" data-action="delete-user">Delete</button></td></tr>`).join('')}</tbody></table></div>`;
   }
   function bindUsers(roleOptions) {
     document.getElementById('add-user-form')?.addEventListener('submit', async event => {
       event.preventDefault();
       const body = Object.fromEntries(new FormData(event.target).entries());
+      body.clientAccess = readAccess(event.target);
       try {
         await api('client-users', {method:'POST', body: JSON.stringify(body)});
         toast('Client user added.');
@@ -287,7 +362,8 @@
             id: Number(row.dataset.userId),
             displayName: row.querySelector('[data-field="displayName"]').value,
             role: row.querySelector('[data-field="role"]').value,
-            isActive: row.querySelector('[data-field="isActive"]').value === 'true'
+            isActive: row.querySelector('[data-field="isActive"]').value === 'true',
+            clientAccess: readAccess(row)
           })});
           toast('User saved.');
           await load();
@@ -321,7 +397,7 @@
 
   document.querySelectorAll('nav button[data-page]').forEach(button => {
     button.addEventListener('click', () => {
-      state.page = button.dataset.page;
+      state.page = allowedPage(button.dataset.page);
       render();
     });
   });
