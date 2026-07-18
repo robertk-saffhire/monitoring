@@ -2389,3 +2389,24 @@
 })();
 
 /* PHASE12A104_DASHBOARD_CARDS_DISABLED: dashboard drilldowns are now implemented natively in src/main.jsx. */
+
+/* PHASE12A106_SCOPE_MONITORING_ALERTS: remove old injected alert panels outside Monitoring. */
+(function () {
+  function text(el) { return (el && el.textContent ? el.textContent : '').trim(); }
+  function isMonitoringPage() {
+    return Array.from(document.querySelectorAll('.page-header h1')).some((h) => text(h) === 'Monitoring');
+  }
+  function removeOldAlertPanelsOutsideMonitoring() {
+    if (isMonitoringPage()) return;
+    const candidates = Array.from(document.querySelectorAll('#monitoring-alerts-panel, #stable-monitoring-alerts-panel, section.card, div.card'));
+    candidates.forEach((el) => {
+      const t = text(el);
+      if (el.id === 'monitoring-alerts-panel' || el.id === 'stable-monitoring-alerts-panel' || (t.includes('Monitoring Alerts') && t.includes('Expired Medical') && t.includes('Expiring 30 Days'))) {
+        el.remove();
+      }
+    });
+  }
+  setInterval(removeOldAlertPanelsOutsideMonitoring, 300);
+  if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', removeOldAlertPanelsOutsideMonitoring);
+  else removeOldAlertPanelsOutsideMonitoring();
+})();
