@@ -2504,6 +2504,7 @@
   }
 
   function phase12a108StabilizeSafetyLinks() {
+    return;
     if (!isSafetyPage() || phase12a80EmailSettingsActive) return;
     phase12a108StartDelegatedHandler();
     phase12a108StartObserver();
@@ -2596,22 +2597,17 @@
       return;
     }
     if (!isSafetyPage()) return;
+    // Safety Performance link buttons are now rendered natively by React in src/main.jsx.
+    // Do not rebuild, move, or re-bind those buttons here; old DOM patching caused
+    // duplicate buttons and disconnected click handlers.
     startLegacyButtonObserver();
     addPanel();
     removeLegacySafetyButtons();
     phase12a88RemoveFollowUpColumn();
-    phase12a90CollapseDuplicateLinksColumns();
-    addButtons();
-    phase12a90CollapseDuplicateLinksColumns();
-    phase12a89NormalizeLinksColumn();
     phase12a87EnhanceNotes();
-    removeLegacySafetyButtons();
-    phase12a90CollapseDuplicateLinksColumns();
-    phase12a89NormalizeLinksColumn();
     ensureSafetyStatusOptions();
     makeSafetyTablesSortable();
     hookSafetyRefreshButton();
-    phase12a108StabilizeSafetyLinks();
   }
 
   setInterval(refresh, 1000);
