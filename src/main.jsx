@@ -677,9 +677,8 @@ function Safety({ reports, setReports, company, refresh, companyId, dashboardFil
       <section className="card toolbar"><div className="search-box"><Search size={17} /><input placeholder="Search file #, applicant, employer, notes..." value={query} onChange={(e) => setQuery(e.target.value)} /></div><select value={status} onChange={(e) => setStatus(e.target.value)}><option>All</option>{STATUSES.map((s) => <option key={s}>{s}</option>)}</select></section>
       <section className="card table-card">
         <table>
-          <thead><tr><th>File #</th><th>Applicant</th><th>Created</th><th>Status</th><th>Follow Up</th><th>Previous Employer</th><th>Notes</th><th>Phase 4 Actions</th><th></th></tr></thead>
+          <thead><tr><th>File #</th><th>Applicant</th><th>Created</th><th>Status</th><th>Follow Up</th><th>Previous Employer</th><th>Notes</th><th>Links</th><th></th></tr></thead>
           <tbody>{filtered.map((r) => {
-            const draft = buildEmployerEmailDraft(r, company);
             return (
               <tr key={r.id}>
                 <td><b>{r.fileNumber}</b></td>
@@ -689,13 +688,7 @@ function Safety({ reports, setReports, company, refresh, companyId, dashboardFil
                 <td>{r.followUpDate}</td>
                 <td>{r.prevEmployerName}<small>{r.prevEmployerEmail || 'No email saved'}</small></td>
                 <td className="notes-cell">{r.notes}</td>
-                <td>
-                  <div className="row-actions action-stack">
-                    <button className="mini-action" onClick={() => printSafetyReport(r, company)} title="Open printable report and save as PDF"><Printer size={14} /> PDF</button>
-                    <button className="mini-action" onClick={() => openEmployerEmail(r, company)} title="Copy draft and open email client"><Mail size={14} /> Email</button>
-                    <button className="mini-action" onClick={() => copyDraftToClipboard(draft)} title="Copy employer email draft"><Copy size={14} /> Copy</button>
-                  </div>
-                </td>
+                <td className="safety-links-cell" data-safety-links="true"></td>
                 <td><div className="row-actions"><button className="icon-btn" onClick={() => { setEditing(r); setMode('edit'); }}><Pencil size={15} /></button><button className="icon-btn danger" onClick={() => deleteReport(r)}><Trash2 size={15} /></button></div></td>
               </tr>
             );
