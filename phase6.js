@@ -2387,3 +2387,292 @@
   if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', refresh);
   else refresh();
 })();
+
+/* PHASE12A100_DASHBOARD_STATUS_CARDS */
+(function () {
+  const STYLE_ID = 'phase12a100-dashboard-style';
+  const PANEL_ID = 'phase12a100-dashboard-panel';
+  let lastKey = '';
+  let loading = false;
+
+  function text(el) {
+    return (el && el.textContent ? el.textContent : '').trim();
+  }
+
+  function isDashboardPage() {
+    const h1 = document.querySelector('.page-header h1, .head h2, h1');
+    return text(h1) === 'Dashboard';
+  }
+
+  function esc(value) {
+    return String(value ?? '')
+      .replaceAll('&', '&amp;')
+      .replaceAll('<', '&lt;')
+      .replaceAll('>', '&gt;')
+      .replaceAll('"', '&quot;')
+      .replaceAll("'", '&#039;');
+  }
+
+  async function api(path, params) {
+    const search = new URLSearchParams();
+    search.set('path', path);
+    if (params && typeof params === 'object') {
+      Object.entries(params).forEach(([key, value]) => {
+        if (value !== undefined && value !== null && value !== '') search.set(key, String(value));
+      });
+    }
+    const route = '/api/index?' + search.toString();
+    const res = await fetch(route, { credentials: 'include' });
+    const raw = await res.text();
+    let data = {};
+    try { data = raw ? JSON.parse(raw) : {}; } catch { throw new Error('Server returned non-JSON while loading dashboard.'); }
+    if (!res.ok) throw new Error(data.message || raw || 'Dashboard request failed.');
+    return data;
+  }
+
+  function selectedCompanyId(companies) {
+    const select = document.querySelector('.company-switcher select');
+    if (select && select.value) return Number(select.value);
+    const first = Array.isArray(companies) && companies.length ? companies[0] : null;
+    return first && first.id ? Number(first.id) : 1;
+  }
+
+  function parseDate(raw) {
+    const s = String(raw || '').trim();
+    if (!s) return null;
+    let m = s.match(/^(\d{4})[-/](\d{1,2})[-/](\d{1,2})/);
+    if (m) return new Date(Number(m[1]), Number(m[2]) - 1, Number(m[3]));
+    m = s.match(/^(\d{1,2})[-/](\d{1,2})[-/](\d{2,4})$/);
+    if (m) {
+      const year = m[3].length === 2 ? Number('20' + m[3]) : Number(m[3]);
+      return new Date(year, Number(m[1]) - 1, Number(m[2]));
+    }
+    const d = new Date(s);
+    return Number.isNaN(d.getTime()) ? null : new Date(d.getFullYear(), d.getMonth(), d.getDate());
+  }
+
+  function isWithin30(raw) {
+    const d = parseDate(raw);
+    if (!d) return false;
+    const now = new Date();
+    const today = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+    const days = Math.ceil((d.getTime() - today.getTime()) / 86400000);
+    return days >= 0 && days <= 30;
+  }
+
+  function status(row) {
+    return String(row && row.status ? row.status : '').trim();
+  }
+
+  function getCounts(applicants, reports) {
+    const totalApplicants = applicants.length;
+    const onMonitor = applicants.filter((a) => String(a.monitorStatus || '').trim() === 'On').length;
+    const offMonitor = totalApplicants - onMonitor;
+    const medExpiring = applicants.filter((a) => isWithin30(a.medExpire)).length;
+    const totalReports = reports.length;
+    const completed = reports.filter((r) => status(r) === 'Completed').length;
+    return {
+      totalApplicants,
+      onMonitor,
+      offMonitor,
+      medExpiring,
+      onPercent: totalApplicants ? Math.round((onMonitor / totalApplicants) * 100) : 0,
+      totalReports,
+      consentNeeded: reports.filter((r) => ['Consent Needed', 'S1 Complete'].includes(status(r))).length,
+      consentGiven: reports.filter((r) => ['Consent Given', 'Emp Sent'].includes(status(r))).length,
+      ordersOpen: reports.filter((r) => status(r) !== 'Completed').length,
+      completed
+    };
+  }
+
+  function card(label, value, sub, accent, icon, viewList) {
+    return `
+      <div class="phase12a100-card">
+        <div class="phase12a100-card-head">
+          <span>${esc(label)}</span>
+          <i class="phase12a100-icon phase12a100-${esc(accent || 'blue')}">${icon || ''}</i>
+        </div>
+        <strong>${esc(value)}</strong>
+        ${sub ? `<p>${esc(sub)}</p>` : ''}
+        ${viewList ? '<button type="button" data-phase12a100-view-list>View list ›</button>' : ''}
+      </div>`;
+  }
+
+  function render(counts) {
+    const header = document.querySelector('.page-header, .head');
+    if (!header) return;
+
+    document.body.classList.add('phase12a100-dashboard-active');
+    document.querySelectorAll('.grid.cards, #phase12a100-dashboard-panel').forEach((el) => el.remove());
+
+    const panel = document.createElement('div');
+    panel.id = PANEL_ID;
+    panel.innerHTML = `
+      <section class="phase12a100-section">
+        <h3>Monitoring</h3>
+        <div class="phase12a100-grid phase12a100-grid-4">
+          ${card('Total Applicants', counts.totalApplicants, '', 'blue', '👥', true)}
+          ${card('On Monitor', counts.onMonitor, `${counts.onPercent}% of total`, 'green', '⌁', false)}
+          ${card('Off Monitor', counts.offMonitor, '', 'gray', '✓', false)}
+          ${card('Med Certs Expiring', counts.medExpiring, 'within 30 days — click to view', 'red', '⚠', true)}
+        </div>
+      </section>
+      <section class="phase12a100-section">
+        <h3>Safety Performance Reports</h3>
+        <div class="phase12a100-grid phase12a100-grid-5">
+          ${card('Total Reports', counts.totalReports, '', 'blue', '▤', true)}
+          ${card('Consent Needed', counts.consentNeeded, '', 'green', '◷', false)}
+          ${card('Consent Given', counts.consentGiven, '', 'blue', '⌁', false)}
+          ${card('Orders Open', counts.ordersOpen, 'not completed', 'orange', '◉', false)}
+          ${card('Completed', counts.completed, '', 'gray', '✓', false)}
+        </div>
+      </section>`;
+    header.insertAdjacentElement('afterend', panel);
+  }
+
+  function addStyles() {
+    if (document.getElementById(STYLE_ID)) return;
+    const style = document.createElement('style');
+    style.id = STYLE_ID;
+    style.textContent = `
+      .phase12a100-dashboard-active .metric,
+      .phase12a100-dashboard-active .wide-card:has(.status-list) {
+        display: none !important;
+      }
+      #phase12a100-dashboard-panel {
+        display: block;
+      }
+      .phase12a100-section {
+        margin: 24px 0 30px;
+      }
+      .phase12a100-section h3 {
+        margin: 0 0 12px;
+        color: #64748b;
+        font-size: 12px;
+        letter-spacing: .12em;
+        text-transform: uppercase;
+        font-weight: 900;
+      }
+      .phase12a100-grid {
+        display: grid;
+        gap: 16px;
+      }
+      .phase12a100-grid-4 { grid-template-columns: repeat(4, minmax(0, 1fr)); }
+      .phase12a100-grid-5 { grid-template-columns: repeat(5, minmax(0, 1fr)); }
+      .phase12a100-card {
+        background: #fff;
+        border: 1px solid #dbe3ef;
+        border-radius: 13px;
+        padding: 22px;
+        min-height: 140px;
+        box-shadow: 0 2px 5px rgba(15,23,42,.12);
+      }
+      .phase12a100-card-head {
+        display: flex;
+        justify-content: space-between;
+        align-items: flex-start;
+        gap: 12px;
+        margin-bottom: 12px;
+      }
+      .phase12a100-card-head span {
+        color: #64748b;
+        font-size: 12px;
+        font-weight: 900;
+        letter-spacing: .04em;
+        text-transform: uppercase;
+      }
+      .phase12a100-card strong {
+        display: block;
+        color: #1f2937;
+        font-size: 36px;
+        line-height: 1.05;
+        font-weight: 1000;
+      }
+      .phase12a100-card p {
+        margin: 8px 0 0;
+        color: #64748b;
+        font-size: 13px;
+      }
+      .phase12a100-card button {
+        margin-top: 26px;
+        border: 0;
+        background: transparent;
+        color: #1d4ed8;
+        padding: 0;
+        font-weight: 900;
+        cursor: pointer;
+      }
+      .phase12a100-icon {
+        width: 36px;
+        height: 36px;
+        border-radius: 9px;
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        font-style: normal;
+        font-size: 18px;
+        font-weight: 900;
+      }
+      .phase12a100-blue { background:#e0e7ff; color:#1d4ed8; }
+      .phase12a100-green { background:#dcfce7; color:#16a34a; }
+      .phase12a100-gray { background:#e5e7eb; color:#64748b; }
+      .phase12a100-red { background:#ffe4e6; color:#ef4444; }
+      .phase12a100-orange { background:#ffedd5; color:#f59e0b; }
+      @media(max-width: 1200px) {
+        .phase12a100-grid-4, .phase12a100-grid-5 { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+      }
+      @media(max-width: 720px) {
+        .phase12a100-grid-4, .phase12a100-grid-5 { grid-template-columns: 1fr; }
+      }
+    `;
+    document.head.appendChild(style);
+  }
+
+  async function loadAndRender(force) {
+    if (!isDashboardPage()) {
+      document.body.classList.remove('phase12a100-dashboard-active');
+      return;
+    }
+    addStyles();
+    if (loading) return;
+    loading = true;
+    try {
+      const companiesResponse = await api('companies');
+      const companyId = selectedCompanyId(companiesResponse.companies || []);
+      const [applicantsResponse, reportsResponse] = await Promise.all([
+        api('applicants', { companyId }),
+        api('safety-reports', { companyId })
+      ]);
+      const applicants = applicantsResponse.applicants || [];
+      const reports = reportsResponse.reports || [];
+      const key = JSON.stringify({
+        a: applicants.length,
+        r: reports.length,
+        on: applicants.filter((x) => String(x.monitorStatus || '').trim() === 'On').length,
+        m: applicants.filter((x) => isWithin30(x.medExpire)).length,
+        s: reports.map((x) => status(x)).join('|')
+      });
+      if (force || key !== lastKey || !document.getElementById(PANEL_ID)) {
+        lastKey = key;
+        render(getCounts(applicants, reports));
+      }
+    } catch (err) {
+      // Leave the base dashboard visible if this patch cannot load its data.
+      console.warn('Phase 12A-100 dashboard cards failed:', err);
+    } finally {
+      loading = false;
+    }
+  }
+
+  function boot() {
+    addStyles();
+    loadAndRender(true);
+    setInterval(() => loadAndRender(false), 1500);
+    new MutationObserver(() => {
+      if (isDashboardPage() && !document.getElementById(PANEL_ID)) loadAndRender(true);
+    }).observe(document.body, { childList: true, subtree: true });
+  }
+
+  if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', boot);
+  else boot();
+})();
