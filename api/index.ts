@@ -87,6 +87,7 @@ function requireAdmin(user: any, res: any) { if (user.role !== 'admin') { json(r
 function isAdmin(user: any) { return user?.role === 'admin'; }
 function isClientAdmin(user: any) { return user?.role === 'client_admin'; }
 function canManageClientUsers(user: any) { return isAdmin(user) || isClientAdmin(user); }
+function canEditClientMonitoring(user: any) { return ['admin', 'user', 'client_admin', 'client_user'].includes(String(user?.role || '')); }
 function requestedCompanyId(req: any, user: any) {
   const url = new URL(req.url || '/', 'https://local.test');
   const requested = Number(url.searchParams.get('companyId') || user.companyId || 1);
@@ -631,6 +632,7 @@ async function changePassword(req: any, res: any, user: any) {
 
 async function clientApplicantUpdate(req: any, res: any, user: any) {
   if (req.method !== 'PATCH') return json(res, 405, { status: 'error', message: 'Method not allowed' });
+  if (!canEditClientMonitoring(user)) return json(res, 403, { status: 'error', message: 'This client account is view-only' });
   if (!requireCompanyScope(user, res)) return;
 
   const companyId = requestedCompanyId(req, user);
@@ -676,23 +678,6 @@ async function clientDashboard(req: any, res: any, user: any) {
   const companyId = requestedCompanyId(req, user);
 
   const company = await query('select id, name, slug, "isActive" from companies where id=$1 limit 1', [companyId]);
-  const applicantStats = await query(
-    `select count(*)::int as total,
-      count(*) filter (where "monitorStatus"='On')::int as on_monitoring,
-      count(*) filter (where "monitorStatus"<>'On' or "monitorStatus" is null)::int as off_monitoring,
-      count(*) filter (where "medExpire" is null or "medExpire"='')::int as blank_med_expire,
-      count(*) filter (where "medExpire" is not null and "medExpire"<>'' and "medExpire"::date < current_date)::int as expired_medical,
-      count(*) filter (where "medExpire" is not null and "medExpire"<>'' and "medExpire"::date between current_date and current_date + interval '30 days')::int as expiring_30,
-      count(*) filter (where "medExpire" is not null and "medExpire"<>'' and "medExpire"::date between current_date + interval '31 days' and current_date + interval '60 days')::int as expiring_60
-     from applicants where "companyId"=$1`, [companyId]);
-
-  const safetyStats = await query(
-    `select count(*)::int as total,
-      count(*) filter (where status='S1 Complete')::int as s1_complete,
-      count(*) filter (where status='Emp Sent')::int as emp_sent,
-      count(*) filter (where status='Emp Complete')::int as emp_complete,
-      count(*) filter (where status='Completed')::int as completed
-     from safety_reports where "companyId"=$1`, [companyId]);
 
   const recentApplicants = await query(
     `select id, "fileNumber", "applicantName" as name, "orderDate", "monitorStatus", "mvrStatus", "medExpire", "terminated", notes
@@ -701,25 +686,78 @@ async function clientDashboard(req: any, res: any, user: any) {
   const recentSafety = await query(
     `select id, "fileNumber", "applicantName", created, status, "followUpDate", "prevEmployerName", notes
      from safety_reports where "companyId"=$1 order by id desc limit 1000`, [companyId]);
+
+  function clientDateOnly(value: any) {
+    const raw = String(value || '').trim();
+    if (!raw) return null;
+    let match = raw.match(/^(\d{4})[-/](\d{1,2})[-/](\d{1,2})/);
+    if (match) return new Date(Number(match[1]), Number(match[2]) - 1, Number(match[3]));
+    match = raw.match(/^(\d{1,2})[-/](\d{1,2})[-/](\d{2,4})$/);
+    if (match) {
+      const year = String(match[3]).length === 2 ? Number(`20${match[3]}`) : Number(match[3]);
+      return new Date(year, Number(match[1]) - 1, Number(match[2]));
+    }
+    const date = new Date(raw);
+    return Number.isNaN(date.getTime()) ? null : new Date(date.getFullYear(), date.getMonth(), date.getDate());
+  }
+
+  const todayRaw = new Date();
+  const today = new Date(todayRaw.getFullYear(), todayRaw.getMonth(), todayRaw.getDate());
+  const applicants = recentApplicants.rows || [];
+  const applicantStats = applicants.reduce((out: any, row: any) => {
+    const monitorOn = String(row.monitorStatus || '') === 'On';
+    const medDate = clientDateOnly(row.medExpire);
+    const days = medDate ? Math.ceil((medDate.getTime() - today.getTime()) / 86400000) : null;
+    out.total += 1;
+    if (monitorOn) out.on_monitoring += 1;
+    else out.off_monitoring += 1;
+    if (!String(row.medExpire || '').trim()) out.blank_med_expire += 1;
+    if (days !== null && days < 0) out.expired_medical += 1;
+    if (days !== null && days >= 0 && days <= 30) out.expiring_30 += 1;
+    if (days !== null && days >= 31 && days <= 60) out.expiring_60 += 1;
+    if (Boolean(row.terminated)) out.terminated += 1;
+    return out;
+  }, { total: 0, on_monitoring: 0, off_monitoring: 0, blank_med_expire: 0, expired_medical: 0, expiring_30: 0, expiring_60: 0, terminated: 0 });
+
+  const safetyRows = recentSafety.rows || [];
+  const safetyStats = safetyRows.reduce((out: any, row: any) => {
+    const status = String(row.status || '');
+    out.total += 1;
+    if (status === 'Consent Needed') out.consent_needed += 1;
+    if (status === 'Consent Given') out.consent_given += 1;
+    if (status === 'S1 Complete') out.s1_complete += 1;
+    if (status === 'Emp Sent') out.emp_sent += 1;
+    if (status === 'Emp Complete') out.emp_complete += 1;
+    if (status === 'Completed') out.completed += 1;
+    if (status !== 'Completed') out.open += 1;
+    return out;
+  }, { total: 0, consent_needed: 0, consent_given: 0, s1_complete: 0, emp_sent: 0, emp_complete: 0, completed: 0, open: 0 });
+
   const clientVisibleSafetyNotes = await getClientVisibleSafetyNotes(companyId);
-  const clientSafeSafetyReports = recentSafety.rows.map((row: any) => ({
+  const clientSafeSafetyReports = safetyRows.map((row: any) => ({
     ...row,
     notes: clientVisibleSafetyNotes.get(Number(row.id)) || ''
   }));
 
-  const clientUsers = await query(
-    `select id, username, "displayName", role, "companyId", "isActive", "mustChangePassword", "lastSignedIn"
-     from local_users where "companyId"=$1 order by id asc`, [companyId]);
+  let users: any[] = [];
+  if (canManageClientUsers(user)) {
+    const clientUsers = await query(
+      `select id, username, "displayName", role, "companyId", "isActive", "mustChangePassword", "lastSignedIn"
+       from local_users where "companyId"=$1 order by id asc`, [companyId]);
+    users = clientUsers.rows.map(publicUser);
+  }
 
   return json(res, 200, {
     status: 'ok',
     company: company.rows[0] || { id: companyId, name: `Company ${companyId}` },
-    applicantStats: applicantStats.rows[0] || {},
-    safetyStats: safetyStats.rows[0] || {},
-    recentApplicants: recentApplicants.rows,
+    user: publicUser(user),
+    applicantStats,
+    safetyStats,
+    recentApplicants: applicants,
     recentSafetyReports: clientSafeSafetyReports,
-    users: clientUsers.rows.map(publicUser),
-    canManageUsers: canManageClientUsers(user)
+    users,
+    canManageUsers: canManageClientUsers(user),
+    canEditMonitoring: canEditClientMonitoring(user)
   });
 }
 
@@ -755,11 +793,17 @@ async function clientUsers(req: any, res: any, user: any) {
     let role = String(body.role || current.rows[0].role || 'client_user');
     const allowed = isAdmin(user) ? new Set(['client_admin','client_user','viewer','user']) : new Set(['client_user','viewer']);
     if (!allowed.has(role)) role = current.rows[0].role || 'client_user';
+    const nextActive = body.isActive !== false;
+    if (id === user.id && (!nextActive || role === 'viewer')) {
+      return json(res, 400, { status: 'error', message: 'You cannot remove your own client admin access from this page' });
+    }
 
-    let params: any[] = [String(body.displayName || ''), role, body.isActive !== false];
+    let params: any[] = [String(body.displayName || ''), role, nextActive];
     let sql = 'update local_users set "displayName"=$1, role=$2, "isActive"=$3, "updatedAt"=now()';
     if (body.password) {
-      params.push(await bcrypt.hash(String(body.password), 12));
+      const newPassword = String(body.password || '');
+      if (newPassword.length < 8) return json(res, 400, { status: 'error', message: 'Temporary password must be at least 8 characters' });
+      params.push(await bcrypt.hash(newPassword, 12));
       sql += `, "passwordHash"=$${params.length}, "mustChangePassword"=true`;
     }
     params.push(id, companyId);
