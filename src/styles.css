@@ -74,3 +74,7 @@
 .safety-modal-note{background:#f8fafc;border:1px solid var(--line);border-radius:12px;padding:10px 12px;color:#475569;font-size:13px;line-height:1.45}
 .safety-modal-actions{display:flex;justify-content:flex-end;gap:10px;margin-top:14px}
 @media(max-width:700px){.safety-modal-card{padding:16px}.safety-modal-actions{display:block}.safety-modal-actions button{width:100%;margin-top:8px}}
+.safety-link-modal-card textarea[readonly]{background:#f8fafc;color:#0f172a;cursor:text}
+.safety-link-modal-actions{flex-wrap:wrap;justify-content:flex-start}
+.safety-link-modal-actions .secondary-btn,.safety-link-modal-actions .primary-inline{width:auto;margin-top:0}
+.safety-modal-backdrop input,.safety-modal-backdrop select,.safety-modal-backdrop textarea{pointer-events:auto!important;user-select:text!important}

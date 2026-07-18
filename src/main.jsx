@@ -722,6 +722,53 @@ function gmailComposeUrl(to, subject, body) {
     + `&body=${encodeURIComponent(body || '')}`;
 }
 
+function buildSafetyResponseLinkDraft(link, report, responseRole) {
+  const isApplicant = responseRole === 'applicant';
+  const applicant = report?.applicantName || '[Applicant Name]';
+  const fileNumber = report?.fileNumber || '';
+  const to = isApplicant ? '' : (report?.prevEmployerEmail || '');
+  const subject = isApplicant
+    ? `Applicant Safety Performance Verification${fileNumber ? ` - File #${fileNumber}` : ''}`
+    : `Safety Performance Form Request${fileNumber ? ` - File #${fileNumber}` : ''}`;
+  const body = isApplicant ? [
+    'Hello,',
+    '',
+    'SaffHire Background Screening needs you to review the Safety Performance form information below.',
+    '',
+    `Applicant: ${applicant}`,
+    fileNumber ? `File Number: ${fileNumber}` : '',
+    '',
+    'Please use this secure link to verify the previous employer / prospective employer information and sign electronically:',
+    link,
+    '',
+    'Thank you,',
+    'SaffHire Background Screening',
+  ].filter(Boolean).join('\n') : [
+    'Hello,',
+    '',
+    'SaffHire Background Screening is requesting Safety Performance information for the applicant listed below.',
+    '',
+    `Applicant: ${applicant}`,
+    fileNumber ? `File Number: ${fileNumber}` : '',
+    '',
+    'Please complete the secure form here:',
+    link,
+    '',
+    'If this request should be handled by another department, please reply with the correct contact information.',
+    '',
+    'Thank you,',
+    'SaffHire Background Screening',
+  ].filter(Boolean).join('\n');
+
+  return {
+    to,
+    subject,
+    body,
+    full: `To: ${to || (isApplicant ? '[enter applicant email]' : '[enter employer email]')}\nSubject: ${subject}\n\n${body}`,
+    gmailUrl: gmailComposeUrl(to, subject, body),
+  };
+}
+
 function SafetyLinks({ report, companyId, company, onReportUpdated }) {
   const [busyAction, setBusyAction] = useState('');
   const [modal, setModal] = useState(null);
@@ -731,6 +778,8 @@ function SafetyLinks({ report, companyId, company, onReportUpdated }) {
   const [recipient, setRecipient] = useState('');
   const [subject, setSubject] = useState('');
   const [body, setBody] = useState('');
+  const [linkModal, setLinkModal] = useState(null);
+  const [modalDraftTouched, setModalDraftTouched] = useState(false);
 
   function defaultTemplate(purpose) {
     return {
@@ -788,20 +837,49 @@ function SafetyLinks({ report, companyId, company, onReportUpdated }) {
     });
     if (!data.formUrl) throw new Error('The app did not return a response link.');
     await copyToClipboard(data.formUrl);
-    const title = role === 'applicant' ? 'Applicant Link' : 'Employer Link';
-    window.prompt(`${title} created and copied. Copy/send this link:`, data.formUrl);
+    setLinkModal({
+      role,
+      url: data.formUrl,
+      expiresAt: data.expiresAt || null,
+      title: role === 'applicant' ? 'Secure Applicant Verification Link' : 'Secure Employer Response Link',
+      label: role === 'applicant' ? 'Applicant verification URL' : 'Employer response URL',
+      note: role === 'applicant'
+        ? 'Send this link to the applicant first. After the applicant signs, generate/send the employer response link.'
+        : 'Send this link to the previous employer after the applicant has verified and signed Section 1.',
+    });
   }
 
   async function openClientGmailModal() {
+    const base = defaultTemplate('client');
+    const initialRecipient = report.employerEmail || company?.email || '';
+    setModalDraftTouched(false);
+    setRecipient(initialRecipient);
+    setTemplates([base]);
+    applyTemplate(base, 'client', { clientName: company?.name || report.employerName || '', clientEmail: initialRecipient });
     setModal('client');
-    setRecipient(report.employerEmail || company?.email || '');
-    await loadTemplatesForModal('client', { clientName: company?.name || report.employerName || '', clientEmail: report.employerEmail || '' });
+    fetchEmailTemplates(companyId)
+      .then((loaded) => {
+        const list = [base, ...loaded];
+        setTemplates(list);
+      })
+      .catch(() => setTemplates([base]));
   }
 
   async function openFaxGmailModal() {
+    const base = defaultTemplate('fax');
+    const initialRecipient = report.prevEmployerFax || report.employerFax || '';
+    const faxDigits = String(initialRecipient || '').replace(/[^0-9]/g, '');
+    setModalDraftTouched(false);
+    setRecipient(initialRecipient);
+    setTemplates([base]);
+    applyTemplate(base, 'fax', { faxNumber: faxDigits });
     setModal('fax');
-    setRecipient(report.prevEmployerFax || report.employerFax || '');
-    await loadTemplatesForModal('fax', { faxNumber: '' });
+    fetchEmailTemplates(companyId)
+      .then((loaded) => {
+        const list = [base, ...loaded];
+        setTemplates(list);
+      })
+      .catch(() => setTemplates([base]));
   }
 
   function handleTemplateChange(nextId) {
@@ -859,6 +937,33 @@ function SafetyLinks({ report, companyId, company, onReportUpdated }) {
         <button type="button" className="safety-native-button mark-completed" disabled={disabled} onClick={() => run('Mark Completed', markCompleted)}>Mark Completed</button>
         {busyAction ? <small>Working on {busyAction}...</small> : null}
       </div>
+      {linkModal ? (() => {
+        const draft = buildSafetyResponseLinkDraft(linkModal.url, report, linkModal.role);
+        return (
+          <div className="safety-modal-backdrop" role="dialog" aria-modal="true">
+            <div className="safety-modal-card safety-link-modal-card">
+              <div className="safety-modal-header">
+                <h2>{linkModal.title}</h2>
+                <button type="button" className="safety-modal-close" onClick={() => setLinkModal(null)}>×</button>
+              </div>
+              <p className="safety-modal-subtitle">File #{report.fileNumber || '—'} · {report.applicantName || 'Applicant'}</p>
+              <label className="safety-modal-field">
+                <span>{linkModal.label}</span>
+                <textarea value={linkModal.url} readOnly rows={3} onFocus={(event) => event.target.select()} />
+              </label>
+              <p className="safety-modal-note">{linkModal.expiresAt ? `Expires: ${new Date(linkModal.expiresAt).toLocaleString()}` : 'Expires in 14 days.'}</p>
+              <p className="safety-modal-note">{linkModal.note}</p>
+              <div className="safety-modal-actions safety-link-modal-actions">
+                <button type="button" className="secondary-btn" onClick={() => copyToClipboard(linkModal.url).then(() => alert('Response link copied.'))}>Copy Link</button>
+                <button type="button" className="secondary-btn" onClick={() => copyToClipboard(draft.full).then(() => alert(linkModal.role === 'applicant' ? 'Applicant verification email draft copied.' : 'Employer form email draft copied.'))}>Copy Email Draft</button>
+                <button type="button" className="secondary-btn" onClick={() => window.open(linkModal.url, '_blank', 'noopener,noreferrer')}>Open Form</button>
+                <button type="button" className="primary-inline" onClick={() => { copyToClipboard(draft.full); window.open(draft.gmailUrl, '_blank', 'noopener,noreferrer'); }}>Open Gmail</button>
+                <button type="button" className="secondary-btn" onClick={() => setLinkModal(null)}>Close</button>
+              </div>
+            </div>
+          </div>
+        );
+      })() : null}
       {modal ? (
         <div className="safety-modal-backdrop" role="dialog" aria-modal="true">
           <div className="safety-modal-card">
@@ -879,11 +984,11 @@ function SafetyLinks({ report, companyId, company, onReportUpdated }) {
             </label>
             <label className="safety-modal-field">
               <span>Subject</span>
-              <input value={subject} onChange={(event) => setSubject(event.target.value)} />
+              <input value={subject} onChange={(event) => { setModalDraftTouched(true); setSubject(event.target.value); }} />
             </label>
             <label className="safety-modal-field">
               <span>Body</span>
-              <textarea value={body} onChange={(event) => setBody(event.target.value)} rows={8} />
+              <textarea value={body} onChange={(event) => { setModalDraftTouched(true); setBody(event.target.value); }} rows={8} />
             </label>
             <p className="safety-modal-note">{recipientHelp}</p>
             <div className="safety-modal-actions">
