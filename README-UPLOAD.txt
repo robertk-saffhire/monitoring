@@ -1,7 +1,5 @@
-Phase 12A-101 Dashboard Card Drilldowns
+Upload only this file:
 
-Upload only:
 public/phase6.js
 
-No SQL migration is required.
-No Vercel ENV changes are required.
+Phase 12A-102 fixes dashboard card drilldowns causing a blank screen.
