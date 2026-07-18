@@ -1341,6 +1341,30 @@
     });
   }
 
+
+
+  function removePhaseGeneratedSafetyLinks() {
+    if (!isSafetyPage() || phase12a80EmailSettingsActive) return;
+    safetyTables().forEach((table) => {
+      Array.from(table.querySelectorAll('tbody tr')).forEach((row) => {
+        const hasNative = Boolean(row.querySelector('.safety-links-native'));
+        if (!hasNative) return;
+        Array.from(row.querySelectorAll('.phase12a89-links-layout, .phase12a108-links-layout, .phase6-link-group')).forEach((wrapper) => {
+          if (!wrapper.closest('.safety-links-native')) wrapper.remove();
+        });
+        Array.from(row.querySelectorAll('[data-phase12a107-managed], [data-phase12a108-managed], [data-phase12a108-action]')).forEach((el) => {
+          if (!el.closest('.safety-links-native')) el.remove();
+        });
+        Array.from(row.children).forEach((cell) => {
+          if (cell.querySelector('.safety-links-native')) return;
+          const cellText = text(cell).replace(/\s+/g, ' ').trim().toLowerCase();
+          const onlyOldButtons = cellText && /^(applicant link|employer link|fmcsa pdf|fax fmcsa|client gmail|mark completed)( (applicant link|employer link|fmcsa pdf|fax fmcsa|client gmail|mark completed))*$/.test(cellText);
+          if (onlyOldButtons) cell.innerHTML = '';
+        });
+      });
+    });
+  }
+
   let phase12a83LegacyButtonObserverStarted = false;
   let phase12a83LegacyCleanupQueued = false;
 
@@ -1351,7 +1375,7 @@
       phase12a83LegacyCleanupQueued = false;
       if (!isSafetyPage() || phase12a80EmailSettingsActive) return;
       removeLegacySafetyButtons();
-      phase12a89NormalizeLinksColumn();
+      removePhaseGeneratedSafetyLinks();
     });
   }
 
@@ -1597,51 +1621,9 @@
   }
 
   function phase12a89NormalizeLinksColumn() {
-    if (!isSafetyPage()) return;
-    safetyTables().forEach((table) => {
-      phase12a89RenameLinksHeader(table);
-      const idx = indexes(table);
-      if (idx.actions < 0) return;
-      Array.from(table.querySelectorAll('tbody tr')).forEach((row) => {
-        if (!row.children || row.children.length <= idx.actions) return;
-        const cell = row.children[idx.actions];
-        if (!cell) return;
-        cell.classList.add('phase12a89-links-cell');
-
-        const iconActions = [];
-        Array.from(cell.querySelectorAll('button, a')).forEach((el) => {
-          if (el.closest('.phase6-modal') || el.closest('#phase12a87-notes-modal')) return;
-          if (phase12a89IsIconOnlyAction(el)) iconActions.push(el);
-        });
-
-        cell.innerHTML = '';
-        const layout = document.createElement('div');
-        layout.className = 'phase12a89-links-layout';
-        layout.innerHTML = '<div class="phase12a89-links-main"></div><div class="phase12a89-link-tools"></div>';
-        cell.appendChild(layout);
-
-        const main = layout.querySelector('.phase12a89-links-main');
-        const tools = layout.querySelector('.phase12a89-link-tools');
-        const groups = { blue: document.createElement('div'), green: document.createElement('div'), purple: document.createElement('div') };
-        Object.entries(groups).forEach(([name, group]) => {
-          group.className = 'phase12a89-link-color-group ' + name;
-        });
-
-        phase12a107BuildManagedLinks(row).forEach(([groupName, button]) => {
-          groups[groupName].appendChild(button);
-        });
-        ['blue', 'green', 'purple'].forEach((name) => {
-          if (groups[name].children.length) main.appendChild(groups[name]);
-        });
-
-        const usedTools = new Set();
-        iconActions.forEach((el) => {
-          if (usedTools.has(el)) return;
-          usedTools.add(el);
-          tools.appendChild(el);
-        });
-      });
-    });
+    // Disabled in Phase 12A-111. Safety links are rendered natively in src/main.jsx.
+    // Older DOM rebuilding here created duplicate buttons and disconnected click handlers.
+    return;
   }
   // PHASE12A89_LINKS_COLUMN_CLEANUP END
 
@@ -2551,29 +2533,8 @@
   }
 
   function phase12a108StartDelegatedHandler() {
-    if (phase12a108DelegatedStarted) return;
-    phase12a108DelegatedStarted = true;
-    document.addEventListener('click', (event) => {
-      let button = event.target && event.target.closest ? event.target.closest('[data-phase12a108-action]') : null;
-      if (!button && event.target && event.target.closest) {
-        const candidate = event.target.closest('button, a');
-        if (candidate && candidate.closest('.phase12a108-links-cell, .safety-links-cell, .phase12a89-links-cell')) {
-          const fallbackAction = phase12a108ActionFromLabel(text(candidate));
-          if (fallbackAction) {
-            candidate.dataset.phase12a108Action = fallbackAction;
-            button = candidate;
-          }
-        }
-      }
-      if (!button) return;
-      const row = button.closest('tr');
-      if (!row) return;
-      event.preventDefault();
-      event.stopPropagation();
-      if (typeof event.stopImmediatePropagation === 'function') event.stopImmediatePropagation();
-      const action = button.dataset.phase12a108Action || phase12a108ActionFromLabel(text(button));
-      Promise.resolve(phase12a108RunAction(action, row)).catch((error) => toast(error?.message || 'Could not run this report link.', true));
-    }, true);
+    // Disabled in Phase 12A-111. Native React buttons own their click handlers.
+    return;
   }
   // PHASE12A108_STABLE_SAFETY_LINKS END
 
@@ -2601,6 +2562,7 @@
     // Do not rebuild, move, or re-bind those buttons here; old DOM patching caused
     // duplicate buttons and disconnected click handlers.
     startLegacyButtonObserver();
+    removePhaseGeneratedSafetyLinks();
     addPanel();
     removeLegacySafetyButtons();
     phase12a88RemoveFollowUpColumn();
