@@ -1525,6 +1525,77 @@
     return Boolean(el.querySelector('svg')) || el.classList.contains('icon-btn');
   }
 
+  async function phase12a107FindSafetyReport(row) {
+    const data = rowData(row);
+    if (!data.fileNumber) throw new Error('File number is required.');
+    const response = await fetch('/api/index?path=' + encodeURIComponent('safety-reports') + '&companyId=' + encodeURIComponent(getCompanyId()), {
+      credentials: 'include'
+    });
+    const payload = await response.json().catch(() => ({}));
+    if (!response.ok) throw new Error(payload.message || 'Could not load safety reports.');
+    const reports = Array.isArray(payload.reports) ? payload.reports : [];
+    const report = reports.find((item) => String(item.fileNumber || '').trim() === String(data.fileNumber || '').trim())
+      || reports.find((item) => String(item.applicantName || '').trim().toLowerCase() === String(data.applicant || '').trim().toLowerCase());
+    if (!report) throw new Error(`Could not find Safety Performance report for file #${data.fileNumber}.`);
+    return report;
+  }
+
+  async function phase12a107MarkCompleted(row) {
+    const report = await phase12a107FindSafetyReport(row);
+    const response = await fetch('/api/index?path=' + encodeURIComponent('safety-reports') + '&companyId=' + encodeURIComponent(getCompanyId()), {
+      method: 'PATCH',
+      credentials: 'include',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ ...report, status: 'Completed' })
+    });
+    const payload = await response.json().catch(() => ({}));
+    if (!response.ok) throw new Error(payload.message || 'Could not mark report completed.');
+    const idx = indexes(row.closest('table'));
+    if (idx.status >= 0 && row.children[idx.status]) {
+      const statusCell = row.children[idx.status];
+      const chip = statusCell.querySelector('.status-chip') || statusCell;
+      chip.textContent = 'Completed';
+      if (chip.classList) {
+        chip.classList.remove('consent-needed', 'consent-given', 's1-complete', 'emp-sent', 'emp-complete');
+        chip.classList.add('completed');
+      }
+    }
+    toast('Report marked Completed.');
+    window.setTimeout(() => window.location.reload(), 350);
+  }
+
+  async function phase12a107DownloadFmcsa(row) {
+    const data = rowData(row);
+    const result = await downloadFmcsaPdfForFax(data);
+    toast(`FMCSA PDF downloaded: ${result.filename}`);
+  }
+
+  function phase12a107MakeManagedButton(row, label, className, handler) {
+    const button = document.createElement('button');
+    button.type = 'button';
+    button.className = className;
+    button.textContent = label;
+    button.dataset.phase12a107Managed = '1';
+    button.addEventListener('click', (event) => {
+      event.preventDefault();
+      event.stopPropagation();
+      if (typeof event.stopImmediatePropagation === 'function') event.stopImmediatePropagation();
+      Promise.resolve(handler()).catch((error) => toast(error.message || `Could not run ${label}.`, true));
+    });
+    return button;
+  }
+
+  function phase12a107BuildManagedLinks(row) {
+    return [
+      ['blue', phase12a107MakeManagedButton(row, 'Applicant Link', 'phase6-link-button applicant', () => generateLink(row, 'applicant'))],
+      ['green', phase12a107MakeManagedButton(row, 'Employer Link', 'phase6-link-button employer', () => generateLink(row, 'employer'))],
+      ['green', phase12a107MakeManagedButton(row, 'FMCSA PDF', 'phase6-link-button phase12a107-fmcsa-pdf', () => phase12a107DownloadFmcsa(row))],
+      ['purple', phase12a107MakeManagedButton(row, 'Fax FMCSA', 'phase6-link-button fax', () => showFaxModal(row))],
+      ['purple', phase12a107MakeManagedButton(row, 'Client Gmail', 'phase6-link-button phase12a107-client-gmail', () => showClientGmailModal(row))],
+      ['purple', phase12a107MakeManagedButton(row, 'Mark Completed', 'phase6-link-button phase12a107-mark-completed', () => phase12a107MarkCompleted(row))]
+    ];
+  }
+
   function phase12a89NormalizeLinksColumn() {
     if (!isSafetyPage()) return;
     safetyTables().forEach((table) => {
@@ -1537,72 +1608,37 @@
         if (!cell) return;
         cell.classList.add('phase12a89-links-cell');
 
-        let layout = cell.querySelector(':scope > .phase12a89-links-layout');
-        if (!layout) {
-          layout = document.createElement('div');
-          layout.className = 'phase12a89-links-layout';
-          layout.innerHTML = '<div class="phase12a89-links-main"></div><div class="phase12a89-link-tools"></div>';
-          cell.insertBefore(layout, cell.firstChild);
-        }
-
-        const main = layout.querySelector('.phase12a89-links-main');
-        const tools = layout.querySelector('.phase12a89-link-tools');
-        const desired = new Map();
         const iconActions = [];
-
         Array.from(cell.querySelectorAll('button, a')).forEach((el) => {
           if (el.closest('.phase6-modal') || el.closest('#phase12a87-notes-modal')) return;
-          const label = phase12a89NormalizeLabel(text(el));
-          if (['pdf', 'email', 'copy', 'open gmail', 'final packet', 'copy client draft'].includes(label)) {
-            el.remove();
-            return;
-          }
-          if (['applicant link', 'employer link', 'fax fmcsa', 'client gmail', 'mark completed', 'fmcsa pdf'].includes(label)) {
-            if (!desired.has(label)) desired.set(label, el);
-            else el.remove();
-            return;
-          }
           if (phase12a89IsIconOnlyAction(el)) iconActions.push(el);
         });
 
-        if (!desired.has('applicant link') || !desired.has('employer link') || !desired.has('fax fmcsa')) {
-          addButtons();
-          Array.from(cell.querySelectorAll('button, a')).forEach((el) => {
-            const label = phase12a89NormalizeLabel(text(el));
-            if (['applicant link', 'employer link', 'fax fmcsa'].includes(label)) {
-              if (!desired.has(label)) desired.set(label, el);
-              else if (desired.get(label) !== el) el.remove();
-            }
-          });
-        }
+        cell.innerHTML = '';
+        const layout = document.createElement('div');
+        layout.className = 'phase12a89-links-layout';
+        layout.innerHTML = '<div class="phase12a89-links-main"></div><div class="phase12a89-link-tools"></div>';
+        cell.appendChild(layout);
 
-        main.innerHTML = '';
-        ['blue', 'green', 'purple'].forEach((groupName) => {
-          const items = Array.from(desired.entries())
-            .filter(([label]) => phase12a89GroupClass(label) === groupName)
-            .sort((a, b) => phase12a89DesiredOrder(a[0]) - phase12a89DesiredOrder(b[0]));
-          if (!items.length) return;
-          const group = document.createElement('div');
-          group.className = 'phase12a89-link-color-group ' + groupName;
-          items.forEach(([, el]) => group.appendChild(el));
-          main.appendChild(group);
+        const main = layout.querySelector('.phase12a89-links-main');
+        const tools = layout.querySelector('.phase12a89-link-tools');
+        const groups = { blue: document.createElement('div'), green: document.createElement('div'), purple: document.createElement('div') };
+        Object.entries(groups).forEach(([name, group]) => {
+          group.className = 'phase12a89-link-color-group ' + name;
         });
 
-        tools.innerHTML = '';
-        const uniqueTools = new Set();
+        phase12a107BuildManagedLinks(row).forEach(([groupName, button]) => {
+          groups[groupName].appendChild(button);
+        });
+        ['blue', 'green', 'purple'].forEach((name) => {
+          if (groups[name].children.length) main.appendChild(groups[name]);
+        });
+
+        const usedTools = new Set();
         iconActions.forEach((el) => {
-          if (uniqueTools.has(el)) return;
-          uniqueTools.add(el);
+          if (usedTools.has(el)) return;
+          usedTools.add(el);
           tools.appendChild(el);
-        });
-
-        Array.from(cell.childNodes).forEach((node) => {
-          if (node === layout) return;
-          if (node.nodeType === 3 && !String(node.textContent || '').trim()) {
-            node.remove();
-            return;
-          }
-          if (node.nodeType === 1 && !node.closest('.phase12a89-links-layout')) node.remove();
         });
       });
     });
