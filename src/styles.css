@@ -78,3 +78,10 @@
 .safety-link-modal-actions{flex-wrap:wrap;justify-content:flex-start}
 .safety-link-modal-actions .secondary-btn,.safety-link-modal-actions .primary-inline{width:auto;margin-top:0}
 .safety-modal-backdrop input,.safety-modal-backdrop select,.safety-modal-backdrop textarea{pointer-events:auto!important;user-select:text!important}
+
+
+/* Phase 12A-114: keep native Safety modals above old phase overlays and editable */
+.safety-modal-backdrop{z-index:20050!important;pointer-events:auto!important}
+.safety-modal-card{position:relative;z-index:20051!important;pointer-events:auto!important}
+.safety-modal-card input,.safety-modal-card select,.safety-modal-card textarea,.safety-modal-card button{pointer-events:auto!important;user-select:text!important}
+.safety-modal-card button{user-select:none!important}

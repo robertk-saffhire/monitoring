@@ -781,6 +781,14 @@ function SafetyLinks({ report, companyId, company, onReportUpdated }) {
   const [linkModal, setLinkModal] = useState(null);
   const [modalDraftTouched, setModalDraftTouched] = useState(false);
 
+  useEffect(() => {
+    if (!modal && !linkModal) return;
+    document.querySelectorAll('#phase12a78-fax-modal, #phase12a92-client-modal, #phase6-modal').forEach((legacyModal) => {
+      legacyModal.classList.add('hidden');
+      legacyModal.setAttribute('aria-hidden', 'true');
+    });
+  }, [modal, linkModal]);
+
   function defaultTemplate(purpose) {
     return {
       id: 'default',
