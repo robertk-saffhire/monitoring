@@ -2388,22 +2388,20 @@
   else refresh();
 })();
 
-/* PHASE12A100_DASHBOARD_STATUS_CARDS */
+/* PHASE12A104_DASHBOARD_CARDS_AND_DRILLDOWNS_STABLE */
 (function () {
-  const STYLE_ID = 'phase12a100-dashboard-style';
+  const STYLE_ID = 'phase12a104-dashboard-style';
   const PANEL_ID = 'phase12a100-dashboard-panel';
-  let lastKey = '';
+  const FILTER_KEY = 'phase12a104DashboardFilter';
   let loading = false;
+  let lastRenderKey = '';
 
-  function text(el) {
-    return (el && el.textContent ? el.textContent : '').trim();
-  }
-
-  function isDashboardPage() {
-    const h1 = document.querySelector('.page-header h1, .head h2, h1');
-    return text(h1) === 'Dashboard';
-  }
-
+  function text(el) { return (el && el.textContent ? el.textContent : '').trim(); }
+  function norm(value) { return String(value || '').replace(/\s+/g, ' ').trim().toLowerCase(); }
+  function pageTitle() { return text(document.querySelector('.page-header h1, .head h2, h1')); }
+  function isDashboardPage() { return /^dashboard$/i.test(pageTitle()); }
+  function isMonitoringPage() { return /^monitoring$/i.test(pageTitle()); }
+  function isSafetyPage() { return /safety\s+performance\s+reports?/i.test(pageTitle()); }
   function esc(value) {
     return String(value ?? '')
       .replaceAll('&', '&amp;')
@@ -2421,8 +2419,7 @@
         if (value !== undefined && value !== null && value !== '') search.set(key, String(value));
       });
     }
-    const route = '/api/index?' + search.toString();
-    const res = await fetch(route, { credentials: 'include' });
+    const res = await fetch('/api/index?' + search.toString(), { credentials: 'include' });
     const raw = await res.text();
     let data = {};
     try { data = raw ? JSON.parse(raw) : {}; } catch { throw new Error('Server returned non-JSON while loading dashboard.'); }
@@ -2439,16 +2436,13 @@
 
   function parseDate(raw) {
     const s = String(raw || '').trim();
-    if (!s) return null;
+    if (!s || s === '—') return null;
     let m = s.match(/^(\d{4})[-/](\d{1,2})[-/](\d{1,2})/);
     if (m) return new Date(Number(m[1]), Number(m[2]) - 1, Number(m[3]));
     m = s.match(/^(\d{1,2})[-/](\d{1,2})[-/](\d{2,4})$/);
-    if (m) {
-      const year = m[3].length === 2 ? Number('20' + m[3]) : Number(m[3]);
-      return new Date(year, Number(m[1]) - 1, Number(m[2]));
-    }
+    if (m) return new Date(m[3].length === 2 ? Number('20' + m[3]) : Number(m[3]), Number(m[1]) - 1, Number(m[2]));
     const d = new Date(s);
-    return Number.isNaN(d.getTime()) ? null : new Date(d.getFullYear(), d.getMonth(), d.getDate());
+    return Number.isNaN(d.getTime()) ? null : d;
   }
 
   function isWithin30(raw) {
@@ -2456,15 +2450,14 @@
     if (!d) return false;
     const now = new Date();
     const today = new Date(now.getFullYear(), now.getMonth(), now.getDate());
-    const days = Math.ceil((d.getTime() - today.getTime()) / 86400000);
+    const target = new Date(d.getFullYear(), d.getMonth(), d.getDate());
+    const days = Math.ceil((target.getTime() - today.getTime()) / 86400000);
     return days >= 0 && days <= 30;
   }
 
-  function status(row) {
-    return String(row && row.status ? row.status : '').trim();
-  }
+  function status(row) { return String(row && row.status ? row.status : '').trim(); }
 
-  function getCounts(applicants, reports) {
+  function counts(applicants, reports) {
     const totalApplicants = applicants.length;
     const onMonitor = applicants.filter((a) => String(a.monitorStatus || '').trim() === 'On').length;
     const offMonitor = totalApplicants - onMonitor;
@@ -2485,25 +2478,48 @@
     };
   }
 
-  function card(label, value, sub, accent, icon, viewList) {
+  function actionFor(label) {
+    const l = norm(label);
+    const map = {
+      'total applicants': { page: 'monitoring', nav: 'Monitoring', filter: 'all', label: 'Total Applicants' },
+      'on monitor': { page: 'monitoring', nav: 'Monitoring', filter: 'on', label: 'On Monitor' },
+      'off monitor': { page: 'monitoring', nav: 'Monitoring', filter: 'off', label: 'Off Monitor' },
+      'med certs expiring': { page: 'monitoring', nav: 'Monitoring', filter: 'med-expiring', label: 'Med Certs Expiring' },
+      'total reports': { page: 'safety', nav: 'Safety Performance', filter: 'all', label: 'Total Reports' },
+      'consent needed': { page: 'safety', nav: 'Safety Performance', filter: 'consent-needed', label: 'Consent Needed' },
+      'consent given': { page: 'safety', nav: 'Safety Performance', filter: 'consent-given', label: 'Consent Given' },
+      'orders open': { page: 'safety', nav: 'Safety Performance', filter: 'orders-open', label: 'Orders Open' },
+      'completed': { page: 'safety', nav: 'Safety Performance', filter: 'completed', label: 'Completed' }
+    };
+    return map[l] || null;
+  }
+
+  function card(label, value, sub, accent, icon) {
+    const action = actionFor(label);
+    const attrs = action
+      ? ` role="button" tabindex="0" data-phase12a104-card="1" data-phase12a104-label="${esc(label)}" title="Open ${esc(label)}"`
+      : '';
     return `
-      <div class="phase12a100-card">
+      <div class="phase12a100-card"${attrs}>
         <div class="phase12a100-card-head">
           <span>${esc(label)}</span>
           <i class="phase12a100-icon phase12a100-${esc(accent || 'blue')}">${icon || ''}</i>
         </div>
         <strong>${esc(value)}</strong>
         ${sub ? `<p>${esc(sub)}</p>` : ''}
-        ${viewList ? '<button type="button" data-phase12a100-view-list>View list ›</button>' : ''}
       </div>`;
   }
 
-  function render(counts) {
+  function render(c) {
+    if (!isDashboardPage()) return;
     const header = document.querySelector('.page-header, .head');
     if (!header) return;
-
+    addStyles();
     document.body.classList.add('phase12a100-dashboard-active');
-    document.querySelectorAll('.grid.cards, #phase12a100-dashboard-panel').forEach((el) => el.remove());
+    document.querySelectorAll('#phase12a100-dashboard-panel').forEach((el) => el.remove());
+    // Hide the base React cards without deleting them. Deleting them made some
+    // card-click navigation failures leave a blank dashboard.
+    document.querySelectorAll('.grid.cards').forEach((el) => { el.style.display = 'none'; });
 
     const panel = document.createElement('div');
     panel.id = PANEL_ID;
@@ -2511,20 +2527,20 @@
       <section class="phase12a100-section">
         <h3>Monitoring</h3>
         <div class="phase12a100-grid phase12a100-grid-4">
-          ${card('Total Applicants', counts.totalApplicants, '', 'blue', '👥', true)}
-          ${card('On Monitor', counts.onMonitor, `${counts.onPercent}% of total`, 'green', '⌁', false)}
-          ${card('Off Monitor', counts.offMonitor, '', 'gray', '✓', false)}
-          ${card('Med Certs Expiring', counts.medExpiring, 'within 30 days — click to view', 'red', '⚠', true)}
+          ${card('Total Applicants', c.totalApplicants, '', 'blue', '👥')}
+          ${card('On Monitor', c.onMonitor, `${c.onPercent}% of total`, 'green', '⌁')}
+          ${card('Off Monitor', c.offMonitor, '', 'gray', '✓')}
+          ${card('Med Certs Expiring', c.medExpiring, 'within 30 days', 'red', '⚠')}
         </div>
       </section>
       <section class="phase12a100-section">
         <h3>Safety Performance Reports</h3>
         <div class="phase12a100-grid phase12a100-grid-5">
-          ${card('Total Reports', counts.totalReports, '', 'blue', '▤', true)}
-          ${card('Consent Needed', counts.consentNeeded, '', 'green', '◷', false)}
-          ${card('Consent Given', counts.consentGiven, '', 'blue', '⌁', false)}
-          ${card('Orders Open', counts.ordersOpen, 'not completed', 'orange', '◉', false)}
-          ${card('Completed', counts.completed, '', 'gray', '✓', false)}
+          ${card('Total Reports', c.totalReports, '', 'blue', '▤')}
+          ${card('Consent Needed', c.consentNeeded, '', 'green', '◷')}
+          ${card('Consent Given', c.consentGiven, '', 'blue', '⌁')}
+          ${card('Orders Open', c.ordersOpen, 'not completed', 'orange', '◉')}
+          ${card('Completed', c.completed, '', 'gray', '✓')}
         </div>
       </section>`;
     header.insertAdjacentElement('afterend', panel);
@@ -2536,105 +2552,36 @@
     style.id = STYLE_ID;
     style.textContent = `
       .phase12a100-dashboard-active .metric,
-      .phase12a100-dashboard-active .wide-card:has(.status-list) {
-        display: none !important;
-      }
-      #phase12a100-dashboard-panel {
-        display: block;
-      }
-      .phase12a100-section {
-        margin: 24px 0 30px;
-      }
-      .phase12a100-section h3 {
-        margin: 0 0 12px;
-        color: #64748b;
-        font-size: 12px;
-        letter-spacing: .12em;
-        text-transform: uppercase;
-        font-weight: 900;
-      }
-      .phase12a100-grid {
-        display: grid;
-        gap: 16px;
-      }
-      .phase12a100-grid-4 { grid-template-columns: repeat(4, minmax(0, 1fr)); }
-      .phase12a100-grid-5 { grid-template-columns: repeat(5, minmax(0, 1fr)); }
-      .phase12a100-card {
-        background: #fff;
-        border: 1px solid #dbe3ef;
-        border-radius: 13px;
-        padding: 22px;
-        min-height: 140px;
-        box-shadow: 0 2px 5px rgba(15,23,42,.12);
-      }
-      .phase12a100-card-head {
-        display: flex;
-        justify-content: space-between;
-        align-items: flex-start;
-        gap: 12px;
-        margin-bottom: 12px;
-      }
-      .phase12a100-card-head span {
-        color: #64748b;
-        font-size: 12px;
-        font-weight: 900;
-        letter-spacing: .04em;
-        text-transform: uppercase;
-      }
-      .phase12a100-card strong {
-        display: block;
-        color: #1f2937;
-        font-size: 36px;
-        line-height: 1.05;
-        font-weight: 1000;
-      }
-      .phase12a100-card p {
-        margin: 8px 0 0;
-        color: #64748b;
-        font-size: 13px;
-      }
-      .phase12a100-card button {
-        margin-top: 26px;
-        border: 0;
-        background: transparent;
-        color: #1d4ed8;
-        padding: 0;
-        font-weight: 900;
-        cursor: pointer;
-      }
-      .phase12a100-icon {
-        width: 36px;
-        height: 36px;
-        border-radius: 9px;
-        display: inline-flex;
-        align-items: center;
-        justify-content: center;
-        font-style: normal;
-        font-size: 18px;
-        font-weight: 900;
-      }
+      .phase12a100-dashboard-active .wide-card:has(.status-list) { display:none !important; }
+      #phase12a100-dashboard-panel { display:block; }
+      .phase12a100-section { margin:24px 0 30px; }
+      .phase12a100-section h3 { margin:0 0 12px; color:#64748b; font-size:12px; letter-spacing:.12em; text-transform:uppercase; font-weight:900; }
+      .phase12a100-grid { display:grid; gap:16px; }
+      .phase12a100-grid-4 { grid-template-columns:repeat(4,minmax(0,1fr)); }
+      .phase12a100-grid-5 { grid-template-columns:repeat(5,minmax(0,1fr)); }
+      .phase12a100-card { background:#fff; border:1px solid #dbe3ef; border-radius:13px; padding:22px; min-height:140px; box-shadow:0 2px 5px rgba(15,23,42,.12); cursor:pointer; transition:transform .12s ease, box-shadow .12s ease; }
+      .phase12a100-card:hover { transform:translateY(-1px); box-shadow:0 8px 18px rgba(15,23,42,.12); }
+      .phase12a100-card:focus { outline:3px solid rgba(37,99,235,.25); outline-offset:3px; }
+      .phase12a100-card-head { display:flex; justify-content:space-between; align-items:flex-start; gap:12px; margin-bottom:12px; }
+      .phase12a100-card-head span { color:#64748b; font-size:12px; font-weight:900; letter-spacing:.04em; text-transform:uppercase; }
+      .phase12a100-card strong { display:block; color:#1f2937; font-size:36px; line-height:1.05; font-weight:1000; }
+      .phase12a100-card p { margin:8px 0 0; color:#64748b; font-size:13px; }
+      .phase12a100-icon { width:36px; height:36px; border-radius:9px; display:inline-flex; align-items:center; justify-content:center; font-style:normal; font-size:18px; font-weight:900; }
       .phase12a100-blue { background:#e0e7ff; color:#1d4ed8; }
       .phase12a100-green { background:#dcfce7; color:#16a34a; }
       .phase12a100-gray { background:#e5e7eb; color:#64748b; }
       .phase12a100-red { background:#ffe4e6; color:#ef4444; }
       .phase12a100-orange { background:#ffedd5; color:#f59e0b; }
-      @media(max-width: 1200px) {
-        .phase12a100-grid-4, .phase12a100-grid-5 { grid-template-columns: repeat(2, minmax(0, 1fr)); }
-      }
-      @media(max-width: 720px) {
-        .phase12a100-grid-4, .phase12a100-grid-5 { grid-template-columns: 1fr; }
-      }
+      .phase12a104-filter-banner { margin:0 0 16px; padding:10px 12px; border:1px solid #bfdbfe; background:#eff6ff; color:#1e3a8a; border-radius:12px; display:flex; align-items:center; justify-content:space-between; gap:12px; font-size:13px; font-weight:800; }
+      .phase12a104-filter-banner button { border:1px solid #93c5fd; background:#fff; color:#1d4ed8; border-radius:999px; padding:5px 10px; font-weight:900; cursor:pointer; }
+      @media(max-width:1200px){ .phase12a100-grid-4,.phase12a100-grid-5{grid-template-columns:repeat(2,minmax(0,1fr));} }
+      @media(max-width:720px){ .phase12a100-grid-4,.phase12a100-grid-5{grid-template-columns:1fr;} }
     `;
     document.head.appendChild(style);
   }
 
-  async function loadAndRender(force) {
-    if (!isDashboardPage()) {
-      document.body.classList.remove('phase12a100-dashboard-active');
-      return;
-    }
-    addStyles();
-    if (loading) return;
+  async function loadDashboard() {
+    if (!isDashboardPage() || loading) return;
     loading = true;
     try {
       const companiesResponse = await api('companies');
@@ -2645,97 +2592,21 @@
       ]);
       const applicants = applicantsResponse.applicants || [];
       const reports = reportsResponse.reports || [];
-      const key = JSON.stringify({
-        a: applicants.length,
-        r: reports.length,
-        on: applicants.filter((x) => String(x.monitorStatus || '').trim() === 'On').length,
-        m: applicants.filter((x) => isWithin30(x.medExpire)).length,
-        s: reports.map((x) => status(x)).join('|')
-      });
-      if (force || key !== lastKey || !document.getElementById(PANEL_ID)) {
-        lastKey = key;
-        render(getCounts(applicants, reports));
+      const key = JSON.stringify({ a: applicants.length, r: reports.length, c: selectedCompanyId(companiesResponse.companies || []) });
+      if (key !== lastRenderKey || !document.getElementById(PANEL_ID)) {
+        lastRenderKey = key;
+        render(counts(applicants, reports));
       }
     } catch (err) {
-      // Leave the base dashboard visible if this patch cannot load its data.
-      console.warn('Phase 12A-100 dashboard cards failed:', err);
+      console.warn('Phase 12A-104 dashboard cards failed:', err);
     } finally {
       loading = false;
     }
   }
 
-  function boot() {
-    addStyles();
-    loadAndRender(true);
-    setInterval(() => loadAndRender(false), 1500);
-    new MutationObserver(() => {
-      if (isDashboardPage() && !document.getElementById(PANEL_ID)) loadAndRender(true);
-    }).observe(document.body, { childList: true, subtree: true });
-  }
-
-  if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', boot);
-  else boot();
-})();
-
-/* PHASE12A103_DASHBOARD_DRILLDOWN_STABLE_FIX */
-(function () {
-  const FILTER_KEY = 'phase12a101DashboardFilter';
-  const STYLE_ID = 'phase12a103-dashboard-drilldown-style';
-
-  function text(el) {
-    return (el && el.textContent ? el.textContent : '').replace(/\s+/g, ' ').trim();
-  }
-
-  function norm(value) {
-    return String(value || '')
-      .replace(/View list\s*›?/gi, '')
-      .replace(/[↕↑↓▲▼]/g, '')
-      .replace(/[^a-z0-9 ]/gi, ' ')
-      .replace(/\s+/g, ' ')
-      .trim()
-      .toLowerCase();
-  }
-
-  function pageTitle() {
-    return text(document.querySelector('.page-header h1, .head h2, h1'));
-  }
-
-  function isDashboardPage() {
-    return /^dashboard$/i.test(pageTitle());
-  }
-
-  function isMonitoringPage() {
-    return /^monitoring$/i.test(pageTitle());
-  }
-
-  function isSafetyPage() {
-    return /safety\s+performance\s+reports?/i.test(pageTitle());
-  }
-
-  function actionFor(label) {
-    const key = norm(label);
-    const map = {
-      'total applicants': { page: 'monitoring', filter: 'all', label: 'Total Applicants', nav: 'Monitoring' },
-      'on monitor': { page: 'monitoring', filter: 'on', label: 'On Monitor', nav: 'Monitoring' },
-      'off monitor': { page: 'monitoring', filter: 'off', label: 'Off Monitor', nav: 'Monitoring' },
-      'med certs expiring': { page: 'monitoring', filter: 'med-expiring', label: 'Med Certs Expiring', nav: 'Monitoring' },
-      'total reports': { page: 'safety', filter: 'all', label: 'Total Reports', nav: 'Safety Performance' },
-      'consent needed': { page: 'safety', filter: 'consent-needed', label: 'Consent Needed', nav: 'Safety Performance' },
-      'consent given': { page: 'safety', filter: 'consent-given', label: 'Consent Given', nav: 'Safety Performance' },
-      'orders open': { page: 'safety', filter: 'orders-open', label: 'Orders Open', nav: 'Safety Performance' },
-      'completed': { page: 'safety', filter: 'completed', label: 'Completed', nav: 'Safety Performance' }
-    };
-    return map[key] || null;
-  }
-
   function setFilter(action) {
     try {
-      sessionStorage.setItem(FILTER_KEY, JSON.stringify({
-        page: action.page,
-        filter: action.filter,
-        label: action.label,
-        createdAt: Date.now()
-      }));
+      sessionStorage.setItem(FILTER_KEY, JSON.stringify({ ...action, createdAt: Date.now() }));
     } catch {}
   }
 
@@ -2743,110 +2614,40 @@
     try {
       const raw = sessionStorage.getItem(FILTER_KEY);
       return raw ? JSON.parse(raw) : null;
-    } catch {
-      return null;
-    }
+    } catch { return null; }
   }
 
   function clearFilter() {
     try { sessionStorage.removeItem(FILTER_KEY); } catch {}
-    document.querySelectorAll('[data-phase12a103-hidden="1"], [data-phase12a101-hidden="1"]').forEach((row) => {
+    document.querySelectorAll('[data-phase12a104-hidden="1"]').forEach((row) => {
       row.style.display = '';
-      row.removeAttribute('data-phase12a103-hidden');
-      row.removeAttribute('data-phase12a101-hidden');
+      row.removeAttribute('data-phase12a104-hidden');
     });
-    document.querySelectorAll('.phase12a103-filter-banner, .phase12a101-filter-banner').forEach((el) => el.remove());
+    document.querySelectorAll('.phase12a104-filter-banner').forEach((el) => el.remove());
   }
 
   function findSidebarNav(label) {
     const target = norm(label);
-    const buttons = Array.from(document.querySelectorAll('aside button, .sidebar button, [role="navigation"] button'));
-    const navButtons = buttons.filter((button) => {
-      const t = norm(text(button));
-      if (!t || t.includes('reload monitoring')) return false;
-      if (t === 'logout') return false;
-      if (t === 'robert') return false;
-      if (t === 'admin') return false;
-      return true;
-    });
-    return navButtons.find((button) => norm(text(button)) === target)
-      || navButtons.find((button) => target === 'monitoring' && norm(text(button)) === 'monitoring')
-      || navButtons.find((button) => target === 'safety performance' && norm(text(button)).includes('safety performance'))
+    const buttons = Array.from(document.querySelectorAll('aside button, .sidebar button'));
+    return buttons.find((button) => norm(text(button)) === target)
+      || buttons.find((button) => target === 'safety performance' && norm(text(button)).includes('safety performance'))
+      || buttons.find((button) => target === 'monitoring' && norm(text(button)) === 'monitoring')
       || null;
   }
 
-  function dashboardCardLabel(card) {
-    const span = card && card.querySelector && card.querySelector('.phase12a100-card-head span');
-    return text(span || card);
-  }
-
-  function cleanupDashboardPanelAfterNavigation() {
-    if (isDashboardPage()) return;
-    document.body.classList.remove('phase12a100-dashboard-active');
-    document.querySelectorAll('#phase12a100-dashboard-panel').forEach((el) => el.remove());
-  }
-
-  function navigateTo(action) {
+  function openAction(action) {
+    if (!action) return;
+    setFilter(action);
     const button = findSidebarNav(action.nav);
     if (!button) {
       alert(`Could not open ${action.nav}. Please click ${action.nav} in the sidebar.`);
       return;
     }
-    setFilter(action);
-    button.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true, view: window }));
-    setTimeout(cleanupDashboardPanelAfterNavigation, 50);
-    setTimeout(cleanupDashboardPanelAfterNavigation, 250);
-    setTimeout(applySavedFilter, 350);
-    setTimeout(applySavedFilter, 800);
-  }
-
-  function addStyles() {
-    if (document.getElementById(STYLE_ID)) return;
-    const style = document.createElement('style');
-    style.id = STYLE_ID;
-    style.textContent = `
-      .phase12a100-card { cursor: pointer; transition: transform .12s ease, box-shadow .12s ease; }
-      .phase12a100-card:hover { transform: translateY(-1px); box-shadow: 0 8px 18px rgba(15,23,42,.12); }
-      .phase12a100-card:focus { outline: 3px solid rgba(37,99,235,.25); outline-offset: 3px; }
-      .phase12a103-filter-banner {
-        margin: 0 0 16px;
-        padding: 10px 12px;
-        border: 1px solid #bfdbfe;
-        background: #eff6ff;
-        color: #1e3a8a;
-        border-radius: 12px;
-        display: flex;
-        align-items: center;
-        justify-content: space-between;
-        gap: 12px;
-        font-size: 13px;
-        font-weight: 800;
-      }
-      .phase12a103-filter-banner button {
-        border: 1px solid #93c5fd;
-        background: #fff;
-        color: #1d4ed8;
-        border-radius: 999px;
-        padding: 5px 10px;
-        font-weight: 900;
-        cursor: pointer;
-      }
-    `;
-    document.head.appendChild(style);
-  }
-
-  function markCards() {
-    if (!isDashboardPage()) return;
-    addStyles();
-    document.querySelectorAll('#phase12a100-dashboard-panel .phase12a100-card').forEach((card) => {
-      const action = actionFor(dashboardCardLabel(card));
-      if (!action) return;
-      card.setAttribute('role', 'button');
-      card.setAttribute('tabindex', '0');
-      card.setAttribute('data-phase12a103-card', '1');
-      card.setAttribute('data-phase12a103-label', action.label);
-      card.title = `Open ${action.label}`;
-    });
+    // Use the same click the user would use. Do not remove dashboard content here;
+    // React will replace it if navigation succeeds. If navigation fails, the
+    // dashboard remains visible instead of going blank.
+    button.click();
+    [250, 600, 1000, 1600].forEach((ms) => setTimeout(applySavedFilter, ms));
   }
 
   function tableIndexes(table) {
@@ -2865,50 +2666,26 @@
     };
   }
 
-  function rowCell(row, idx) {
-    if (!row || idx < 0 || !row.children[idx]) return '';
-    return text(row.children[idx]);
-  }
-
-  function parseDate(raw) {
-    const s = String(raw || '').trim();
-    if (!s || s === '—') return null;
-    let m = s.match(/^(\d{4})[-/](\d{1,2})[-/](\d{1,2})/);
-    if (m) return new Date(Number(m[1]), Number(m[2]) - 1, Number(m[3]));
-    m = s.match(/^(\d{1,2})[-/](\d{1,2})[-/](\d{2,4})$/);
-    if (m) return new Date(m[3].length === 2 ? Number('20' + m[3]) : Number(m[3]), Number(m[1]) - 1, Number(m[2]));
-    const d = new Date(s);
-    return Number.isNaN(d.getTime()) ? null : d;
-  }
-
-  function within30(raw) {
-    const d = parseDate(raw);
-    if (!d) return false;
-    const now = new Date();
-    const today = new Date(now.getFullYear(), now.getMonth(), now.getDate());
-    const target = new Date(d.getFullYear(), d.getMonth(), d.getDate());
-    const days = Math.ceil((target.getTime() - today.getTime()) / 86400000);
-    return days >= 0 && days <= 30;
-  }
+  function rowCell(row, idx) { return row && idx >= 0 && row.children[idx] ? text(row.children[idx]) : ''; }
 
   function findMainTable(requiredWords) {
     const tables = Array.from(document.querySelectorAll('main table, .main-panel table, table'));
     return tables.find((table) => {
       const h = norm(text(table.querySelector('thead')));
       return requiredWords.every((word) => h.includes(word));
-    }) || tables[0] || null;
+    }) || null;
   }
 
   function addBanner(label) {
     const header = document.querySelector('.page-header, .head');
     if (!header) return;
-    let banner = document.querySelector('.phase12a103-filter-banner');
+    let banner = document.querySelector('.phase12a104-filter-banner');
     if (!banner) {
       banner = document.createElement('div');
-      banner.className = 'phase12a103-filter-banner';
+      banner.className = 'phase12a104-filter-banner';
       header.insertAdjacentElement('afterend', banner);
     }
-    banner.innerHTML = `<span>Dashboard filter: ${label}</span><button type="button" data-phase12a103-clear>Clear filter</button>`;
+    banner.innerHTML = `<span>Dashboard filter: ${esc(label || '')}</span><button type="button" data-phase12a104-clear>Clear filter</button>`;
   }
 
   function applyMonitoringFilter(filter) {
@@ -2921,10 +2698,10 @@
       let show = true;
       if (filter.filter === 'on') show = /^on$/i.test(rowCell(row, idx.monitoring));
       if (filter.filter === 'off') show = /^off$/i.test(rowCell(row, idx.monitoring));
-      if (filter.filter === 'med-expiring') show = within30(rowCell(row, idx.medExpire));
+      if (filter.filter === 'med-expiring') show = isWithin30(rowCell(row, idx.medExpire));
       row.style.display = show ? '' : 'none';
-      if (!show) row.setAttribute('data-phase12a103-hidden', '1');
-      else row.removeAttribute('data-phase12a103-hidden');
+      if (!show) row.setAttribute('data-phase12a104-hidden', '1');
+      else row.removeAttribute('data-phase12a104-hidden');
     });
     addBanner(filter.label || 'Monitoring');
     return true;
@@ -2937,15 +2714,15 @@
     const idx = tableIndexes(table);
     const rows = Array.from(table.querySelectorAll('tbody tr')).filter((row) => row.children && row.children.length > 1);
     rows.forEach((row) => {
-      const status = rowCell(row, idx.status).replace(/\s+/g, ' ').trim();
+      const s = rowCell(row, idx.status).replace(/\s+/g, ' ').trim();
       let show = true;
-      if (filter.filter === 'consent-needed') show = /^(Consent Needed|S1 Complete)$/i.test(status);
-      if (filter.filter === 'consent-given') show = /^(Consent Given|Emp Sent)$/i.test(status);
-      if (filter.filter === 'orders-open') show = !/^Completed$/i.test(status);
-      if (filter.filter === 'completed') show = /^Completed$/i.test(status);
+      if (filter.filter === 'consent-needed') show = /^(Consent Needed|S1 Complete)$/i.test(s);
+      if (filter.filter === 'consent-given') show = /^(Consent Given|Emp Sent)$/i.test(s);
+      if (filter.filter === 'orders-open') show = !/^Completed$/i.test(s);
+      if (filter.filter === 'completed') show = /^Completed$/i.test(s);
       row.style.display = show ? '' : 'none';
-      if (!show) row.setAttribute('data-phase12a103-hidden', '1');
-      else row.removeAttribute('data-phase12a103-hidden');
+      if (!show) row.setAttribute('data-phase12a104-hidden', '1');
+      else row.removeAttribute('data-phase12a104-hidden');
     });
     addBanner(filter.label || 'Safety Performance');
     return true;
@@ -2958,40 +2735,44 @@
     if (filter.page === 'safety') applySafetyFilter(filter);
   }
 
-  document.addEventListener('click', (event) => {
-    const clear = event.target && event.target.closest && event.target.closest('[data-phase12a103-clear]');
+  document.addEventListener('click', function (event) {
+    const clear = event.target && event.target.closest && event.target.closest('[data-phase12a104-clear]');
     if (clear) {
       event.preventDefault();
+      event.stopPropagation();
       clearFilter();
       return;
     }
-    const card = event.target && event.target.closest && event.target.closest('#phase12a100-dashboard-panel .phase12a100-card');
-    if (!card || !isDashboardPage()) return;
-    const action = actionFor(dashboardCardLabel(card));
-    if (!action) return;
+    const cardEl = event.target && event.target.closest && event.target.closest('#phase12a100-dashboard-panel .phase12a100-card');
+    if (!cardEl || !isDashboardPage()) return;
     event.preventDefault();
     event.stopPropagation();
-    navigateTo(action);
-  }, false);
+    const label = cardEl.getAttribute('data-phase12a104-label') || text(cardEl.querySelector('.phase12a100-card-head span'));
+    openAction(actionFor(label));
+  }, true);
 
-  document.addEventListener('keydown', (event) => {
+  document.addEventListener('keydown', function (event) {
     if (event.key !== 'Enter' && event.key !== ' ') return;
-    const card = event.target && event.target.closest && event.target.closest('#phase12a100-dashboard-panel .phase12a100-card');
-    if (!card || !isDashboardPage()) return;
-    const action = actionFor(dashboardCardLabel(card));
-    if (!action) return;
+    const cardEl = event.target && event.target.closest && event.target.closest('#phase12a100-dashboard-panel .phase12a100-card');
+    if (!cardEl || !isDashboardPage()) return;
     event.preventDefault();
-    navigateTo(action);
-  }, false);
+    const label = cardEl.getAttribute('data-phase12a104-label') || text(cardEl.querySelector('.phase12a100-card-head span'));
+    openAction(actionFor(label));
+  }, true);
 
   function tick() {
     addStyles();
-    markCards();
-    cleanupDashboardPanelAfterNavigation();
+    if (isDashboardPage()) loadDashboard();
+    else {
+      document.body.classList.remove('phase12a100-dashboard-active');
+      document.querySelectorAll('.grid.cards').forEach((el) => { el.style.display = ''; });
+      document.querySelectorAll('#phase12a100-dashboard-panel').forEach((el) => el.remove());
+    }
     applySavedFilter();
   }
 
   if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', tick);
   else tick();
-  setInterval(tick, 600);
+  setInterval(tick, 800);
 })();
+
