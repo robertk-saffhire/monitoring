@@ -1,18 +1,22 @@
-# Phase 12A-118 — Applicant Link Editable Form Fix
+# Phase 12A-119 — FMCSA Applicant Signature PDF Fix
 
-Upload these files:
+Upload only:
 
-- api/index.ts
-- api/safety-response-link.ts
-- api/safety-response.ts
-- src/main.jsx
-- public/employer-response.html
+- `api/index.ts`
 
-What changed:
+## What changed
 
-- Fixes Applicant Link opening as an employer-only/locked form.
-- Removes stale direct API route behavior by forwarding direct public response endpoints into the current consolidated api/index.ts route handler.
-- Updates React to call the consolidated route directly when creating Safety response links.
-- Keeps the public response form file included so applicant/employer role locking is current.
+- The applicant electronic signature now prints on the FMCSA PDF in a cursive-style font.
+- The applicant signing timestamp now prints beside the signature as an electronic signature stamp.
+- The applicant Date field is filled only with the actual applicant signature date.
+- The PDF no longer draws the applicant date twice, which was causing the date to look like it was written over another date.
 
-No SQL or Vercel ENV changes needed.
+## SQL / ENV
+
+- SQL migration: No
+- Vercel ENV changes: No
+
+## Checks
+
+- `npm run build` passed.
+- `npx tsc --noEmit` passed.
