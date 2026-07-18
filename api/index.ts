@@ -108,6 +108,68 @@ function asBool(value: any) { const raw = String(value ?? '').trim().toLowerCase
 function pick(row: any, keys: string[]) { for (const key of keys) if (row[key] !== undefined && row[key] !== null && String(row[key]).trim() !== '') return row[key]; return ''; }
 
 
+function normalizeImportKey(value: any) {
+  return String(value || '')
+    .replace(/^\uFEFF/, '')
+    .trim()
+    .toLowerCase()
+    .replace(/&/g, 'and')
+    .replace(/[^a-z0-9]/g, '');
+}
+
+function importValue(row: any, aliases: string[]) {
+  if (!row || typeof row !== 'object') return '';
+  for (const alias of aliases) {
+    if (row[alias] !== undefined && row[alias] !== null && String(row[alias]).trim() !== '') return row[alias];
+  }
+  const wanted = new Set(aliases.map(normalizeImportKey));
+  for (const [key, value] of Object.entries(row)) {
+    if (wanted.has(normalizeImportKey(key)) && value !== undefined && value !== null && String(value).trim() !== '') return value;
+  }
+  return '';
+}
+
+function cleanImportText(value: any) {
+  return String(value ?? '')
+    .replace(/^\uFEFF/, '')
+    .replace(/&amp;/gi, '&')
+    .trim();
+}
+
+function cleanImportFileNumber(value: any) {
+  const raw = cleanImportText(value);
+  if (!raw) return '';
+  return raw.replace(/\.0$/, '').trim();
+}
+
+function normalizeImportMonitoringStatus(value: any) {
+  const raw = cleanImportText(value).toLowerCase();
+  if (!raw) return 'Off';
+  if (['on','yes','y','true','1','active','enabled','monitoring','monitoringon','monitor'].includes(raw.replace(/[^a-z0-9]/g, ''))) return 'On';
+  return 'Off';
+}
+
+function buildImportApplicantName(row: any) {
+  const full = cleanImportText(importValue(row, ['applicantName','Applicant Name','Applicant','Name','Full Name','Driver Name','Driver','Subject Name','Employee Name','name']));
+  if (full) return full;
+  const first = cleanImportText(importValue(row, ['First Name','First','firstName','first_name']));
+  const last = cleanImportText(importValue(row, ['Last Name','Last','lastName','last_name']));
+  return [last, first].filter(Boolean).join(', ');
+}
+
+function buildImportRow(row: any, companyId: number) {
+  const fileNumber = cleanImportFileNumber(importValue(row, ['fileNumber','File Number','File #','File No','File','Order Number','Order #','Order','Order ID','Report Number','Case Number','Applicant Number','id','ID']));
+  const applicantName = buildImportApplicantName(row);
+  const orderDate = cleanImportText(importValue(row, ['orderDate','Order Date','Ordered Date','Request Date','Report Date','Date Created','Created Date','created','Created','Date']));
+  const monitorStatus = normalizeImportMonitoringStatus(importValue(row, ['monitorStatus','Monitor Status','Monitoring Status','Monitoring','Monitor','Monitoring On','Monitoring On/Off','On Monitoring']));
+  const mvrStatus = cleanImportText(importValue(row, ['mvrStatus','MVR Status','MVR','Driver License Status','License Status','MVR Result','MVR Search Status']));
+  const medExpire = cleanImportText(importValue(row, ['medExpire','Med Expire','Medical Expiration','Medical Expiration Date','Medical Certificate Expiration','Medical Certificate Expiration Date','Medical Certificate Expire','Medical Cert Expiration','Medical Cert Exp','Med Cert Expiration','Med Cert Exp','Medical Card Expiration','Medical Exp Date','Expiration Date']));
+  const notes = cleanImportText(importValue(row, ['notes','Notes','Note','Comments','Comment','Remarks','Memo','Internal Notes']));
+  const terminatedRaw = importValue(row, ['terminated','Terminated','Inactive','Removed','Do Not Monitor','Stopped','Stop Monitoring']);
+  return { companyId, fileNumber, applicantName, orderDate, monitorStatus, mvrStatus, medExpire, notes, terminated: asBool(terminatedRaw) };
+}
+
+
 async function clientAuth(req: any, res: any, route: string) {
   if (route === 'client-auth/login' && req.method === 'POST') {
     const body = await readBody(req);
@@ -494,7 +556,65 @@ async function getClientVisibleSafetyNotes(companyId: number) {
 // PHASE12A87_SAFETY_REPORT_NOTES END
 
 async function importApplicants(req: any, res: any, user: any) {
-  if (!requireAdmin(user, res)) return; if (req.method !== 'POST') return json(res, 405, { status: 'error', message: 'Method not allowed' }); const body = await readBody(req); const companyId = Number(body.companyId || user.companyId || 1); const rows = Array.isArray(body.rows) ? body.rows : []; let imported = 0, skipped = 0; for (const row of rows) { const fileNumber = String(pick(row, ['fileNumber','File Number','File #','FileNumber','file_number'])).trim(); if (!fileNumber) { skipped++; continue; } const medExpire = String(pick(row, ['medExpire','Med Expire','Medical Expiration','medicalExpiration'])).trim(); await query('insert into applicants ("companyId","fileNumber","applicantName","orderDate","monitorStatus","mvrStatus","medExpire","medExpireOverridden",notes) values ($1,$2,$3,$4,$5,$6,$7,$8,$9) on conflict ("fileNumber","companyId") do update set "applicantName"=excluded."applicantName","orderDate"=excluded."orderDate","monitorStatus"=excluded."monitorStatus","mvrStatus"=excluded."mvrStatus","medExpire"=excluded."medExpire","medExpireOverridden"=excluded."medExpireOverridden",notes=excluded.notes,"updatedAt"=now()', [companyId, fileNumber, String(pick(row, ['name','Name','Applicant Name','applicantName'])).trim(), String(pick(row, ['orderDate','Order Date','Created','created'])).trim(), normalizeMonitorStatus(pick(row, ['monitorStatus','Monitor Status','Monitoring','monitoring'])), String(pick(row, ['mvrStatus','MVR Status','Status'])).trim(), medExpire || null, Boolean(medExpire), String(pick(row, ['notes','Notes'])).trim()]); imported++; } return json(res, 200, { status: 'ok', imported, skipped });
+  if (!requireAdmin(user, res)) return;
+  if (req.method !== 'POST') return json(res, 405, { status: 'error', message: 'Method not allowed' });
+
+  const body = await readBody(req);
+  const companyId = Number(body.companyId || user.companyId || 1);
+  const rows = Array.isArray(body.rows) ? body.rows : [];
+
+  if (!rows.length) {
+    return json(res, 400, { status: 'error', message: 'No monitoring rows were found to import. Make sure the CSV has a header row and at least one data row.' });
+  }
+
+  let imported = 0;
+  let updated = 0;
+  let skipped = 0;
+  const errors: string[] = [];
+
+  for (let i = 0; i < rows.length; i += 1) {
+    const original = rows[i] || {};
+    const rowNumber = i + 2;
+    const row = buildImportRow(original, companyId);
+
+    if (!row.fileNumber) {
+      skipped += 1;
+      if (errors.length < 5) errors.push(`Row ${rowNumber}: skipped because File Number / Order Number is blank.`);
+      continue;
+    }
+
+    try {
+      const existing = await query(
+        'select id from applicants where "fileNumber"=$1 and "companyId"=$2 limit 1',
+        [row.fileNumber, companyId]
+      );
+      const wasExisting = Boolean(existing.rows[0]);
+
+      await query(
+        `insert into applicants ("companyId","fileNumber","applicantName","orderDate","monitorStatus","mvrStatus","medExpire","medExpireOverridden",notes,"terminated")
+         values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)
+         on conflict ("fileNumber","companyId") do update set
+           "applicantName"=excluded."applicantName",
+           "orderDate"=excluded."orderDate",
+           "monitorStatus"=excluded."monitorStatus",
+           "mvrStatus"=excluded."mvrStatus",
+           "medExpire"=excluded."medExpire",
+           "medExpireOverridden"=excluded."medExpireOverridden",
+           notes=excluded.notes,
+           "terminated"=excluded."terminated",
+           "updatedAt"=now()`,
+        [companyId, row.fileNumber, row.applicantName, row.orderDate, row.monitorStatus, row.mvrStatus, row.medExpire || null, Boolean(row.medExpire), row.notes, row.terminated]
+      );
+
+      if (wasExisting) updated += 1;
+      else imported += 1;
+    } catch (error: any) {
+      skipped += 1;
+      if (errors.length < 5) errors.push(`Row ${rowNumber} / file ${row.fileNumber}: ${errorMessage(error)}`);
+    }
+  }
+
+  return json(res, 200, { status: 'ok', imported, updated, skipped, errors });
 }
 
 async function changePassword(req: any, res: any, user: any) {
