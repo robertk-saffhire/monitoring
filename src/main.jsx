@@ -5,7 +5,7 @@ import SettingsManager from './SettingsPage.jsx';
 import './styles.css';
 
 const LOGO = 'https://d2xsxph8kpxj0f.cloudfront.net/310519663368468239/3wvjutsFdcEUnRywyqJHNV/SaffhireLogoShirtStyle_0449b2e9.webp';
-const STATUSES = ['S1 Complete', 'Emp Sent', 'Emp Complete', 'Completed'];
+const STATUSES = ['Consent Needed', 'Consent Given', 'S1 Complete', 'Emp Sent', 'Emp Complete', 'Completed'];
 const VEHICLES = [
   ['vehicleStraightTruck', 'Straight Truck'],
   ['vehicleTractorSemitrailer', 'Tractor/Semitrailer'],
@@ -36,7 +36,7 @@ async function api(url, options = {}) {
 
 function defaultReport(company) {
   return {
-    applicantName: '', fileNumber: '', created: new Date().toISOString().slice(0, 10), status: 'S1 Complete', followUpDate: '', notes: '',
+    applicantName: '', fileNumber: '', created: new Date().toISOString().slice(0, 10), status: 'Consent Needed', followUpDate: '', notes: '',
     prevEmployerName: '', prevEmployerEmail: '', prevEmployerStreet: '', prevEmployerPhone: '', prevEmployerFax: '', prevEmployerCityStateZip: '',
     employerName: company?.name || 'Driver Pipeline', employerAttention: '', employerStreet: '1200 N. Union Bower Road', employerCityStateZip: 'Irving, TX 75061', employerPhone: '972-573-2301', employerFax: '', employerEmail: 'lmercado@driverpipeline.com', confFax: '', confEmail: '',
     employedByCompany: '', jobTitle: '', fromDate: '', toDate: '', droveMotorVehicle: '',
@@ -357,36 +357,86 @@ function Header({ title, subtitle, action, actions }) {
   return <div className="page-header"><div><h1>{title}</h1><p>{subtitle}</p></div><div className="header-actions">{action ? <button className="secondary-btn" onClick={action}><RefreshCw size={16} /> Refresh</button> : null}{actions}</div></div>;
 }
 
-function Metric({ title, value, icon: Icon }) {
-  return <div className="card metric"><div><p>{title}</p><strong>{value}</strong></div><Icon size={28} /></div>;
+function Metric({ title, value, icon: Icon, subtitle, onClick }) {
+  const content = <><div><p>{title}</p><strong>{value}</strong>{subtitle ? <small>{subtitle}</small> : null}</div><Icon size={28} /></>;
+  if (!onClick) return <div className="card metric">{content}</div>;
+  return <button type="button" className="card metric metric-button" onClick={onClick} title={`Open ${title}`}>{content}</button>;
 }
 
-function Dashboard({ company, applicants, reports, refresh }) {
+function statusText(value) {
+  return String(value || '').trim();
+}
+
+function parseAppDate(raw) {
+  const value = String(raw || '').trim();
+  if (!value) return null;
+  const d = new Date(value);
+  return Number.isNaN(d.getTime()) ? null : d;
+}
+
+function medExpiresWithin30(value) {
+  const d = parseAppDate(value);
+  if (!d) return false;
+  const today = new Date();
+  today.setHours(0, 0, 0, 0);
+  const target = new Date(d.getFullYear(), d.getMonth(), d.getDate());
+  const days = Math.ceil((target.getTime() - today.getTime()) / 86400000);
+  return days >= 0 && days <= 30;
+}
+
+function Dashboard({ company, applicants, reports, refresh, openCard }) {
   const onCount = applicants.filter((a) => a.monitorStatus === 'On').length;
+  const offCount = applicants.length - onCount;
+  const medExpiring = applicants.filter((a) => medExpiresWithin30(a.medExpire)).length;
+  const completedReports = reports.filter((r) => statusText(r.status) === 'Completed').length;
+  const consentNeeded = reports.filter((r) => ['Consent Needed', 'S1 Complete'].includes(statusText(r.status))).length;
+  const consentGiven = reports.filter((r) => ['Consent Given', 'Emp Sent'].includes(statusText(r.status))).length;
+  const ordersOpen = reports.filter((r) => statusText(r.status) !== 'Completed').length;
+
   return (
     <>
       <Header title="Dashboard" subtitle={company?.name || 'Driver Pipeline'} action={refresh} />
-      <div className="grid cards">
-        <Metric title="Total Applicants" value={applicants.length} icon={Database} />
-        <Metric title="On Monitoring" value={onCount} icon={ClipboardCheck} />
-        <Metric title="Safety Reports" value={reports.length} icon={Truck} />
-        <Metric title="Follow Ups" value={reports.filter((r) => r.followUpDate).length} icon={Activity} />
+      <section className="dashboard-section-title">Monitoring</section>
+      <div className="grid cards dashboard-card-grid">
+        <Metric title="Total Applicants" value={applicants.length} icon={Database} onClick={() => openCard({ page: 'monitoring', filter: 'all', label: 'Total Applicants' })} />
+        <Metric title="On Monitor" value={onCount} icon={ClipboardCheck} subtitle={applicants.length ? `${Math.round((onCount / applicants.length) * 100)}% of total` : ''} onClick={() => openCard({ page: 'monitoring', filter: 'on', label: 'On Monitor' })} />
+        <Metric title="Off Monitor" value={offCount} icon={Activity} onClick={() => openCard({ page: 'monitoring', filter: 'off', label: 'Off Monitor' })} />
+        <Metric title="Med Certs Expiring" value={medExpiring} icon={Activity} subtitle="within 30 days" onClick={() => openCard({ page: 'monitoring', filter: 'med-expiring', label: 'Med Certs Expiring' })} />
+      </div>
+      <section className="dashboard-section-title">Safety Performance Reports</section>
+      <div className="grid cards dashboard-card-grid safety-dashboard-grid">
+        <Metric title="Total Reports" value={reports.length} icon={Truck} onClick={() => openCard({ page: 'safety', filter: 'all', label: 'Total Reports' })} />
+        <Metric title="Consent Needed" value={consentNeeded} icon={ShieldCheck} onClick={() => openCard({ page: 'safety', filter: 'consent-needed', label: 'Consent Needed' })} />
+        <Metric title="Consent Given" value={consentGiven} icon={ClipboardCheck} onClick={() => openCard({ page: 'safety', filter: 'consent-given', label: 'Consent Given' })} />
+        <Metric title="Orders Open" value={ordersOpen} icon={Activity} subtitle="not completed" onClick={() => openCard({ page: 'safety', filter: 'orders-open', label: 'Orders Open' })} />
+        <Metric title="Completed" value={completedReports} icon={Database} onClick={() => openCard({ page: 'safety', filter: 'completed', label: 'Completed' })} />
       </div>
     </>
   );
 }
 
-function Monitoring({ applicants, setApplicants, company, refresh }) {
+function DashboardFilterBanner({ filter, onClear }) {
+  if (!filter || !filter.filter || filter.filter === 'all') return null;
+  return <div className="dashboard-filter-banner"><span>Dashboard filter: {filter.label}</span><button type="button" onClick={onClear}>Clear filter</button></div>;
+}
+
+function Monitoring({ applicants, setApplicants, company, refresh, dashboardFilter, clearDashboardFilter }) {
   const [query, setQuery] = useState('');
   const [status, setStatus] = useState('All');
   const [sort, setSort] = useState({ key: '', direction: 'asc' });
+
+  const activeDashboardFilter = dashboardFilter?.page === 'monitoring' ? dashboardFilter : null;
 
   const filtered = useMemo(() => applicants.filter((a) => {
     const term = query.toLowerCase();
     const matches = !term || `${a.fileNumber} ${a.name} ${a.orderDate} ${a.monitorStatus} ${a.mvrStatus} ${a.medExpire} ${a.notes}`.toLowerCase().includes(term);
     const statusOk = status === 'All' || a.monitorStatus === status;
-    return matches && statusOk;
-  }), [applicants, query, status]);
+    let dashboardOk = true;
+    if (activeDashboardFilter?.filter === 'on') dashboardOk = a.monitorStatus === 'On';
+    if (activeDashboardFilter?.filter === 'off') dashboardOk = a.monitorStatus === 'Off';
+    if (activeDashboardFilter?.filter === 'med-expiring') dashboardOk = medExpiresWithin30(a.medExpire);
+    return matches && statusOk && dashboardOk;
+  }), [applicants, query, status, activeDashboardFilter]);
 
   function sortValue(row, key) {
     const value = row?.[key];
@@ -462,6 +512,7 @@ function Monitoring({ applicants, setApplicants, company, refresh }) {
   return (
     <>
       <Header title="Monitoring" subtitle={`${company?.name || 'Driver Pipeline'} · ${sorted.length} records`} action={refresh} />
+      <DashboardFilterBanner filter={activeDashboardFilter} onClear={clearDashboardFilter} />
       <section className="card toolbar"><div className="search-box"><Search size={17} /><input placeholder="Search file number, name, notes..." value={query} onChange={(e) => setQuery(e.target.value)} /></div><select value={status} onChange={(e) => setStatus(e.target.value)}><option>All</option><option>On</option><option>Off</option></select></section>
       <section className="card table-card"><table><thead><tr><SortHeader label="File #" sortKey="fileNumber" /><SortHeader label="Name" sortKey="name" /><SortHeader label="Order Date" sortKey="orderDate" /><SortHeader label="Monitoring" sortKey="monitorStatus" /><SortHeader label="MVR Status" sortKey="mvrStatus" /><SortHeader label="Med Expire" sortKey="medExpire" /><SortHeader label="Notes" sortKey="notes" /><th></th></tr></thead><tbody>{sorted.map((a) => <ApplicantRow key={a.id} applicant={a} onSave={updateApplicant} />)}</tbody></table>{!sorted.length ? <div className="empty">No applicants found. Import your CSV data into Supabase.</div> : null}</section>
     </>
@@ -475,17 +526,25 @@ function ApplicantRow({ applicant, onSave }) {
   return <tr><td><b>{applicant.fileNumber}</b></td><td>{applicant.name}</td><td>{applicant.orderDate}</td><td><select value={draft.monitorStatus} onChange={(e) => setDraft({ ...draft, monitorStatus: e.target.value })}><option>On</option><option>Off</option></select></td><td>{applicant.mvrStatus}</td><td><input className="small-input" value={draft.medExpire || ''} onChange={(e) => setDraft({ ...draft, medExpire: e.target.value })} /></td><td><input value={draft.notes || ''} onChange={(e) => setDraft({ ...draft, notes: e.target.value })} /></td><td><button className="icon-btn" disabled={!dirty} onClick={() => onSave(applicant, { monitorStatus: draft.monitorStatus, medExpire: draft.medExpire, notes: draft.notes })}><Save size={16} /></button></td></tr>;
 }
 
-function Safety({ reports, setReports, company, refresh, companyId }) {
+function Safety({ reports, setReports, company, refresh, companyId, dashboardFilter, clearDashboardFilter }) {
   const [query, setQuery] = useState('');
   const [status, setStatus] = useState('All');
   const [editing, setEditing] = useState(null);
   const [mode, setMode] = useState('list');
+  const activeDashboardFilter = dashboardFilter?.page === 'safety' ? dashboardFilter : null;
+
   const filtered = useMemo(() => reports.filter((r) => {
     const term = query.toLowerCase();
+    const currentStatus = statusText(r.status);
     const matches = !term || `${r.fileNumber} ${r.applicantName} ${r.prevEmployerName} ${r.notes}`.toLowerCase().includes(term);
-    const ok = status === 'All' || r.status === status;
-    return matches && ok;
-  }), [reports, query, status]);
+    const ok = status === 'All' || currentStatus === status;
+    let dashboardOk = true;
+    if (activeDashboardFilter?.filter === 'consent-needed') dashboardOk = ['Consent Needed', 'S1 Complete'].includes(currentStatus);
+    if (activeDashboardFilter?.filter === 'consent-given') dashboardOk = ['Consent Given', 'Emp Sent'].includes(currentStatus);
+    if (activeDashboardFilter?.filter === 'orders-open') dashboardOk = currentStatus !== 'Completed';
+    if (activeDashboardFilter?.filter === 'completed') dashboardOk = currentStatus === 'Completed';
+    return matches && ok && dashboardOk;
+  }), [reports, query, status, activeDashboardFilter]);
 
   async function saveReport(form) {
     const method = form.id ? 'PATCH' : 'POST';
@@ -508,6 +567,7 @@ function Safety({ reports, setReports, company, refresh, companyId }) {
   return (
     <>
       <Header title="Safety Performance Reports" subtitle={`${company?.name || 'Driver Pipeline'} · ${filtered.length} reports`} action={refresh} actions={<button className="primary-inline" onClick={() => { setEditing(defaultReport(company)); setMode('edit'); }}><Plus size={16} /> New Report</button>} />
+      <DashboardFilterBanner filter={activeDashboardFilter} onClear={clearDashboardFilter} />
       <section className="card toolbar"><div className="search-box"><Search size={17} /><input placeholder="Search file #, applicant, employer, notes..." value={query} onChange={(e) => setQuery(e.target.value)} /></div><select value={status} onChange={(e) => setStatus(e.target.value)}><option>All</option>{STATUSES.map((s) => <option key={s}>{s}</option>)}</select></section>
       <section className="card table-card">
         <table>
@@ -609,6 +669,7 @@ function App() {
   const [companyId, setCompanyId] = useState(1);
   const [applicants, setApplicants] = useState([]);
   const [reports, setReports] = useState([]);
+  const [dashboardFilter, setDashboardFilter] = useState(null);
   const company = companies.find((c) => c.id === companyId) || companies[0];
 
   useEffect(() => { api('/api/auth/me').then((d) => setUser(d.user)).finally(() => setChecking(false)); }, []);
@@ -625,10 +686,19 @@ function App() {
 
   async function logout() { await api('/api/auth/logout', { method: 'POST' }); setUser(null); }
 
+  function openDashboardCard(filter) {
+    setDashboardFilter(filter);
+    setPage(filter.page);
+  }
+
+  function clearDashboardFilter() {
+    setDashboardFilter(null);
+  }
+
   if (checking) return <div className="center-screen"><div className="spinner" /></div>;
   if (!user) return <Login onAuth={setUser} />;
 
-  return <Layout user={user} page={page} setPage={setPage} onLogout={logout}>{companies.length > 1 ? <div className="company-switcher"><span>Active company</span><select value={companyId} onChange={(e) => setCompanyId(Number(e.target.value))}>{companies.map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}</select></div> : null}{page === 'dashboard' && <Dashboard company={company} applicants={applicants} reports={reports} refresh={loadData} />}{page === 'monitoring' && <Monitoring company={company} applicants={applicants} setApplicants={setApplicants} refresh={loadData} />}{page === 'safety' && <Safety company={company} reports={reports} setReports={setReports} refresh={loadData} companyId={companyId} />}{page === 'settings' && <SettingsManager user={user} company={company} companies={companies} setCompanies={setCompanies} companyId={companyId} refresh={loadData} setApplicants={setApplicants} />}</Layout>;
+  return <Layout user={user} page={page} setPage={(nextPage) => { setPage(nextPage); if (nextPage === 'dashboard') clearDashboardFilter(); }} onLogout={logout}>{companies.length > 1 ? <div className="company-switcher"><span>Active company</span><select value={companyId} onChange={(e) => setCompanyId(Number(e.target.value))}>{companies.map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}</select></div> : null}{page === 'dashboard' && <Dashboard company={company} applicants={applicants} reports={reports} refresh={loadData} openCard={openDashboardCard} />}{page === 'monitoring' && <Monitoring company={company} applicants={applicants} setApplicants={setApplicants} refresh={loadData} dashboardFilter={dashboardFilter} clearDashboardFilter={clearDashboardFilter} />}{page === 'safety' && <Safety company={company} reports={reports} setReports={setReports} refresh={loadData} companyId={companyId} dashboardFilter={dashboardFilter} clearDashboardFilter={clearDashboardFilter} />}{page === 'settings' && <SettingsManager user={user} company={company} companies={companies} setCompanies={setCompanies} companyId={companyId} refresh={loadData} setApplicants={setApplicants} />}</Layout>;
 }
 
 createRoot(document.getElementById('root')).render(<App />);
