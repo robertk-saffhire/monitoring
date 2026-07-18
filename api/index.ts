@@ -2051,8 +2051,15 @@ async function tazworksSyncRun(req: any, res: any, user: any) {
   if (req.method !== 'POST') return json(res, 405, { status: 'error', message: 'Method not allowed' });
   if (!requireAdmin(user, res)) return;
 
-  const companyId = Number(user.companyId || 1);
-  const runInsert = await query('insert into tazworks_sync_runs (status, triggered_by, message) values ($1,$2,$3) returning id', ['running', user.username || user.displayName || 'admin', 'Manual sync started']);
+  const body = await readBody(req);
+  const companyId = Number(body.companyId || user.companyId || 1);
+  const requestedMaxPages = Number(body.maxPages || 25);
+  const requestedPageSize = Number(body.pageSize || 25);
+  const maxPages = Math.min(Math.max(Number.isFinite(requestedMaxPages) ? requestedMaxPages : 25, 1), 100);
+  const pageSize = Math.min(Math.max(Number.isFinite(requestedPageSize) ? requestedPageSize : 25, 1), 50);
+  const triggeredBy = String(body.source || '').trim() || user.username || user.displayName || 'admin';
+
+  const runInsert = await query('insert into tazworks_sync_runs (status, triggered_by, message) values ($1,$2,$3) returning id', ['running', triggeredBy, 'Manual sync started']);
   const runId = runInsert.rows[0].id;
 
   let ordersPulled = 0, applicantsUpserted = 0, safetyReportsUpdated = 0, medExpireUpdated = 0, medExpireCleared = 0, mvrSearchesChecked = 0, errorsCount = 0;
@@ -2062,8 +2069,8 @@ async function tazworksSyncRun(req: any, res: any, user: any) {
   try {
     const e = tazEnv();
 
-    for (let page = 0; page < 5; page++) {
-      const payload = await proxyGet(`/tazworks/orders?page=${page}&size=10&clientGuid=${encodeURIComponent(e.clientGuid)}`);
+    for (let page = 0; page < maxPages; page++) {
+      const payload = await proxyGet(`/tazworks/orders?page=${page}&size=${pageSize}&clientGuid=${encodeURIComponent(e.clientGuid)}`);
       const list = arr(payload);
       pageSummaries.push({ page, arrayCount: list.length, topLevelKeys: payload && typeof payload === 'object' ? Object.keys(payload).slice(0, 20) : [] });
 
@@ -2073,7 +2080,7 @@ async function tazworksSyncRun(req: any, res: any, user: any) {
         if (!dedupe.has(key)) dedupe.set(key, o);
       }
 
-      if (list.length < 10) break;
+      if (list.length < pageSize) break;
     }
 
     const orders = Array.from(dedupe.values()).filter((o: any) => o.orderGuid || o.fileNumber);
@@ -2143,13 +2150,13 @@ async function tazworksSyncRun(req: any, res: any, user: any) {
     const message = `Sync completed. Pulled ${ordersPulled} orders. Updated ${medExpireUpdated} medical expiration date(s). Cleared ${medExpireCleared} stale medical date(s).`;
     await query(
       'update tazworks_sync_runs set status=$1, completed_at=now(), orders_pulled=$2, applicants_upserted=$3, safety_reports_updated=$4, errors_count=$5, message=$6, raw_summary=$7 where id=$8',
-      [errorsCount ? 'completed_with_errors' : 'completed', ordersPulled, applicantsUpserted, safetyReportsUpdated, errorsCount, message, JSON.stringify({ pages: pageSummaries, mvrSearchesChecked, medExpireUpdated, medExpireCleared, mvrSamples: mvrSamples.slice(0, 20), errors: errors.slice(0, 10) }), runId]
+      [errorsCount ? 'completed_with_errors' : 'completed', ordersPulled, applicantsUpserted, safetyReportsUpdated, errorsCount, message, JSON.stringify({ pages: pageSummaries, maxPages, pageSize, mvrSearchesChecked, medExpireUpdated, medExpireCleared, mvrSamples: mvrSamples.slice(0, 20), errors: errors.slice(0, 10) }), runId]
     );
 
-    return json(res, 200, { status: 'ok', runId, ordersPulled, applicantsUpserted, safetyReportsUpdated, medExpireUpdated, medExpireCleared, mvrSearchesChecked, errorsCount, message, pages: pageSummaries });
+    return json(res, 200, { status: 'ok', runId, ordersPulled, applicantsUpserted, safetyReportsUpdated, medExpireUpdated, medExpireCleared, mvrSearchesChecked, errorsCount, message, pages: pageSummaries, maxPages, pageSize });
   } catch (error: any) {
     const safe = error?.message || 'The order connection is currently unavailable.';
-    await query('update tazworks_sync_runs set status=$1, completed_at=now(), errors_count=$2, message=$3, raw_summary=$4 where id=$5', ['failed', errorsCount + 1, safe, JSON.stringify({ pages: pageSummaries, mvrSearchesChecked, medExpireUpdated, medExpireCleared, mvrSamples: mvrSamples.slice(0, 20), errors: [safe, ...errors].slice(0, 10) }), runId]);
+    await query('update tazworks_sync_runs set status=$1, completed_at=now(), errors_count=$2, message=$3, raw_summary=$4 where id=$5', ['failed', errorsCount + 1, safe, JSON.stringify({ pages: pageSummaries, maxPages, pageSize, mvrSearchesChecked, medExpireUpdated, medExpireCleared, mvrSamples: mvrSamples.slice(0, 20), errors: [safe, ...errors].slice(0, 10) }), runId]);
     return json(res, error?.statusCode || 503, { status: 'error', message: safe, runId });
   }
 }
