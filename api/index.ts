@@ -3956,6 +3956,14 @@ function parseApplicantSignature(notes: any) {
   return last || { name: '', signedAt: '', ip: '' };
 }
 
+function stripApplicantSignatureMarkers(notes: any) {
+  return String(notes || '')
+    .split(/\n+/)
+    .filter((line) => !/\[Applicant Electronic Signature\]/i.test(line))
+    .join('\n')
+    .replace(/\n{3,}/g, '\n\n')
+    .trim();
+}
 function publicSafetyResponseReport(row: any) {
   const allowed = [
     'id',
@@ -4138,10 +4146,20 @@ async function safetyResponsePublic(req: any, res: any) {
         assignments.push(`"${field}"=$${values.length}`);
       });
 
+      const existing = await query(
+        'select notes from safety_reports where id=$1 and "companyId"=$2 limit 1',
+        [Number(payload.reportId), Number(payload.companyId)]
+      );
+      if (!existing.rows[0]) return json(res, 404, { status: 'error', message: 'Safety report not found' });
+
       const signedAt = new Date().toISOString();
       const ip = String(req.headers['x-forwarded-for'] || req.headers['x-real-ip'] || '').split(',')[0].trim();
-      values.push(`[Applicant Electronic Signature] Name: ${signatureName} | Date: ${signedAt}${ip ? ` | IP: ${ip}` : ''}`);
-      const noteParam = values.length;
+      const cleanNotes = stripApplicantSignatureMarkers(existing.rows[0].notes);
+      const signatureNote = `[Applicant Electronic Signature] Name: ${signatureName} | Date: ${signedAt}${ip ? ` | IP: ${ip}` : ''}`;
+      values.push(cleanNotes);
+      const cleanNotesParam = values.length;
+      values.push(signatureNote);
+      const signatureParam = values.length;
 
       values.push(Number(payload.reportId));
       const reportParam = values.length;
@@ -4153,7 +4171,7 @@ async function safetyResponsePublic(req: any, res: any) {
         update safety_reports
         set ${assignments.join(',')},
             status='Consent Given',
-            notes=trim(both E'\n' from concat(coalesce(notes,''), E'\n', $${noteParam}::text)),
+            notes=trim(both E'\n' from concat($${cleanNotesParam}::text, case when $${cleanNotesParam}::text <> '' then E'\n' else '' end, $${signatureParam}::text)),
             "updatedAt"=now()
         where id=$${reportParam} and "companyId"=$${companyParam}
         returning *
