@@ -908,15 +908,41 @@ function SafetyLinks({ report, companyId, company, onReportUpdated }) {
   async function openFaxGmail() {
     const digits = String(recipient || '').replace(/[^0-9]/g, '');
     if (digits.length < 7) throw new Error('Recipient fax number is required.');
+
+    // Open Gmail immediately while still inside the user's click event.
+    // If we wait until after the PDF download finishes, browsers can treat the
+    // Gmail window as an automatic popup and block it.
+    const gmailWindow = window.open('', '_blank');
+
     const faxEmail = `${digits}@efaxsend.com`;
-    const filename = await downloadFmcsaPdf(report, companyId);
     const currentTemplate = templates.find((template) => String(template.id ?? 'default') === String(templateId)) || defaultTemplate('fax');
     const nextSubject = subject || replaceTemplateTokens(currentTemplate.subject, report, { faxNumber: digits });
     const nextBody = body || replaceTemplateTokens(currentTemplate.body, report, { faxNumber: digits });
+    const gmailUrl = gmailComposeUrl(faxEmail, nextSubject, nextBody);
+
+    try {
+      if (gmailWindow) {
+        gmailWindow.document.write('<!doctype html><title>Opening Gmail...</title><body style="font-family:Arial,sans-serif;padding:24px;"><h2>Preparing fax email...</h2><p>Downloading the FMCSA PDF, then Gmail will open here.</p></body>');
+        gmailWindow.document.close();
+      }
+    } catch {}
+
+    const filename = await downloadFmcsaPdf(report, companyId);
     const draft = `To: ${faxEmail}\nSubject: ${nextSubject}\n\n${nextBody}\n\nAttach downloaded file: ${filename}`;
     await copyToClipboard(draft);
-    alert(`The FMCSA PDF was downloaded as ${filename}. Gmail will open now. Attach the downloaded PDF before sending.`);
-    window.open(gmailComposeUrl(faxEmail, nextSubject, nextBody), '_blank', 'noopener,noreferrer');
+
+    if (gmailWindow && !gmailWindow.closed) {
+      gmailWindow.location.href = gmailUrl;
+    } else {
+      const opened = window.open(gmailUrl, '_blank', 'noopener,noreferrer');
+      if (!opened) {
+        await copyToClipboard(gmailUrl);
+        alert(`The FMCSA PDF was downloaded as ${filename}, but your browser blocked the Gmail popup. The Gmail compose URL was copied to your clipboard. Paste it into your browser, then attach the downloaded PDF before sending.`);
+        return;
+      }
+    }
+
+    alert(`The FMCSA PDF was downloaded as ${filename}. Gmail opened in a new tab. Attach the downloaded PDF before sending.`);
     setModal(null);
   }
 
