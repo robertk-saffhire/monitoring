@@ -72,15 +72,18 @@
     ['monitoring', 'Monitoring'],
     ['safetyReports', 'Safety Reports'],
     ['userAdmin', 'User Admin'],
-    ['editMonitoring', 'Edit Monitoring']
+    ['editMonitoring', 'Edit Monitoring'],
+    ['terminated', 'Terminated']
   ];
-  const DEFAULT_ACCESS = { dashboard: true, monitoring: true, safetyReports: true, userAdmin: true, editMonitoring: true };
+  const DEFAULT_ACCESS = { dashboard: true, monitoring: true, safetyReports: true, userAdmin: true, editMonitoring: true, terminated: true };
   function normalizeAccess(access) { return Object.assign({}, DEFAULT_ACCESS, access || {}); }
   function canViewDashboard() { return Boolean(state.data?.canViewDashboard); }
   function canViewMonitoring() { return Boolean(state.data?.canViewMonitoring); }
   function canViewSafety() { return Boolean(state.data?.canViewSafety); }
   function canManageUsers() { return Boolean(state.data?.canManageUsers); }
   function canEditMonitoring() { return Boolean(state.data?.canEditMonitoring); }
+  function canAccessTerminated() { return Boolean(state.data?.canAccessTerminated); }
+  function canEditTerminated() { return Boolean(state.data?.canEditTerminated); }
   function isPageAllowed(page) {
     if (page === 'dashboard') return canViewDashboard();
     if (page === 'monitoring') return canViewMonitoring();
@@ -101,7 +104,7 @@
   }
   function accessFields(access, mode) {
     const current = normalizeAccess(access);
-    return `<fieldset class="access-box"><legend>Client Access</legend><div class="access-grid">${CLIENT_ACCESS_OPTIONS.map(([key, label]) => `<label><input type="checkbox" data-access-key="${esc(key)}" ${current[key] !== false ? 'checked' : ''}> ${esc(label)}</label>`).join('')}</div><p class="small">Dashboard is the summary page. User Admin only works for Client Admin accounts. Edit Monitoring controls whether Monitoring records can be changed.</p></fieldset>`;
+    return `<fieldset class="access-box"><legend>Client Access</legend><div class="access-grid">${CLIENT_ACCESS_OPTIONS.map(([key, label]) => `<label><input type="checkbox" data-access-key="${esc(key)}" ${current[key] !== false ? 'checked' : ''}> ${esc(label)}</label>`).join('')}</div><p class="small">Dashboard is the summary page. User Admin only works for Client Admin accounts. Edit Monitoring controls whether Monitoring records can be changed. Terminated controls whether terminated records and the Terminated field are visible/editable.</p></fieldset>`;
   }
   function readAccess(container) {
     const access = {};
@@ -214,6 +217,8 @@
     const status = state.filters.monitoringStatus;
     return recentApplicants().filter(row => {
       const terminated = Boolean(row.terminated);
+      if (!canAccessTerminated() && terminated) return false;
+      if (!canAccessTerminated() && status === 'terminated') return false;
       if (status === 'active' && terminated) return false;
       if (status === 'terminated' && !terminated) return false;
       if (status === 'on' && String(row.monitorStatus) !== 'On') return false;
@@ -223,9 +228,12 @@
   }
   function monitoringTable(rows, edit) {
     if (!rows.length) return '<p class="empty">No monitoring records found.</p>';
-    return `<div class="table-wrap"><table><thead><tr><th>File #</th><th>Name</th><th>Order Date</th><th>Monitoring</th><th>MVR Status</th><th>Med Expire</th><th>Notes</th><th>Terminated</th>${edit ? '<th>Save</th>' : ''}</tr></thead><tbody>${rows.map(row => {
+    const showTerminatedColumn = canAccessTerminated();
+    const terminatedHeader = showTerminatedColumn ? '<th>Terminated</th>' : '';
+    return `<div class="table-wrap"><table><thead><tr><th>File #</th><th>Name</th><th>Order Date</th><th>Monitoring</th><th>MVR Status</th><th>Med Expire</th><th>Notes</th>${terminatedHeader}${edit ? '<th>Save</th>' : ''}</tr></thead><tbody>${rows.map(row => {
       const editable = edit && canEditMonitoring();
-      return `<tr data-id="${esc(row.id)}"><td><b>${esc(row.fileNumber)}</b></td><td>${esc(row.name)}</td><td>${esc(fmt(row.orderDate))}</td><td>${editable ? `<select data-field="monitorStatus" class="${row.monitorStatus === 'On' ? 'on' : ''}"><option value="Off" ${row.monitorStatus !== 'On' ? 'selected' : ''}>Off</option><option value="On" ${row.monitorStatus === 'On' ? 'selected' : ''}>On</option></select>` : monitoringPill(row.monitorStatus)}</td><td>${esc(row.mvrStatus)}</td><td>${esc(row.medExpire)}</td><td>${editable ? `<textarea data-field="notes">${esc(row.notes || '')}</textarea>` : esc(row.notes)}</td><td>${editable ? `<label class="check"><input type="checkbox" data-field="terminated" ${row.terminated ? 'checked' : ''}> Yes</label>` : (row.terminated ? '<span class="pill warn">Yes</span>' : '')}</td>${editable ? '<td><button class="btn" data-action="save-monitoring">Save</button></td>' : ''}</tr>`;
+      const terminatedCell = showTerminatedColumn ? `<td>${editable && canEditTerminated() ? `<label class="check"><input type="checkbox" data-field="terminated" ${row.terminated ? 'checked' : ''}> Yes</label>` : (row.terminated ? '<span class="pill warn">Yes</span>' : '<span class="pill good">No</span>')}</td>` : '';
+      return `<tr data-id="${esc(row.id)}"><td><b>${esc(row.fileNumber)}</b></td><td>${esc(row.name)}</td><td>${esc(fmt(row.orderDate))}</td><td>${editable ? `<select data-field="monitorStatus" class="${row.monitorStatus === 'On' ? 'on' : ''}"><option value="Off" ${row.monitorStatus !== 'On' ? 'selected' : ''}>Off</option><option value="On" ${row.monitorStatus === 'On' ? 'selected' : ''}>On</option></select>` : monitoringPill(row.monitorStatus)}</td><td>${esc(row.mvrStatus)}</td><td>${esc(row.medExpire)}</td><td>${editable ? `<textarea data-field="notes">${esc(row.notes || '')}</textarea>` : esc(row.notes)}</td>${terminatedCell}${editable ? '<td><button class="btn" data-action="save-monitoring">Save</button></td>' : ''}</tr>`;
     }).join('')}</tbody></table></div>`;
   }
   function renderMonitoring() {
@@ -235,10 +243,21 @@
       bindHeaderButtons();
       return;
     }
+    if (!canAccessTerminated() && (state.filters.monitoringStatus === 'terminated' || state.filters.monitoringStatus === 'all')) state.filters.monitoringStatus = 'active';
     const rows = monitoringRowsFiltered();
+    const statusOptions = [
+      `<option value="active" ${state.filters.monitoringStatus === 'active' ? 'selected' : ''}>Active only</option>`,
+      canAccessTerminated() ? `<option value="all" ${state.filters.monitoringStatus === 'all' ? 'selected' : ''}>All records</option>` : '',
+      `<option value="on" ${state.filters.monitoringStatus === 'on' ? 'selected' : ''}>Monitoring On</option>`,
+      `<option value="off" ${state.filters.monitoringStatus === 'off' ? 'selected' : ''}>Monitoring Off</option>`,
+      canAccessTerminated() ? `<option value="terminated" ${state.filters.monitoringStatus === 'terminated' ? 'selected' : ''}>Terminated only</option>` : ''
+    ].join('');
+    const subtitle = canEditMonitoring()
+      ? (canEditTerminated() ? 'Client-scoped Monitoring records. You can update Monitoring status, notes, and terminated status.' : 'Client-scoped Monitoring records. You can update Monitoring status and notes.')
+      : 'Read-only client-scoped Monitoring records.';
     app.className = '';
-    app.innerHTML = header('Monitoring', canEditMonitoring() ? 'Client-scoped Monitoring records. You can update Monitoring status, notes, and terminated status.' : 'Read-only client-scoped Monitoring records.') +
-      `<section class="card"><div class="toolbar"><input id="monitoring-search" type="search" placeholder="Search by file number, name, status, notes..." value="${esc(state.filters.monitoringSearch)}"><select id="monitoring-filter"><option value="active" ${state.filters.monitoringStatus === 'active' ? 'selected' : ''}>Active only</option><option value="all" ${state.filters.monitoringStatus === 'all' ? 'selected' : ''}>All records</option><option value="on" ${state.filters.monitoringStatus === 'on' ? 'selected' : ''}>Monitoring On</option><option value="off" ${state.filters.monitoringStatus === 'off' ? 'selected' : ''}>Monitoring Off</option><option value="terminated" ${state.filters.monitoringStatus === 'terminated' ? 'selected' : ''}>Terminated only</option></select>${canEditMonitoring() ? '<button class="btn" id="save-all-monitoring">Save All Changed</button>' : ''}<span class="small">Showing ${rows.length} of ${recentApplicants().length}</span></div>${monitoringTable(rows, true)}</section>`;
+    app.innerHTML = header('Monitoring', subtitle) +
+      `<section class="card"><div class="toolbar"><input id="monitoring-search" type="search" placeholder="Search by file number, name, status, notes..." value="${esc(state.filters.monitoringSearch)}"><select id="monitoring-filter">${statusOptions}</select>${canEditMonitoring() ? '<button class="btn" id="save-all-monitoring">Save All Changed</button>' : ''}<span class="small">Showing ${rows.length} of ${recentApplicants().length}</span></div>${monitoringTable(rows, true)}</section>`;
     bindHeaderButtons();
     document.getElementById('monitoring-search')?.addEventListener('input', event => { state.filters.monitoringSearch = event.target.value; renderMonitoring(); });
     document.getElementById('monitoring-filter')?.addEventListener('change', event => { state.filters.monitoringStatus = event.target.value; renderMonitoring(); });
@@ -256,9 +275,9 @@
       const payload = {
         id: Number(row.dataset.id),
         monitorStatus: row.querySelector('[data-field="monitorStatus"]')?.value || 'Off',
-        notes: row.querySelector('[data-field="notes"]')?.value || '',
-        terminated: Boolean(row.querySelector('[data-field="terminated"]')?.checked)
+        notes: row.querySelector('[data-field="notes"]')?.value || ''
       };
+      if (canEditTerminated()) payload.terminated = Boolean(row.querySelector('[data-field="terminated"]')?.checked);
       const result = await api('client-applicant', {method:'PATCH', body: JSON.stringify(payload)});
       const index = recentApplicants().findIndex(item => Number(item.id) === Number(payload.id));
       if (index >= 0 && result.applicant) state.data.recentApplicants[index] = result.applicant;
