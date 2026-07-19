@@ -1,17 +1,15 @@
-# Phase 12A-128 — Client Portal Terminated Checkbox Visibility
+# Phase 12A-129 — Client Portal Terminated Visibility Fix
 
-Upload only:
+Upload only this file:
 
-- `public/client-portal.html`
+- public/client-portal.html
 
 What changed:
 
-- Makes the `Terminated Records` option visible in the Client Portal User Admin screen.
-- Splits Client Access into two visible groups:
-  - Portal Sections
-  - Monitoring Controls
-- Adds a highlighted `Terminated Records` checkbox so it is easy to find.
-- Updates helper text to explain that Terminated Records controls whether client users can see terminated applicants and the Terminated field.
+- Client Portal sidebar now labels the page as **User Admin / Access**.
+- In Client Portal > User Admin / Access, **Terminated Records** is now its own table column instead of being buried in the access checkbox group.
+- On the Monitoring page, if Terminated access is enabled, the client sees a clear notice that Terminated Records access is ON.
+- Added a **Show Terminated Only** button on the Monitoring page when Terminated access is enabled.
 
-SQL migration needed: No.
-Vercel ENV changes: No.
+No SQL migration needed.
+No Vercel ENV changes needed.
