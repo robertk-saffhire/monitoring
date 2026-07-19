@@ -18,13 +18,14 @@ const CLIENT_ACCESS_OPTIONS = [
   ['safetyReports', 'Safety Reports'],
   ['userAdmin', 'User Admin'],
   ['editMonitoring', 'Edit Monitoring'],
+  ['terminated', 'Terminated'],
 ];
 const DEFAULT_CLIENT_ACCESS = CLIENT_ACCESS_OPTIONS.reduce((acc, [key]) => ({ ...acc, [key]: true }), {});
 const CLIENT_ACCESS_PRESETS = {
-  full: { dashboard: true, monitoring: true, safetyReports: true, userAdmin: true, editMonitoring: true },
-  monitoring: { dashboard: true, monitoring: true, safetyReports: false, userAdmin: false, editMonitoring: true },
-  safety: { dashboard: true, monitoring: false, safetyReports: true, userAdmin: false, editMonitoring: false },
-  readonly: { dashboard: true, monitoring: true, safetyReports: true, userAdmin: false, editMonitoring: false },
+  full: { dashboard: true, monitoring: true, safetyReports: true, userAdmin: true, editMonitoring: true, terminated: true },
+  monitoring: { dashboard: true, monitoring: true, safetyReports: false, userAdmin: false, editMonitoring: true, terminated: true },
+  safety: { dashboard: true, monitoring: false, safetyReports: true, userAdmin: false, editMonitoring: false, terminated: false },
+  readonly: { dashboard: true, monitoring: true, safetyReports: true, userAdmin: false, editMonitoring: false, terminated: true },
 };
 function normalizeClientAccess(value) {
   const source = value && typeof value === 'object' ? value : {};
