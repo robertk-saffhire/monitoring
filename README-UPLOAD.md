@@ -1,34 +1,19 @@
-# Phase 12A-133 — Dynamic Monitoring Totals
+# Phase 12A-134 — Client-Created User Scope
 
-Upload these files to the same paths in the `robertk-saffhire/monitoring` repository:
+Upload:
 
+- `api/index.ts`
 - `public/client-portal.html`
-- `public/phase6.js`
 
-## What changed
+Run in Supabase SQL Editor:
 
-- Client Monitoring totals now reload from the server immediately after a Monitoring record is saved.
-- Monitoring On/Off changes update the totals automatically.
-- Terminated changes update the totals automatically.
-- Record edits reload fresh totals and table data after saving.
-- Save All Changed saves each row, then performs one fresh totals reload.
-- Monitoring Data Sync now broadcasts a completion signal to open client portal tabs.
-- Open client portal tabs refresh immediately after Data Sync completes in another tab on the same browser.
-- Dashboard, Monitoring, and Terminated pages check for new records every 30 seconds.
-- Returning to the tab or focusing the window also checks for current totals.
-- Dashboard requests use `cache: no-store` so an old browser response is not reused.
-- Automatic refresh pauses while a Monitoring row has unsaved changes, including while notes are being typed.
+- `supabase/migrations/20260719_phase12a134_client_created_user_scope.sql`
 
-## Database / Supabase
+Run the SQL before testing the Client User Admin page.
 
-No SQL migration needed.
+## Expected result
 
-## Vercel environment variables
-
-No ENV changes needed.
-
-## Validation
-
-- `public/phase6.js` passed `node --check`.
-- The JavaScript extracted from `public/client-portal.html` passed `node --check`.
-- The starting files match the current GitHub `main` versions used for Phase 12A-132 and Phase 12A-131.
+- Users created in the SaffHire master admin remain able to log in but do not appear in the client portal User Admin list.
+- Users created from the client portal are marked as client-created and appear in that client's User Admin list.
+- Client admins can edit, reset, deactivate, or delete only client-created users.
+- Master-admin-created users remain managed only from the SaffHire master admin.
