@@ -761,9 +761,17 @@ async function clientDashboard(req: any, res: any, user: any) {
     `select id, "fileNumber", "applicantName" as name, "orderDate", "monitorStatus", "mvrStatus", "medExpire", "terminated", notes
      from applicants where "companyId"=$1 order by id desc limit 1000`, [companyId]) : { rows: [] };
 
+  const applicantStatsRows = showMonitoring ? await query(
+    `select "monitorStatus", "medExpire", "terminated"
+     from applicants where "companyId"=$1`, [companyId]) : { rows: [] };
+
   const recentSafety = showSafety ? await query(
     `select id, "fileNumber", "applicantName", created, status, "followUpDate", "prevEmployerName", notes
      from safety_reports where "companyId"=$1 order by id desc limit 1000`, [companyId]) : { rows: [] };
+
+  const safetyStatsRows = showSafety ? await query(
+    `select status
+     from safety_reports where "companyId"=$1`, [companyId]) : { rows: [] };
 
   function clientDateOnly(value: any) {
     const raw = String(value || '').trim();
@@ -782,23 +790,26 @@ async function clientDashboard(req: any, res: any, user: any) {
   const todayRaw = new Date();
   const today = new Date(todayRaw.getFullYear(), todayRaw.getMonth(), todayRaw.getDate());
   const applicants = recentApplicants.rows || [];
-  const applicantStats = applicants.reduce((out: any, row: any) => {
-    const monitorOn = String(row.monitorStatus || '') === 'On';
+  const applicantRowsForStats = applicantStatsRows.rows || [];
+  const applicantStats = applicantRowsForStats.reduce((out: any, row: any) => {
+    const monitorOn = String(row.monitorStatus || '').trim().toLowerCase() === 'on';
     const medDate = clientDateOnly(row.medExpire);
     const days = medDate ? Math.ceil((medDate.getTime() - today.getTime()) / 86400000) : null;
     out.total += 1;
     if (monitorOn) out.on_monitoring += 1;
     else out.off_monitoring += 1;
     if (!String(row.medExpire || '').trim()) out.blank_med_expire += 1;
-    if (days !== null && days < 0) out.expired_medical += 1;
-    if (days !== null && days >= 0 && days <= 30) out.expiring_30 += 1;
-    if (days !== null && days >= 31 && days <= 60) out.expiring_60 += 1;
+    // Dashboard med-cert alert totals should match Monitoring Alerts: only active On Monitoring records count.
+    if (monitorOn && days !== null && days < 0) out.expired_medical += 1;
+    if (monitorOn && days !== null && days >= 0 && days <= 30) out.expiring_30 += 1;
+    if (monitorOn && days !== null && days >= 31 && days <= 60) out.expiring_60 += 1;
     if (Boolean(row.terminated)) out.terminated += 1;
     return out;
   }, { total: 0, on_monitoring: 0, off_monitoring: 0, blank_med_expire: 0, expired_medical: 0, expiring_30: 0, expiring_60: 0, terminated: 0 });
 
   const safetyRows = recentSafety.rows || [];
-  const safetyStats = safetyRows.reduce((out: any, row: any) => {
+  const safetyRowsForStats = safetyStatsRows.rows || [];
+  const safetyStats = safetyRowsForStats.reduce((out: any, row: any) => {
     const status = String(row.status || '');
     out.total += 1;
     if (status === 'Consent Needed') out.consent_needed += 1;
