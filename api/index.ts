@@ -290,7 +290,7 @@ async function applicants(req: any, res: any, user: any) {
   if (req.method === 'GET') { const result = await query('select id, "fileNumber", "applicantName" as name, "orderDate", "monitorStatus", "mvrStatus", "medExpire", "terminated", notes from applicants where "companyId"=$1 order by id desc limit 10000', [companyId]); return json(res, 200, { status: 'ok', applicants: result.rows }); }
   if (req.method === 'PATCH') {
     if (isClientScopedRole(user) && !canEditClientMonitoring(user)) return json(res, 403, { status: 'error', message: 'This account cannot edit Monitoring records' });
-    const body = await readBody(req); const id = Number(body.id); if (!id) return json(res, 400, { status: 'error', message: 'Applicant id is required' }); const current = await query('select * from applicants where id=$1 and "companyId"=$2 limit 1', [id, companyId]); if (!current.rows[0]) return json(res, 404, { status: 'error', message: 'Applicant not found' }); const monitorStatus = normalizeMonitorStatus(body.monitorStatus ?? current.rows[0].monitorStatus); const medExpire = body.medExpire ?? current.rows[0].medExpire; const notes = body.notes ?? current.rows[0].notes; const terminated = body.terminated === undefined ? Boolean(current.rows[0].terminated) : asBool(body.terminated); await logMonitoringOnOffChange(companyId, current.rows[0], monitorStatus, user); const result = await query('update applicants set "monitorStatus"=$1, "medExpire"=$2, "medExpireOverridden"=$3, notes=$4, "terminated"=$5, "updatedAt"=now() where id=$6 and "companyId"=$7 returning id, "fileNumber", "applicantName" as name, "orderDate", "monitorStatus", "mvrStatus", "medExpire", "terminated", notes', [monitorStatus, medExpire || null, Boolean(medExpire), String(notes || ''), terminated, id, companyId]); return json(res, 200, { status: 'ok', applicant: result.rows[0] }); }
+    const body = await readBody(req); const id = Number(body.id); if (!id) return json(res, 400, { status: 'error', message: 'Applicant id is required' }); const current = await query('select * from applicants where id=$1 and "companyId"=$2 limit 1', [id, companyId]); if (!current.rows[0]) return json(res, 404, { status: 'error', message: 'Applicant not found' }); const monitorStatus = normalizeMonitorStatus(body.monitorStatus ?? current.rows[0].monitorStatus); const medExpire = body.medExpire ?? current.rows[0].medExpire; const notes = body.notes ?? current.rows[0].notes; const terminated = body.terminated === undefined ? Boolean(current.rows[0].terminated) : asBool(body.terminated); const monitoringNotification = await logMonitoringOnOffChange(companyId, current.rows[0], monitorStatus, user); const result = await query('update applicants set "monitorStatus"=$1, "medExpire"=$2, "medExpireOverridden"=$3, notes=$4, "terminated"=$5, "updatedAt"=now() where id=$6 and "companyId"=$7 returning id, "fileNumber", "applicantName" as name, "orderDate", "monitorStatus", "mvrStatus", "medExpire", "terminated", notes', [monitorStatus, medExpire || null, Boolean(medExpire), String(notes || ''), terminated, id, companyId]); return json(res, 200, { status: 'ok', applicant: result.rows[0], monitoringNotification }); }
   return json(res, 405, { status: 'error', message: 'Method not allowed' });
 }
 
@@ -717,7 +717,7 @@ async function clientApplicantUpdate(req: any, res: any, user: any) {
   if (!id) return json(res, 400, { status: 'error', message: 'Applicant id is required' });
 
   const current = await query(
-    'select id, "fileNumber", "applicantName", "monitorStatus", "terminated", notes from applicants where id=$1 and "companyId"=$2 limit 1',
+    'select id, "fileNumber", "applicantName", "monitorStatus", "mvrStatus", "medExpire", "terminated", notes from applicants where id=$1 and "companyId"=$2 limit 1',
     [id, companyId]
   );
 
@@ -729,7 +729,7 @@ async function clientApplicantUpdate(req: any, res: any, user: any) {
   const notes = body.notes === undefined ? String(current.rows[0].notes || '') : String(body.notes ?? '').trim();
   const terminated = body.terminated === undefined ? Boolean(current.rows[0].terminated) : asBool(body.terminated);
 
-  await logMonitoringOnOffChange(companyId, current.rows[0], monitorStatus, user);
+  const monitoringNotification = await logMonitoringOnOffChange(companyId, current.rows[0], monitorStatus, user);
 
   const result = await query(
     `update applicants
@@ -742,7 +742,7 @@ async function clientApplicantUpdate(req: any, res: any, user: any) {
     [monitorStatus, notes, terminated, id, companyId]
   );
 
-  return json(res, 200, { status: 'ok', applicant: result.rows[0] });
+  return json(res, 200, { status: 'ok', applicant: result.rows[0], monitoringNotification });
 }
 
 
@@ -2742,8 +2742,16 @@ async function monitoringExportTazworksDetails(companyId: number, fileNumber: st
 }
 
 
+function monitoringNotificationEmailAddress(value: any) {
+  const raw = String(value || '').trim();
+  if (!raw) return '';
+  const displayMatch = raw.match(/<([^<>\s@]+@[^<>\s@]+\.[^<>\s@]+)>/);
+  if (displayMatch) return displayMatch[1].trim().toLowerCase();
+  return raw.replace(/^mailto:/i, '').trim().toLowerCase();
+}
+
 function monitoringNotificationEmailLooksValid(value: any) {
-  return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(String(value || '').trim());
+  return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(monitoringNotificationEmailAddress(value));
 }
 
 function monitoringNotificationFromEmail() {
@@ -2769,10 +2777,21 @@ function monitoringNotificationReplyToEmail() {
   ).trim();
 }
 
+function monitoringNotificationResendApiKey() {
+  return String(
+    process.env.MONITORING_RESEND_API_KEY ||
+    process.env.SAFETY_RESEND_API_KEY ||
+    process.env.FAX_RESEND_API_KEY ||
+    process.env.EFAX_RESEND_API_KEY ||
+    process.env.RESEND_API_KEY ||
+    ''
+  ).trim();
+}
+
 function monitoringNotificationEnvRecipients() {
   const raw = String(process.env.MONITORING_NOTIFY_EMAILS || process.env.MONITORING_NOTIFICATION_EMAILS || process.env.NOTIFICATION_EMAILS || '').trim();
   if (!raw) return [] as string[];
-  return raw.split(/[;,]/).map((email) => email.trim().toLowerCase()).filter(monitoringNotificationEmailLooksValid);
+  return raw.split(/[;,]/).map((email) => monitoringNotificationEmailAddress(email)).filter(monitoringNotificationEmailLooksValid);
 }
 
 async function monitoringNotificationRecipients() {
@@ -2783,7 +2802,7 @@ async function monitoringNotificationRecipients() {
   try {
     const result = await query('select email from notification_emails where "isActive"=true order by id asc');
     for (const row of result.rows || []) {
-      const email = String(row.email || '').trim().toLowerCase();
+      const email = monitoringNotificationEmailAddress(row.email);
       if (monitoringNotificationEmailLooksValid(email)) recipients.add(email);
     }
   } catch (error) {
@@ -2796,7 +2815,7 @@ async function monitoringNotificationRecipients() {
 async function sendMonitoringNotificationEmail(to: string, subject: string, text: string) {
   const fromEmail = monitoringNotificationFromEmail();
   const replyToEmail = monitoringNotificationReplyToEmail();
-  const resendApiKey = String(process.env.RESEND_API_KEY || '').trim();
+  const resendApiKey = monitoringNotificationResendApiKey();
 
   if (resendApiKey && monitoringNotificationEmailLooksValid(fromEmail)) {
     const payload: any = {
@@ -2845,7 +2864,7 @@ async function sendMonitoringNotificationEmail(to: string, subject: string, text
     return { provider: 'smtp', id: sent?.messageId || null };
   }
 
-  throw new Error('No monitoring email provider is configured. Add RESEND_API_KEY with EMAIL_FROM/SAFETY_FROM_EMAIL, or SMTP_HOST/SMTP_USER/SMTP_PASS/SMTP_FROM.');
+  throw new Error('No monitoring email provider is configured or the From email is invalid. Add RESEND_API_KEY plus EMAIL_FROM/SAFETY_FROM_EMAIL/FAX_FROM, or SMTP_HOST/SMTP_USER/SMTP_PASS/SMTP_FROM. Display-name format like SaffHire <name@domain.com> is supported.');
 }
 
 function monitoringNotificationSubject(action: string, applicantName: string, fileNumber: string) {
@@ -2921,11 +2940,11 @@ async function logMonitoringOnOffChange(companyId: number, currentRow: any, newM
   try {
     const oldStatus = normalizeMonitorStatus(currentRow?.monitorStatus);
     const nextStatus = normalizeMonitorStatus(newMonitorStatus);
-    if (oldStatus === nextStatus) return;
+    if (oldStatus === nextStatus) return { attempted: false, sent: 0, failed: 0, message: 'Monitoring status did not change' };
 
     const action = nextStatus === 'On' ? 'on' : 'off';
     const fileNumber = String(currentRow?.fileNumber || '').trim();
-    if (!fileNumber) return;
+    if (!fileNumber) return { attempted: false, sent: 0, failed: 0, message: 'No file number on monitoring record' };
 
     const notificationResult = await sendMonitoringOnOffNotifications(companyId, currentRow, oldStatus, nextStatus, action, user)
       .catch((error) => ({ attempted: true, sent: 0, failed: 1, message: errorMessage(error) }));
@@ -2965,8 +2984,10 @@ async function logMonitoringOnOffChange(companyId: number, currentRow: any, newM
         })
       ]
     );
+    return notificationResult;
   } catch (error) {
     console.error('Monitoring On/Off export queue insert failed', error);
+    return { attempted: true, sent: 0, failed: 1, message: errorMessage(error) };
   }
 }
 
