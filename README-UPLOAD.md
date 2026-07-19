@@ -1,16 +1,40 @@
-# Phase 12A-124 — Client Dashboard Totals Fix
+# Phase 12A-125 — Monitoring On/Off Email Notifications
 
-Upload only:
+Upload this file:
 
-- api/index.ts
-
-No SQL migration is required.
-No Vercel ENV changes are required.
+- `api/index.ts`
 
 What changed:
 
-- Client Portal dashboard totals are now calculated from all company records, not the limited recent table rows.
-- Monitoring counts are scoped to the signed-in client's company.
-- Safety report counts are scoped to the signed-in client's company.
-- Med Cert Expired and Med Cert 30 Days now only count applicants that are On Monitoring, matching the Monitoring Alerts logic.
-- Access rules are still enforced: if Monitoring is off, Monitoring cards do not show; if Safety Reports is off, Safety cards do not show.
+- When a Monitoring record changes from Off to On, or On to Off, the server now sends an email notification.
+- Recipients come from active rows in Settings > Notification Emails.
+- Also supports optional comma/semicolon separated ENV fallback: `MONITORING_NOTIFY_EMAILS`.
+- The notification includes company, applicant, file number, previous/new monitoring status, MVR status, med cert date, changed by, and timestamp.
+- The status change still succeeds even if email sending fails; the failure is logged into the monitoring on/off export row raw details.
+
+Email provider:
+
+Use either Resend:
+
+- `RESEND_API_KEY`
+- `EMAIL_FROM` or `SAFETY_FROM_EMAIL`
+
+Or SMTP:
+
+- `SMTP_HOST`
+- `SMTP_PORT`
+- `SMTP_USER`
+- `SMTP_PASS`
+- `SMTP_FROM`
+
+Optional SMTP overrides:
+
+- `MONITORING_SMTP_HOST`
+- `MONITORING_SMTP_PORT`
+- `MONITORING_SMTP_USER`
+- `MONITORING_SMTP_PASS`
+- `MONITORING_SMTP_SECURE`
+- `MONITORING_FROM_EMAIL`
+- `MONITORING_REPLY_TO_EMAIL`
+
+No SQL migration required.
