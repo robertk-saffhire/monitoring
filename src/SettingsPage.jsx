@@ -12,6 +12,39 @@ async function api(url, options = {}) {
 
 function Field({ label, children }) { return <label className="field"><span>{label}</span>{children}</label>; }
 
+const CLIENT_ACCESS_OPTIONS = [
+  ['dashboard', 'Dashboard'],
+  ['monitoring', 'Monitoring'],
+  ['safetyReports', 'Safety Reports'],
+  ['userAdmin', 'User Admin'],
+  ['editMonitoring', 'Edit Monitoring'],
+];
+const DEFAULT_CLIENT_ACCESS = CLIENT_ACCESS_OPTIONS.reduce((acc, [key]) => ({ ...acc, [key]: true }), {});
+const CLIENT_ACCESS_PRESETS = {
+  full: { dashboard: true, monitoring: true, safetyReports: true, userAdmin: true, editMonitoring: true },
+  monitoring: { dashboard: true, monitoring: true, safetyReports: false, userAdmin: false, editMonitoring: true },
+  safety: { dashboard: true, monitoring: false, safetyReports: true, userAdmin: false, editMonitoring: false },
+  readonly: { dashboard: true, monitoring: true, safetyReports: true, userAdmin: false, editMonitoring: false },
+};
+function normalizeClientAccess(value) {
+  const source = value && typeof value === 'object' ? value : {};
+  return CLIENT_ACCESS_OPTIONS.reduce((acc, [key]) => ({ ...acc, [key]: source[key] !== false }), {});
+}
+function isClientRole(role) {
+  return ['client_admin', 'client_user', 'viewer'].includes(String(role || ''));
+}
+function AccessCheckboxes({ value, onChange, disabled }) {
+  const access = normalizeClientAccess(value);
+  return <div className="client-access-grid">
+    {CLIENT_ACCESS_OPTIONS.map(([key, label]) => (
+      <label key={key} className="client-access-check">
+        <input type="checkbox" disabled={disabled} checked={access[key] !== false} onChange={(e) => onChange({ ...access, [key]: e.target.checked })} />
+        <span>{label}</span>
+      </label>
+    ))}
+  </div>;
+}
+
 function detectDelimiter(line) {
   if ((line.match(/\t/g) || []).length >= (line.match(/,/g) || []).length) return '\t';
   if (line.includes('|') && !line.includes(',')) return '|';
@@ -149,7 +182,7 @@ export default function SettingsManager({ user, company, companies, setCompanies
   const [message, setMessage] = useState('');
   const [companyName, setCompanyName] = useState(company?.name || '');
   const [newCompany, setNewCompany] = useState('');
-  const [newUser, setNewUser] = useState({ username: '', password: '', displayName: '', role: 'user', companyId: companyId || '' });
+  const [newUser, setNewUser] = useState({ username: '', password: '', displayName: '', role: 'user', companyId: companyId || '', clientAccess: DEFAULT_CLIENT_ACCESS });
   const [newEmail, setNewEmail] = useState({ label: '', email: '' });
   const [monitoringCsv, setMonitoringCsv] = useState('');
   const [safetyCsv, setSafetyCsv] = useState('');
@@ -168,7 +201,7 @@ export default function SettingsManager({ user, company, companies, setCompanies
 
   async function saveCompany() { try { const data = await api('/api/companies', { method: 'PATCH', body: JSON.stringify({ id: company.id, name: companyName, isActive: true }) }); setCompanies(companies.map((c) => c.id === data.company.id ? data.company : c)); show('Company saved.'); } catch (err) { fail(err, 'Could not save company.'); } }
   async function addCompany() { try { const data = await api('/api/companies', { method: 'POST', body: JSON.stringify({ name: newCompany }) }); setCompanies([...companies, data.company]); setNewCompany(''); show('Company added.'); } catch (err) { fail(err, 'Could not add company.'); } }
-  async function addUser() { try { const data = await api('/api/users', { method: 'POST', body: JSON.stringify(newUser) }); setUsers([...users, data.user]); setNewUser({ username: '', password: '', displayName: '', role: 'user', companyId: companyId || '' }); show('User added.'); } catch (err) { fail(err, 'Could not add user.'); } }
+  async function addUser() { try { const data = await api('/api/users', { method: 'POST', body: JSON.stringify(newUser) }); setUsers([...users, data.user]); setNewUser({ username: '', password: '', displayName: '', role: 'user', companyId: companyId || '', clientAccess: DEFAULT_CLIENT_ACCESS }); show('User added.'); } catch (err) { fail(err, 'Could not add user.'); } }
   async function saveUser(row, patch) { try { const payload = { ...row, ...patch }; if (!payload.password) delete payload.password; const data = await api('/api/users', { method: 'PATCH', body: JSON.stringify(payload) }); setUsers(users.map((u) => u.id === data.user.id ? data.user : u)); show(payload.password ? 'User saved and login reset.' : 'User saved.'); } catch (err) { fail(err, 'Could not save user.'); } }
   async function deleteUser(row) { if (!confirm(`Delete ${row.username}?`)) return; try { await api(`/api/users?id=${row.id}`, { method: 'DELETE' }); setUsers(users.filter((u) => u.id !== row.id)); show('User deleted.'); } catch (err) { fail(err, 'Could not delete user.'); } }
   async function addEmail() { try { const data = await api('/api/notification-emails', { method: 'POST', body: JSON.stringify(newEmail) }); setEmails([...emails, data.email]); setNewEmail({ label: '', email: '' }); show('Email added.'); } catch (err) { fail(err, 'Could not add email.'); } }
@@ -186,15 +219,15 @@ export default function SettingsManager({ user, company, companies, setCompanies
     <section className="card wide-card settings-card"><h2><Building2 size={19}/> Company Settings</h2><div className="form-grid two"><Field label="Active Company"><input disabled={!isAdmin} value={companyName} onChange={(e)=>setCompanyName(e.target.value)} /></Field><Field label="New Company"><input disabled={!isAdmin} value={newCompany} onChange={(e)=>setNewCompany(e.target.value)} /></Field></div><button className="primary-inline" disabled={!isAdmin} onClick={saveCompany}><Save size={16}/> Save Company</button><button className="secondary-btn spaced" disabled={!isAdmin || !newCompany} onClick={addCompany}><Building2 size={16}/> Add Company</button></section>
     <section className="card wide-card settings-card"><h2><Upload size={19}/> Import Monitoring CSV</h2><p className="muted">Upload or paste the old Monitoring export. Accepted headers include File Number, Applicant Name/Name, Order Date/Created, Monitor Status/Monitoring, MVR Status, Med Expire/Medical Expiration, Terminated, and Notes.</p><input disabled={!isAdmin} type="file" accept=".csv,.txt,text/csv,text/plain" onChange={(e)=>readImportFile(e.target.files?.[0], setMonitoringCsv).catch((err)=>fail(err, 'Could not read file.'))} /><textarea disabled={!isAdmin} rows={7} value={monitoringCsv} onChange={(e)=>setMonitoringCsv(e.target.value)} placeholder="Paste the old Monitoring CSV here, or upload a CSV file above." /><button className="primary-inline" disabled={!isAdmin || !monitoringCsv.trim()} onClick={importMonitoringRows}><Database size={16}/> Import Monitoring Records</button></section>
     <section className="card wide-card settings-card"><h2><Upload size={19}/> Import Safety Performance CSV</h2><p className="muted">Paste the Safety Performance backup rows here. It accepts copied spreadsheet cells with columns like File Number, Applicant Name, Employer 1 Name, Employer 1 Phone, Employer 1 Email, Employer 1 Street, City, State, and Zip.</p><textarea disabled={!isAdmin} rows={7} value={safetyCsv} onChange={(e)=>setSafetyCsv(e.target.value)} /><button className="primary-inline" disabled={!isAdmin || !safetyCsv.trim()} onClick={importSafetyRows}><Database size={16}/> Import Safety Reports</button></section>
-    <section className="card wide-card settings-card"><h2><UserPlus size={19}/> Users</h2><div className="form-grid five"><Field label="Username"><input disabled={!isAdmin} value={newUser.username} onChange={(e)=>setNewUser({...newUser,username:e.target.value})} /></Field><Field label="Password"><input disabled={!isAdmin} type="password" value={newUser.password} onChange={(e)=>setNewUser({...newUser,password:e.target.value})} /></Field><Field label="Display Name"><input disabled={!isAdmin} value={newUser.displayName} onChange={(e)=>setNewUser({...newUser,displayName:e.target.value})} /></Field><Field label="Role"><select disabled={!isAdmin} value={newUser.role} onChange={(e)=>setNewUser({...newUser,role:e.target.value})}><option value="admin">Admin</option><option value="user">User</option><option value="viewer">Viewer</option></select></Field><Field label="Company"><select disabled={!isAdmin} value={newUser.companyId || ''} onChange={(e)=>setNewUser({...newUser,companyId:e.target.value})}><option value="">All / None</option>{companies.map(c=><option key={c.id} value={c.id}>{c.name}</option>)}</select></Field></div><button className="primary-inline" disabled={!isAdmin || !newUser.username || !newUser.password} onClick={addUser}>Add User</button><div className="table-card mini-table"><table><thead><tr><th>User</th><th>Role</th><th>Company</th><th>Active</th><th>Reset Login</th><th></th></tr></thead><tbody>{users.map(row=><UserRow key={row.id} row={row} companies={companies} currentUserId={user?.id} onSave={saveUser} onDelete={deleteUser}/>)}</tbody></table></div></section>
+    <section className="card wide-card settings-card"><h2><UserPlus size={19}/> Users</h2><p className="muted">Use Client Admin or Client User for client portal accounts. Then choose exactly what that client can see.</p><div className="form-grid five"><Field label="Username"><input disabled={!isAdmin} value={newUser.username} onChange={(e)=>setNewUser({...newUser,username:e.target.value})} /></Field><Field label="Password"><input disabled={!isAdmin} type="password" value={newUser.password} onChange={(e)=>setNewUser({...newUser,password:e.target.value})} /></Field><Field label="Display Name"><input disabled={!isAdmin} value={newUser.displayName} onChange={(e)=>setNewUser({...newUser,displayName:e.target.value})} /></Field><Field label="Role"><select disabled={!isAdmin} value={newUser.role} onChange={(e)=>setNewUser({...newUser,role:e.target.value})}><option value="admin">Admin</option><option value="user">SaffHire User</option><option value="viewer">Viewer</option><option value="client_admin">Client Admin</option><option value="client_user">Client User</option></select></Field><Field label="Company"><select disabled={!isAdmin} value={newUser.companyId || ''} onChange={(e)=>setNewUser({...newUser,companyId:e.target.value})}><option value="">All / None</option>{companies.map(c=><option key={c.id} value={c.id}>{c.name}</option>)}</select></Field></div>{isClientRole(newUser.role) ? <div className="client-access-panel"><div className="client-access-head"><b>Client Access Options</b><select disabled={!isAdmin} value="" onChange={(e)=>{ if (e.target.value) setNewUser({...newUser,clientAccess:CLIENT_ACCESS_PRESETS[e.target.value]}); }}><option value="">Apply preset...</option><option value="full">Full Access</option><option value="monitoring">Monitoring Only</option><option value="safety">Safety Reports Only</option><option value="readonly">Read Only</option></select></div><AccessCheckboxes disabled={!isAdmin} value={newUser.clientAccess} onChange={(clientAccess)=>setNewUser({...newUser,clientAccess})}/></div> : null}<button className="primary-inline" disabled={!isAdmin || !newUser.username || !newUser.password} onClick={addUser}>Add User</button><div className="table-card mini-table"><table><thead><tr><th>User</th><th>Role</th><th>Company</th><th>Client Access</th><th>Active</th><th>Reset Login</th><th></th></tr></thead><tbody>{users.map(row=><UserRow key={row.id} row={row} companies={companies} currentUserId={user?.id} onSave={saveUser} onDelete={deleteUser}/>)}</tbody></table></div></section>
     <section className="card wide-card settings-card"><h2><Bell size={19}/> Notification Emails</h2><div className="form-grid three"><Field label="Label"><input disabled={!isAdmin} value={newEmail.label} onChange={(e)=>setNewEmail({...newEmail,label:e.target.value})}/></Field><Field label="Email"><input disabled={!isAdmin} value={newEmail.email} onChange={(e)=>setNewEmail({...newEmail,email:e.target.value})}/></Field><div className="field button-field"><button className="secondary-btn" disabled={!isAdmin || !newEmail.email} onClick={addEmail}>Add Email</button></div></div><div className="table-card mini-table"><table><thead><tr><th>Label</th><th>Email</th><th>Active</th><th></th></tr></thead><tbody>{emails.map(row=><EmailRow key={row.id} row={row} onSave={saveEmail} onDelete={deleteEmail}/>)}</tbody></table></div></section>
   </>;
 }
 
 function UserRow({ row, companies, currentUserId, onSave, onDelete }) {
-  const [draft, setDraft] = useState({ ...row, password: '' });
-  useEffect(()=>setDraft({ ...row, password: '' }),[row]);
-  return <tr><td>{row.username}<br/><small>{row.displayName}</small></td><td><select value={draft.role} onChange={(e)=>setDraft({...draft,role:e.target.value})}><option value="admin">Admin</option><option value="user">User</option><option value="viewer">Viewer</option></select></td><td><select value={draft.companyId || ''} onChange={(e)=>setDraft({...draft,companyId:e.target.value})}><option value="">All / None</option>{companies.map(c=><option key={c.id} value={c.id}>{c.name}</option>)}</select></td><td><select value={String(draft.isActive)} onChange={(e)=>setDraft({...draft,isActive:e.target.value==='true'})}><option value="true">Active</option><option value="false">Inactive</option></select></td><td><input type="password" placeholder="Optional" value={draft.password || ''} onChange={(e)=>setDraft({...draft,password:e.target.value})}/></td><td><button className="icon-btn" onClick={()=>onSave(row,draft)}><Save size={15}/></button><button className="icon-btn danger" disabled={row.id===currentUserId} onClick={()=>onDelete(row)}><Trash2 size={15}/></button></td></tr>;
+  const [draft, setDraft] = useState({ ...row, password: '', clientAccess: normalizeClientAccess(row.clientAccess) });
+  useEffect(()=>setDraft({ ...row, password: '', clientAccess: normalizeClientAccess(row.clientAccess) }),[row]);
+  return <tr><td>{row.username}<br/><small>{row.displayName}</small></td><td><select value={draft.role} onChange={(e)=>setDraft({...draft,role:e.target.value})}><option value="admin">Admin</option><option value="user">SaffHire User</option><option value="viewer">Viewer</option><option value="client_admin">Client Admin</option><option value="client_user">Client User</option></select></td><td><select value={draft.companyId || ''} onChange={(e)=>setDraft({...draft,companyId:e.target.value})}><option value="">All / None</option>{companies.map(c=><option key={c.id} value={c.id}>{c.name}</option>)}</select></td><td>{isClientRole(draft.role) ? <AccessCheckboxes value={draft.clientAccess} onChange={(clientAccess)=>setDraft({...draft,clientAccess})}/> : <small>Internal account</small>}</td><td><select value={String(draft.isActive)} onChange={(e)=>setDraft({...draft,isActive:e.target.value==='true'})}><option value="true">Active</option><option value="false">Inactive</option></select></td><td><input type="password" placeholder="Optional" value={draft.password || ''} onChange={(e)=>setDraft({...draft,password:e.target.value})}/></td><td><button className="icon-btn" onClick={()=>onSave(row,draft)}><Save size={15}/></button><button className="icon-btn danger" disabled={row.id===currentUserId} onClick={()=>onDelete(row)}><Trash2 size={15}/></button></td></tr>;
 }
 function EmailRow({ row, onSave, onDelete }) {
   const [draft, setDraft] = useState(row);
