@@ -2270,21 +2270,41 @@
       button.textContent = 'Syncing...';
     }
 
-    try {
-      toast('Running Monitoring Data Sync from TazWorks...');
-      const result = await apiWithFallback('tazworks-sync/run', {
-        method: 'POST',
-        body: JSON.stringify({
-          companyId: getCompanyId(),
-          maxPages: 25,
-          pageSize: 25,
-          source: 'monitoring-page-data-sync'
-        })
-      });
+    let nextStartPage = 0;
+    const totals = { ordersPulled: 0, applicantsUpserted: 0, medExpireUpdated: 0, errorsCount: 0 };
 
-      const message = result.message || 'Monitoring Data Sync complete.';
-      const details = ` Pulled ${result.ordersPulled || 0} order(s). Updated/created ${result.applicantsUpserted || 0} monitoring record(s). Med dates updated: ${result.medExpireUpdated || 0}. Errors: ${result.errorsCount || 0}.`;
-      toast(message + details, Number(result.errorsCount || 0) > 0);
+    try {
+      toast('Running Monitoring Data Sync from TazWorks in safe batches...');
+
+      for (let batch = 0; batch < 5; batch++) {
+        if (button) button.textContent = `Syncing ${batch + 1}/5...`;
+
+        const result = await apiWithFallback('tazworks-sync/run', {
+          method: 'POST',
+          body: JSON.stringify({
+            companyId: getCompanyId(),
+            source: 'monitoring-page-data-sync',
+            startPage: nextStartPage,
+            maxPages: 1,
+            pageSize: 10,
+            maxOrders: 10,
+            maxMvrChecks: 2,
+            maxRunMs: 6500
+          })
+        });
+
+        totals.ordersPulled += Number(result.ordersPulled || 0);
+        totals.applicantsUpserted += Number(result.applicantsUpserted || 0);
+        totals.medExpireUpdated += Number(result.medExpireUpdated || 0);
+        totals.errorsCount += Number(result.errorsCount || 0);
+
+        const newNextPage = Number(result.nextStartPage ?? (nextStartPage + 1));
+        if (!result.hasMore || !Number.isFinite(newNextPage) || newNextPage <= nextStartPage) break;
+        nextStartPage = newNextPage;
+      }
+
+      const details = `Monitoring Data Sync complete. Pulled ${totals.ordersPulled} order(s). Updated/created ${totals.applicantsUpserted} monitoring record(s). Med dates updated: ${totals.medExpireUpdated}. Errors: ${totals.errorsCount}.`;
+      toast(details, totals.errorsCount > 0);
       setTimeout(() => window.location.reload(), 1600);
     } catch (error) {
       toast((error && error.message) || 'Monitoring Data Sync failed.', true);
