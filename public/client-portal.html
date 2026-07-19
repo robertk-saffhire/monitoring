@@ -263,7 +263,16 @@
       const index = recentApplicants().findIndex(item => Number(item.id) === Number(payload.id));
       if (index >= 0 && result.applicant) state.data.recentApplicants[index] = result.applicant;
       row.classList.remove('dirty');
-      toast('Monitoring record saved.');
+      const notification = result.monitoringNotification || {};
+      if (notification.attempted && Number(notification.sent || 0) > 0) {
+        toast(`Monitoring record saved. Notification email sent to ${notification.sent} recipient${Number(notification.sent) === 1 ? '' : 's'}.`);
+      } else if (notification.attempted && Number(notification.failed || 0) > 0) {
+        toast(`Monitoring record saved, but the notification email failed: ${notification.message || 'Unknown email error'}`, true);
+      } else if (notification.message && notification.message !== 'Monitoring status did not change') {
+        toast(`Monitoring record saved. Email notice not sent: ${notification.message}`, true);
+      } else {
+        toast('Monitoring record saved.');
+      }
       renderMonitoring();
     } catch (error) {
       toast(error.message || 'Could not save monitoring record.', true);
