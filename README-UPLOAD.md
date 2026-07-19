@@ -1,34 +1,17 @@
-# Phase 12A-127 — Client Terminated Access
+# Phase 12A-128 — Client Portal Terminated Checkbox Visibility
 
-Upload these files:
+Upload only:
 
-- `api/index.ts`
 - `public/client-portal.html`
-- `src/SettingsPage.jsx`
 
-## What changed
+What changed:
 
-- Added a new Client Access option named `Terminated`.
-- Main admin Settings > Users now shows `Terminated` as a checkbox for client roles.
-- Client Portal User Admin also shows `Terminated` as a checkbox.
-- If `Terminated` is off for a client account:
-  - terminated monitoring records are not returned to that client account,
-  - the Terminated column is hidden,
-  - the Terminated-only filter is hidden,
-  - the account cannot edit Terminated status through the API.
-- If `Terminated` is on and Edit Monitoring is on, the client can view and edit the Terminated checkbox.
-- If `Terminated` is on but Edit Monitoring is off, the client can view Terminated but cannot edit it.
+- Makes the `Terminated Records` option visible in the Client Portal User Admin screen.
+- Splits Client Access into two visible groups:
+  - Portal Sections
+  - Monitoring Controls
+- Adds a highlighted `Terminated Records` checkbox so it is easy to find.
+- Updates helper text to explain that Terminated Records controls whether client users can see terminated applicants and the Terminated field.
 
-## Checks run
-
-- `npm run build`
-- `npx tsc --noEmit`
-- `node --check` on the Client Portal script
-
-## SQL
-
-No SQL migration is required.
-
-## Vercel ENV
-
-No Vercel environment variable changes are required.
+SQL migration needed: No.
+Vercel ENV changes: No.
