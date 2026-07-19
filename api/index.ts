@@ -1831,10 +1831,36 @@ function isMvr(search: any) {
   return /\bmvr\b|motor vehicle|driving record|driver record|driver license|dl record|dmv/i.test(search.label + ' ' + flat(search.raw));
 }
 
-async function proxyGet(proxyPath: string) {
+function tazworksFetchTimeoutMs() {
+  const value = Number(process.env.TAZWORKS_FETCH_TIMEOUT_MS || 4500);
+  return Math.min(Math.max(Number.isFinite(value) ? value : 4500, 1500), 8000);
+}
+
+async function proxyGet(proxyPath: string, timeoutMs = tazworksFetchTimeoutMs()) {
   const e = tazEnv();
-  const response = await fetch(`${e.baseUrl}${proxyPath}`, { method: 'GET', headers: { Authorization: `Bearer ${e.proxySecret}`, Accept: 'application/json' } });
-  const raw = await response.text();
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
+  let response: any;
+  let raw = '';
+
+  try {
+    response = await fetch(`${e.baseUrl}${proxyPath}`, {
+      method: 'GET',
+      headers: { Authorization: `Bearer ${e.proxySecret}`, Accept: 'application/json' },
+      signal: controller.signal
+    });
+    raw = await response.text();
+  } catch (error: any) {
+    if (error?.name === 'AbortError') {
+      const err: any = new Error(`TazWorks proxy request timed out after ${timeoutMs}ms`);
+      err.statusCode = 504;
+      throw err;
+    }
+    throw error;
+  } finally {
+    clearTimeout(timer);
+  }
+
   let payload: any = {};
   try { payload = raw ? JSON.parse(raw) : {}; } catch { payload = { raw }; }
   if (!response.ok) {
@@ -1853,7 +1879,7 @@ function certPreview(payload: any) {
   return '';
 }
 
-async function tryResultVariant(orderGuid: string, searchGuid: string, resultType: string | null) {
+async function tryResultVariant(orderGuid: string, searchGuid: string, resultType: string | null, timeoutMs?: number) {
   const e = tazEnv();
   const encodedOrder = encodeURIComponent(orderGuid);
   const encodedSearch = encodeURIComponent(searchGuid);
@@ -1861,22 +1887,27 @@ async function tryResultVariant(orderGuid: string, searchGuid: string, resultTyp
   const path = resultType
     ? `${base}?resultType=${encodeURIComponent(resultType)}&clientGuid=${encodeURIComponent(e.clientGuid)}`
     : `${base}?clientGuid=${encodeURIComponent(e.clientGuid)}`;
-  return proxyGet(path);
+  return proxyGet(path, timeoutMs);
 }
 
-async function tryOrderLevelVariant(orderGuid: string, resultType: string | null) {
+async function tryOrderLevelVariant(orderGuid: string, resultType: string | null, timeoutMs?: number) {
   const e = tazEnv();
   const encodedOrder = encodeURIComponent(orderGuid);
   const base = `/tazworks/orders/${encodedOrder}/results`;
   const path = resultType
     ? `${base}?resultType=${encodeURIComponent(resultType)}&clientGuid=${encodeURIComponent(e.clientGuid)}`
     : `${base}?clientGuid=${encodeURIComponent(e.clientGuid)}`;
-  return proxyGet(path);
+  return proxyGet(path, timeoutMs);
 }
 
 
-async function pullMvrMed(orderGuid: string, order: any) {
+async function pullMvrMed(orderGuid: string, order: any, options: any = {}) {
   const e = tazEnv();
+  const quick = Boolean(options.quick);
+  const deadlineMs = Number(options.deadlineMs || 0);
+  const fetchTimeoutMs = Number(options.fetchTimeoutMs || tazworksFetchTimeoutMs());
+  const outOfTime = () => deadlineMs > 0 && Date.now() > deadlineMs;
+
   const summary: any = {
     orderGuid,
     fileNumber: order.fileNumber || '',
@@ -1898,8 +1929,9 @@ async function pullMvrMed(orderGuid: string, order: any) {
   };
 
   if (!orderGuid) return summary;
+  if (outOfTime()) { summary.skipped = 'deadline-before-searches'; return summary; }
 
-  const searchesPayload = await proxyGet(`/tazworks/orders/${encodeURIComponent(orderGuid)}/searches?clientGuid=${encodeURIComponent(e.clientGuid)}`);
+  const searchesPayload = await proxyGet(`/tazworks/orders/${encodeURIComponent(orderGuid)}/searches?clientGuid=${encodeURIComponent(e.clientGuid)}`, fetchTimeoutMs);
   const searches = arr(searchesPayload, 'search').map((row: any) => searchFrom(row, orderGuid));
   summary.searchesPulled = searches.length;
 
@@ -1907,7 +1939,8 @@ async function pullMvrMed(orderGuid: string, order: any) {
   summary.mvrSearches = mvrs.length;
 
   const nonMvrs = searches.filter((s: any) => !mvrs.includes(s));
-  const orderedCandidates = mvrs.length ? [...mvrs, ...nonMvrs] : searches;
+  const allOrderedCandidates = mvrs.length ? [...mvrs, ...nonMvrs] : searches;
+  const orderedCandidates = quick ? allOrderedCandidates.slice(0, 4) : allOrderedCandidates;
 
   summary.fallbackAllSearches = mvrs.length === 0 && searches.length > 0;
   summary.scannedNonMvrAfterMvr = mvrs.length > 0 && nonMvrs.length > 0;
@@ -1933,6 +1966,7 @@ async function pullMvrMed(orderGuid: string, order: any) {
   // TazWorks search rows include displayValue. Some dates may appear there,
   // before the result endpoint is even needed.
   for (const s of orderedCandidates) {
+    if (outOfTime()) { summary.skipped = 'deadline-during-search-row-scan'; return summary; }
     summary.searchRowScans++;
 
     const rowFound = findMedExpire(s.raw);
@@ -1954,9 +1988,10 @@ async function pullMvrMed(orderGuid: string, order: any) {
     }
   }
 
-  const resultTypes: Array<string | null> = ['EDITOR', null, 'CLIENT', 'HTML', 'RAW', 'JSON', 'FULL'];
+  const resultTypes: Array<string | null> = quick ? ['EDITOR', null] : ['EDITOR', null, 'CLIENT', 'HTML', 'RAW', 'JSON', 'FULL'];
 
   for (const s of orderedCandidates) {
+    if (outOfTime()) { summary.skipped = 'deadline-before-result-pulls'; return summary; }
     if (!s.searchGuid) {
       summary.noSearchGuid++;
       continue;
@@ -1967,7 +2002,8 @@ async function pullMvrMed(orderGuid: string, order: any) {
         summary.resultPulls++;
         summary.resultVariantsTried.push({ searchGuid: s.searchGuid, label: s.label, resultType: resultType || 'none' });
 
-        const result = await tryResultVariant(orderGuid, s.searchGuid, resultType);
+        if (outOfTime()) { summary.skipped = 'deadline-during-result-pulls'; return summary; }
+        const result = await tryResultVariant(orderGuid, s.searchGuid, resultType, fetchTimeoutMs);
         const found = findMedExpire(result);
 
         if (!summary.certificatePreview) {
@@ -1997,10 +2033,13 @@ async function pullMvrMed(orderGuid: string, order: any) {
     }
   }
 
+  if (quick) return summary;
+
   for (const resultType of resultTypes) {
+    if (outOfTime()) { summary.skipped = 'deadline-before-order-level-results'; return summary; }
     try {
       summary.orderLevelResultTries.push({ resultType: resultType || 'none' });
-      const result = await tryOrderLevelVariant(orderGuid, resultType);
+      const result = await tryOrderLevelVariant(orderGuid, resultType, fetchTimeoutMs);
       const found = findMedExpire(result);
 
       if (!summary.certificatePreview) {
@@ -2246,31 +2285,59 @@ async function tazworksSyncRuns(req: any, res: any, user: any) {
   return json(res, 200, { status: 'ok', runs: result.rows });
 }
 
+
+function boundedNumber(value: any, fallback: number, min: number, max: number) {
+  const n = Number(value);
+  return Math.min(Math.max(Number.isFinite(n) ? n : fallback, min), max);
+}
+
+function tazworksSyncBudgetMs(body: any) {
+  const envBudget = Number(process.env.TAZWORKS_SYNC_BUDGET_MS || 7500);
+  const requested = Number(body?.maxRunMs || envBudget);
+  return Math.min(Math.max(Number.isFinite(requested) ? requested : 7500, 3000), 8500);
+}
+
 async function tazworksSyncRun(req: any, res: any, user: any) {
   if (req.method !== 'POST') return json(res, 405, { status: 'error', message: 'Method not allowed' });
   if (!requireAdmin(user, res)) return;
 
   const body = await readBody(req);
   const companyId = Number(body.companyId || user.companyId || 1);
-  const requestedMaxPages = Number(body.maxPages || 25);
-  const requestedPageSize = Number(body.pageSize || 25);
-  const maxPages = Math.min(Math.max(Number.isFinite(requestedMaxPages) ? requestedMaxPages : 25, 1), 100);
-  const pageSize = Math.min(Math.max(Number.isFinite(requestedPageSize) ? requestedPageSize : 25, 1), 50);
-  const triggeredBy = String(body.source || '').trim() || user.username || user.displayName || 'admin';
+  const source = String(body.source || '').trim();
+  const startPage = boundedNumber(body.startPage, 0, 0, 500);
+
+  // Vercel Hobby functions can time out when the sync tries to scan too many
+  // orders and then pull deep MVR result payloads for every order. Keep each
+  // click-sized sync small, return a progress marker, and let the browser run
+  // another batch instead of one long serverless invocation.
+  const maxPages = boundedNumber(body.maxPages, source === 'monitoring-page-data-sync' ? 2 : 3, 1, 4);
+  const pageSize = boundedNumber(body.pageSize, source === 'monitoring-page-data-sync' ? 10 : 10, 1, 15);
+  const maxOrdersToProcess = boundedNumber(body.maxOrders, maxPages * pageSize, 1, 25);
+  const maxMvrChecks = boundedNumber(body.maxMvrChecks, source === 'monitoring-page-data-sync' ? 4 : 6, 0, 8);
+  const syncBudgetMs = tazworksSyncBudgetMs(body);
+  const syncStartedMs = Date.now();
+  const deadlineMs = syncStartedMs + syncBudgetMs;
+  const shouldStopSoon = () => Date.now() > deadlineMs - 1200;
+  const triggeredBy = source || user.username || user.displayName || 'admin';
 
   const runInsert = await query('insert into tazworks_sync_runs (status, triggered_by, message) values ($1,$2,$3) returning id', ['running', triggeredBy, 'Manual sync started']);
   const runId = runInsert.rows[0].id;
 
-  let ordersPulled = 0, applicantsUpserted = 0, safetyReportsUpdated = 0, medExpireUpdated = 0, medExpireCleared = 0, mvrSearchesChecked = 0, errorsCount = 0;
+  let ordersPulled = 0, applicantsUpserted = 0, safetyReportsUpdated = 0, medExpireUpdated = 0, medExpireCleared = 0, mvrSearchesChecked = 0, errorsCount = 0, mvrChecksAttempted = 0, pagesProcessed = 0;
+  let stoppedEarly = false;
+  let reachedEnd = false;
   const errors: string[] = [], pageSummaries: any[] = [], mvrSamples: any[] = [];
   const dedupe = new Map<string, any>();
 
   try {
     const e = tazEnv();
 
-    for (let page = 0; page < maxPages; page++) {
+    for (let offset = 0; offset < maxPages; offset++) {
+      if (shouldStopSoon()) { stoppedEarly = true; break; }
+      const page = startPage + offset;
       const payload = await proxyGet(`/tazworks/orders?page=${page}&size=${pageSize}&clientGuid=${encodeURIComponent(e.clientGuid)}`);
       const list = arr(payload);
+      pagesProcessed++;
       pageSummaries.push({ page, arrayCount: list.length, topLevelKeys: payload && typeof payload === 'object' ? Object.keys(payload).slice(0, 20) : [] });
 
       for (const row of list) {
@@ -2279,19 +2346,21 @@ async function tazworksSyncRun(req: any, res: any, user: any) {
         if (!dedupe.has(key)) dedupe.set(key, o);
       }
 
-      if (list.length < pageSize) break;
+      if (list.length < pageSize) { reachedEnd = true; break; }
     }
 
-    const orders = Array.from(dedupe.values()).filter((o: any) => o.orderGuid || o.fileNumber);
+    const orders = Array.from(dedupe.values()).filter((o: any) => o.orderGuid || o.fileNumber).slice(0, maxOrdersToProcess);
     ordersPulled = orders.length;
 
     for (const o of orders) {
+      if (shouldStopSoon()) { stoppedEarly = true; break; }
       try {
         let medExpire: string | null = null;
 
-        if (o.orderGuid) {
+        if (o.orderGuid && mvrChecksAttempted < maxMvrChecks && !shouldStopSoon()) {
           try {
-            const mvr = await pullMvrMed(o.orderGuid, o);
+            mvrChecksAttempted++;
+            const mvr = await pullMvrMed(o.orderGuid, o, { quick: true, deadlineMs: deadlineMs - 900, fetchTimeoutMs: 2500 });
             mvrSamples.push(mvr);
             mvrSearchesChecked += Number(mvr.mvrSearches || 0);
             if (mvr.medExpire) medExpire = mvr.medExpire;
@@ -2346,16 +2415,19 @@ async function tazworksSyncRun(req: any, res: any, user: any) {
       }
     }
 
-    const message = `Sync completed. Pulled ${ordersPulled} orders. Updated ${medExpireUpdated} medical expiration date(s). Cleared ${medExpireCleared} stale medical date(s).`;
+    const nextStartPage = startPage + pagesProcessed;
+    const message = stoppedEarly
+      ? `Sync batch completed before the Vercel timeout. Pulled ${ordersPulled} order(s). Run Data Sync again to continue from page ${nextStartPage}.`
+      : `Sync completed. Pulled ${ordersPulled} orders. Updated ${medExpireUpdated} medical expiration date(s). Cleared ${medExpireCleared} stale medical date(s).`;
     await query(
       'update tazworks_sync_runs set status=$1, completed_at=now(), orders_pulled=$2, applicants_upserted=$3, safety_reports_updated=$4, errors_count=$5, message=$6, raw_summary=$7 where id=$8',
-      [errorsCount ? 'completed_with_errors' : 'completed', ordersPulled, applicantsUpserted, safetyReportsUpdated, errorsCount, message, JSON.stringify({ pages: pageSummaries, maxPages, pageSize, mvrSearchesChecked, medExpireUpdated, medExpireCleared, mvrSamples: mvrSamples.slice(0, 20), errors: errors.slice(0, 10) }), runId]
+      [errorsCount ? 'completed_with_errors' : 'completed', ordersPulled, applicantsUpserted, safetyReportsUpdated, errorsCount, message, JSON.stringify({ pages: pageSummaries, startPage, nextStartPage, maxPages, pageSize, syncBudgetMs, stoppedEarly, reachedEnd, maxOrdersToProcess, maxMvrChecks, mvrChecksAttempted, mvrSearchesChecked, medExpireUpdated, medExpireCleared, mvrSamples: mvrSamples.slice(0, 20), errors: errors.slice(0, 10) }), runId]
     );
 
-    return json(res, 200, { status: 'ok', runId, ordersPulled, applicantsUpserted, safetyReportsUpdated, medExpireUpdated, medExpireCleared, mvrSearchesChecked, errorsCount, message, pages: pageSummaries, maxPages, pageSize });
+    return json(res, 200, { status: 'ok', runId, ordersPulled, applicantsUpserted, safetyReportsUpdated, medExpireUpdated, medExpireCleared, mvrSearchesChecked, mvrChecksAttempted, errorsCount, message, pages: pageSummaries, startPage, nextStartPage, hasMore: !reachedEnd && (stoppedEarly || pagesProcessed >= maxPages), maxPages, pageSize });
   } catch (error: any) {
     const safe = error?.message || 'The order connection is currently unavailable.';
-    await query('update tazworks_sync_runs set status=$1, completed_at=now(), errors_count=$2, message=$3, raw_summary=$4 where id=$5', ['failed', errorsCount + 1, safe, JSON.stringify({ pages: pageSummaries, maxPages, pageSize, mvrSearchesChecked, medExpireUpdated, medExpireCleared, mvrSamples: mvrSamples.slice(0, 20), errors: [safe, ...errors].slice(0, 10) }), runId]);
+    await query('update tazworks_sync_runs set status=$1, completed_at=now(), errors_count=$2, message=$3, raw_summary=$4 where id=$5', ['failed', errorsCount + 1, safe, JSON.stringify({ pages: pageSummaries, startPage, maxPages, pageSize, syncBudgetMs, stoppedEarly, reachedEnd, mvrSearchesChecked, medExpireUpdated, medExpireCleared, mvrSamples: mvrSamples.slice(0, 20), errors: [safe, ...errors].slice(0, 10) }), runId]);
     return json(res, error?.statusCode || 503, { status: 'error', message: safe, runId });
   }
 }
@@ -3771,7 +3843,7 @@ async function safetyPullSearchResultPayload(orderGuid: string, searchGuid: stri
   const encodedSearch = encodeURIComponent(searchGuid);
   const encodedClient = encodeURIComponent(clientGuid);
   const normalizedHost = safetyNormalizeHost(host);
-  const resultTypes: Array<string | null> = ['EDITOR', null, 'CLIENT', 'HTML', 'RAW', 'JSON', 'FULL'];
+  const resultTypes: Array<string | null> = quick ? ['EDITOR', null] : ['EDITOR', null, 'CLIENT', 'HTML', 'RAW', 'JSON', 'FULL'];
   const basePaths = [
     `/tazworks/clients/${encodedClient}/orders/${encodedOrder}/searches/${encodedSearch}/results`,
     `/tazworks/v1/clients/${encodedClient}/orders/${encodedOrder}/searches/${encodedSearch}/results`,
