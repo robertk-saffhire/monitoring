@@ -1,15 +1,22 @@
-# Phase 12A-129 — Client Portal Terminated Visibility Fix
+# Phase 12A-130 — Client Portal Terminated Left Menu
 
-Upload only this file:
+Upload these files:
 
-- public/client-portal.html
+- `api/index.ts`
+- `public/client-portal.html`
 
-What changed:
+## What changed
 
-- Client Portal sidebar now labels the page as **User Admin / Access**.
-- In Client Portal > User Admin / Access, **Terminated Records** is now its own table column instead of being buried in the access checkbox group.
-- On the Monitoring page, if Terminated access is enabled, the client sees a clear notice that Terminated Records access is ON.
-- Added a **Show Terminated Only** button on the Monitoring page when Terminated access is enabled.
+- Adds a separate **Terminated** button to the left client portal menu.
+- The button only appears when the logged-in client user has both Monitoring access and Terminated Records access.
+- Clicking **Terminated** opens a dedicated Terminated page showing terminated monitoring records.
+- The Terminated page uses the same Monitoring table controls, so users with Edit Monitoring + Terminated Records can edit/save terminated status and notes.
+- Adds a dedicated server-side terminated applicants list so the Terminated page is not dependent on the normal Monitoring page filter.
 
-No SQL migration needed.
-No Vercel ENV changes needed.
+## SQL
+
+No SQL changes.
+
+## ENV
+
+No ENV changes.
