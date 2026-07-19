@@ -15,6 +15,7 @@ const DEFAULT_CLIENT_ACCESS = {
   safetyReports: true,
   userAdmin: true,
   editMonitoring: true,
+  terminated: true,
 };
 const CLIENT_ACCESS_KEYS = Object.keys(DEFAULT_CLIENT_ACCESS);
 function normalizeClientAccess(value: any) {
@@ -116,6 +117,8 @@ function canViewClientMonitoring(user: any) { return clientHasAccess(user, 'moni
 function canViewClientSafety(user: any) { return clientHasAccess(user, 'safetyReports'); }
 function canManageClientUsers(user: any) { return isAdmin(user) || (isClientAdmin(user) && clientHasAccess(user, 'userAdmin')); }
 function canEditClientMonitoring(user: any) { return ['admin', 'user', 'client_admin', 'client_user'].includes(String(user?.role || '')) && canViewClientMonitoring(user) && clientHasAccess(user, 'editMonitoring'); }
+function canAccessClientTerminated(user: any) { return clientHasAccess(user, 'terminated'); }
+function canEditClientTerminated(user: any) { return canEditClientMonitoring(user) && canAccessClientTerminated(user); }
 function requestedCompanyId(req: any, user: any) {
   const url = new URL(req.url || '/', 'https://local.test');
   const requested = Number(url.searchParams.get('companyId') || user.companyId || 1);
@@ -287,10 +290,15 @@ async function applicants(req: any, res: any, user: any) {
   if (isClientScopedRole(user) && !canViewClientMonitoring(user)) {
     return json(res, 403, { status: 'error', message: 'This account does not have Monitoring access' });
   }
-  if (req.method === 'GET') { const result = await query('select id, "fileNumber", "applicantName" as name, "orderDate", "monitorStatus", "mvrStatus", "medExpire", "terminated", notes from applicants where "companyId"=$1 order by id desc limit 10000', [companyId]); return json(res, 200, { status: 'ok', applicants: result.rows }); }
+  if (req.method === 'GET') {
+    const canSeeTerminated = !isClientScopedRole(user) || canAccessClientTerminated(user);
+    const result = await query(`select id, "fileNumber", "applicantName" as name, "orderDate", "monitorStatus", "mvrStatus", "medExpire", "terminated", notes
+      from applicants where "companyId"=$1 ${canSeeTerminated ? '' : 'and coalesce("terminated",false)=false'} order by id desc limit 10000`, [companyId]);
+    return json(res, 200, { status: 'ok', applicants: result.rows });
+  }
   if (req.method === 'PATCH') {
     if (isClientScopedRole(user) && !canEditClientMonitoring(user)) return json(res, 403, { status: 'error', message: 'This account cannot edit Monitoring records' });
-    const body = await readBody(req); const id = Number(body.id); if (!id) return json(res, 400, { status: 'error', message: 'Applicant id is required' }); const current = await query('select * from applicants where id=$1 and "companyId"=$2 limit 1', [id, companyId]); if (!current.rows[0]) return json(res, 404, { status: 'error', message: 'Applicant not found' }); const monitorStatus = normalizeMonitorStatus(body.monitorStatus ?? current.rows[0].monitorStatus); const medExpire = body.medExpire ?? current.rows[0].medExpire; const notes = body.notes ?? current.rows[0].notes; const terminated = body.terminated === undefined ? Boolean(current.rows[0].terminated) : asBool(body.terminated); const monitoringNotification = await logMonitoringOnOffChange(companyId, current.rows[0], monitorStatus, user); const result = await query('update applicants set "monitorStatus"=$1, "medExpire"=$2, "medExpireOverridden"=$3, notes=$4, "terminated"=$5, "updatedAt"=now() where id=$6 and "companyId"=$7 returning id, "fileNumber", "applicantName" as name, "orderDate", "monitorStatus", "mvrStatus", "medExpire", "terminated", notes', [monitorStatus, medExpire || null, Boolean(medExpire), String(notes || ''), terminated, id, companyId]); return json(res, 200, { status: 'ok', applicant: result.rows[0], monitoringNotification }); }
+    const body = await readBody(req); const id = Number(body.id); if (!id) return json(res, 400, { status: 'error', message: 'Applicant id is required' }); const current = await query('select * from applicants where id=$1 and "companyId"=$2 limit 1', [id, companyId]); if (!current.rows[0]) return json(res, 404, { status: 'error', message: 'Applicant not found' }); const monitorStatus = normalizeMonitorStatus(body.monitorStatus ?? current.rows[0].monitorStatus); const medExpire = body.medExpire ?? current.rows[0].medExpire; const notes = body.notes ?? current.rows[0].notes; if (isClientScopedRole(user) && body.terminated !== undefined && !canEditClientTerminated(user) && asBool(body.terminated) !== Boolean(current.rows[0].terminated)) return json(res, 403, { status: 'error', message: 'This account cannot edit Terminated status' }); const terminated = (body.terminated === undefined || (isClientScopedRole(user) && !canAccessClientTerminated(user))) ? Boolean(current.rows[0].terminated) : asBool(body.terminated); const monitoringNotification = await logMonitoringOnOffChange(companyId, current.rows[0], monitorStatus, user); const result = await query('update applicants set "monitorStatus"=$1, "medExpire"=$2, "medExpireOverridden"=$3, notes=$4, "terminated"=$5, "updatedAt"=now() where id=$6 and "companyId"=$7 returning id, "fileNumber", "applicantName" as name, "orderDate", "monitorStatus", "mvrStatus", "medExpire", "terminated", notes', [monitorStatus, medExpire || null, Boolean(medExpire), String(notes || ''), terminated, id, companyId]); return json(res, 200, { status: 'ok', applicant: result.rows[0], monitoringNotification }); }
   return json(res, 405, { status: 'error', message: 'Method not allowed' });
 }
 
@@ -727,7 +735,10 @@ async function clientApplicantUpdate(req: any, res: any, user: any) {
 
   const monitorStatus = normalizeMonitorStatus(body.monitorStatus ?? current.rows[0].monitorStatus);
   const notes = body.notes === undefined ? String(current.rows[0].notes || '') : String(body.notes ?? '').trim();
-  const terminated = body.terminated === undefined ? Boolean(current.rows[0].terminated) : asBool(body.terminated);
+  if (body.terminated !== undefined && !canEditClientTerminated(user) && asBool(body.terminated) !== Boolean(current.rows[0].terminated)) {
+    return json(res, 403, { status: 'error', message: 'This client account cannot edit Terminated status' });
+  }
+  const terminated = (body.terminated === undefined || !canAccessClientTerminated(user)) ? Boolean(current.rows[0].terminated) : asBool(body.terminated);
 
   const monitoringNotification = await logMonitoringOnOffChange(companyId, current.rows[0], monitorStatus, user);
 
@@ -754,16 +765,18 @@ async function clientDashboard(req: any, res: any, user: any) {
   const showDashboard = canViewClientDashboard(user);
   const showMonitoring = canViewClientMonitoring(user);
   const showSafety = canViewClientSafety(user);
+  const showTerminated = canAccessClientTerminated(user);
 
   const company = await query('select id, name, slug, "isActive" from companies where id=$1 limit 1', [companyId]);
 
+  const monitoringTerminatedFilter = showTerminated ? '' : 'and coalesce("terminated",false)=false';
   const recentApplicants = showMonitoring ? await query(
     `select id, "fileNumber", "applicantName" as name, "orderDate", "monitorStatus", "mvrStatus", "medExpire", "terminated", notes
-     from applicants where "companyId"=$1 order by id desc limit 1000`, [companyId]) : { rows: [] };
+     from applicants where "companyId"=$1 ${monitoringTerminatedFilter} order by id desc limit 1000`, [companyId]) : { rows: [] };
 
   const applicantStatsRows = showMonitoring ? await query(
     `select "monitorStatus", "medExpire", "terminated"
-     from applicants where "companyId"=$1`, [companyId]) : { rows: [] };
+     from applicants where "companyId"=$1 ${monitoringTerminatedFilter}`, [companyId]) : { rows: [] };
 
   const recentSafety = showSafety ? await query(
     `select id, "fileNumber", "applicantName", created, status, "followUpDate", "prevEmployerName", notes
@@ -849,7 +862,9 @@ async function clientDashboard(req: any, res: any, user: any) {
     canViewMonitoring: showMonitoring,
     canViewSafety: showSafety,
     canManageUsers: canManageClientUsers(user),
-    canEditMonitoring: canEditClientMonitoring(user)
+    canEditMonitoring: canEditClientMonitoring(user),
+    canAccessTerminated: showTerminated,
+    canEditTerminated: canEditClientTerminated(user)
   });
 }
 
