@@ -19,6 +19,7 @@
         <div class="nav-label">Client View</div>
         <button data-page="dashboard" class="active">Dashboard</button>
         <button data-page="monitoring">Monitoring</button>
+        <button id="terminated-nav" data-page="terminated" hidden>Terminated</button>
         <button data-page="safety">Safety Reports</button>
         <div id="admin-label" class="nav-label" hidden>Admin</div>
         <button id="users-nav" data-page="users" hidden>User Admin / Access</button>
@@ -28,11 +29,12 @@
   </div>
 <script>
 (() => {
-  const state = { page: 'dashboard', data: null, user: null, filters: { monitoringSearch: '', monitoringStatus: 'active', safetySearch: '', safetyStatus: 'all' } };
+  const state = { page: 'dashboard', data: null, user: null, filters: { monitoringSearch: '', monitoringStatus: 'active', terminatedSearch: '', safetySearch: '', safetyStatus: 'all' } };
   const app = document.getElementById('app');
   const clientName = document.getElementById('client-name');
   const userName = document.getElementById('user-name');
   const usersNav = document.getElementById('users-nav');
+  const terminatedNav = document.getElementById('terminated-nav');
   const adminLabel = document.getElementById('admin-label');
 
   function esc(value) {
@@ -85,20 +87,23 @@
   function canEditMonitoring() { return Boolean(state.data?.canEditMonitoring); }
   function canAccessTerminated() { return Boolean(state.data?.canAccessTerminated); }
   function canEditTerminated() { return Boolean(state.data?.canEditTerminated); }
+  function canViewTerminated() { return canViewMonitoring() && canAccessTerminated(); }
   function isPageAllowed(page) {
     if (page === 'dashboard') return canViewDashboard();
     if (page === 'monitoring') return canViewMonitoring();
+    if (page === 'terminated') return canViewTerminated();
     if (page === 'safety') return canViewSafety();
     if (page === 'users') return canManageUsers();
     return false;
   }
   function allowedPage(page) {
     if (isPageAllowed(page)) return page;
-    return ['dashboard', 'monitoring', 'safety', 'users'].find(isPageAllowed) || 'none';
+    return ['dashboard', 'monitoring', 'terminated', 'safety', 'users'].find(isPageAllowed) || 'none';
   }
   function updateNavVisibility() {
     document.querySelector('button[data-page="dashboard"]').hidden = !canViewDashboard();
     document.querySelector('button[data-page="monitoring"]').hidden = !canViewMonitoring();
+    if (terminatedNav) terminatedNav.hidden = !canViewTerminated();
     document.querySelector('button[data-page="safety"]').hidden = !canViewSafety();
     usersNav.hidden = !canManageUsers();
     adminLabel.hidden = !canManageUsers();
@@ -191,12 +196,17 @@
       return;
     }
     if (state.page === 'monitoring') return renderMonitoring();
+    if (state.page === 'terminated') return renderTerminated();
     if (state.page === 'safety') return renderSafety();
     if (state.page === 'users') return renderUsers();
     renderDashboard();
   }
 
   function recentApplicants() { return state.data?.recentApplicants || []; }
+  function terminatedApplicants() {
+    const rows = state.data?.terminatedApplicants;
+    return Array.isArray(rows) ? rows : recentApplicants().filter(row => Boolean(row.terminated));
+  }
   function recentSafety() { return state.data?.recentSafetyReports || []; }
 
   function renderDashboard() {
@@ -287,6 +297,29 @@
       row.querySelector('[data-action="save-monitoring"]')?.addEventListener('click', () => saveMonitoringRow(row));
     });
   }
+  function renderTerminated() {
+    if (!canViewTerminated()) {
+      app.className = '';
+      app.innerHTML = header('Terminated', 'Access not enabled.') + '<section class="card"><p class="empty">This account does not have Terminated Records access.</p></section>';
+      bindHeaderButtons();
+      return;
+    }
+    const term = String(state.filters.terminatedSearch || '').trim();
+    const rows = terminatedApplicants().filter(row => matchesSearch(row, term, ['fileNumber', 'name', 'mvrStatus', 'notes', 'medExpire']));
+    const subtitle = canEditTerminated()
+      ? 'Terminated Monitoring records. You can update Monitoring status, notes, and terminated status.'
+      : 'Read-only terminated Monitoring records.';
+    app.className = '';
+    app.innerHTML = header('Terminated', subtitle) +
+      `<section class="card"><div class="toolbar"><input id="terminated-search" type="search" placeholder="Search terminated by file number, name, status, notes..." value="${esc(state.filters.terminatedSearch)}"><span class="small">Showing ${rows.length} terminated record${rows.length === 1 ? '' : 's'}</span></div>${monitoringTable(rows, true)}</section>`;
+    bindHeaderButtons();
+    document.getElementById('terminated-search')?.addEventListener('input', event => { state.filters.terminatedSearch = event.target.value; renderTerminated(); });
+    app.querySelectorAll('tr[data-id]').forEach(row => {
+      row.querySelectorAll('select, textarea, input[type="checkbox"]').forEach(el => el.addEventListener('change', () => row.classList.add('dirty')));
+      row.querySelector('[data-action="save-monitoring"]')?.addEventListener('click', () => saveMonitoringRow(row));
+    });
+  }
+
   async function saveMonitoringRow(row) {
     const button = row.querySelector('[data-action="save-monitoring"]');
     const old = button?.textContent || 'Save';
