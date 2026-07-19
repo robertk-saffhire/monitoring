@@ -774,6 +774,12 @@ async function clientDashboard(req: any, res: any, user: any) {
     `select id, "fileNumber", "applicantName" as name, "orderDate", "monitorStatus", "mvrStatus", "medExpire", "terminated", notes
      from applicants where "companyId"=$1 ${monitoringTerminatedFilter} order by id desc limit 1000`, [companyId]) : { rows: [] };
 
+  // Terminated page needs a dedicated list so it is not hidden behind the Monitoring page filters.
+  // It is still company-scoped and only returned when Terminated Records access is enabled.
+  const terminatedApplicants = (showMonitoring && showTerminated) ? await query(
+    `select id, "fileNumber", "applicantName" as name, "orderDate", "monitorStatus", "mvrStatus", "medExpire", "terminated", notes
+     from applicants where "companyId"=$1 and coalesce("terminated",false)=true order by id desc limit 10000`, [companyId]) : { rows: [] };
+
   const applicantStatsRows = showMonitoring ? await query(
     `select "monitorStatus", "medExpire", "terminated"
      from applicants where "companyId"=$1 ${monitoringTerminatedFilter}`, [companyId]) : { rows: [] };
@@ -856,6 +862,7 @@ async function clientDashboard(req: any, res: any, user: any) {
     applicantStats,
     safetyStats,
     recentApplicants: applicants,
+    terminatedApplicants: terminatedApplicants.rows || [],
     recentSafetyReports: clientSafeSafetyReports,
     users,
     canViewDashboard: showDashboard,
