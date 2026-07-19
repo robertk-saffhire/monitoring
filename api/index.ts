@@ -370,10 +370,39 @@ async function importSafetyReports(req: any, res: any, user: any) {
 
 async function users(req: any, res: any, user: any) {
   if (!requireAdmin(user, res)) return;
-  if (req.method === 'GET') { const r = await query('select id, username, "displayName", role, "companyId", "isActive", "mustChangePassword", "lastSignedIn", to_jsonb(local_users)->\'clientAccess\' as "clientAccess" from local_users order by id asc'); return json(res, 200, { status: 'ok', users: r.rows.map(publicUser) }); }
+  if (req.method === 'GET') {
+    const r = await query('select id, username, "displayName", role, "companyId", "isActive", "mustChangePassword", "lastSignedIn", to_jsonb(local_users)->\'clientAccess\' as "clientAccess" from local_users order by id asc');
+    return json(res, 200, { status: 'ok', users: r.rows.map(publicUser), accessOptions: CLIENT_ACCESS_KEYS });
+  }
   const body = await readBody(req);
-  if (req.method === 'POST') { const username = String(body.username || '').trim().toLowerCase(); const rawPassword = String(body.password || ''); if (username.length < 3 || rawPassword.length < 6) return json(res, 400, { status: 'error', message: 'Username and password are required' }); const role = USER_ROLES.has(body.role) ? body.role : 'user'; const passwordHash = await bcrypt.hash(rawPassword, 12); const r = await query('insert into local_users (username,"passwordHash","displayName",role,"companyId","isActive","mustChangePassword") values ($1,$2,$3,$4,$5,true,false) returning id, username, "displayName", role, "companyId", "isActive", "mustChangePassword", "lastSignedIn", "clientAccess"', [username, passwordHash, String(body.displayName || username), role, body.companyId ? Number(body.companyId) : null]); return json(res, 200, { status: 'ok', user: publicUser(r.rows[0]) }); }
-  if (req.method === 'PATCH') { const id = Number(body.id); const role = USER_ROLES.has(body.role) ? body.role : 'user'; const baseParams: any[] = [String(body.displayName || ''), role, body.companyId ? Number(body.companyId) : null, body.isActive !== false]; let sql = 'update local_users set "displayName"=$1, role=$2, "companyId"=$3, "isActive"=$4, "updatedAt"=now()'; if (body.password) { baseParams.push(await bcrypt.hash(String(body.password), 12)); sql += `, "passwordHash"=$${baseParams.length}, "mustChangePassword"=false`; } baseParams.push(id); sql += ` where id=$${baseParams.length} returning id, username, "displayName", role, "companyId", "isActive", "mustChangePassword", "lastSignedIn", "clientAccess"`; const r = await query(sql, baseParams); return json(res, 200, { status: 'ok', user: publicUser(r.rows[0]) }); }
+  if (req.method === 'POST') {
+    const username = String(body.username || '').trim().toLowerCase();
+    const rawPassword = String(body.password || '');
+    if (username.length < 3 || rawPassword.length < 6) return json(res, 400, { status: 'error', message: 'Username and password are required' });
+    const role = USER_ROLES.has(body.role) ? body.role : 'user';
+    const clientAccess = normalizeClientAccess(body.clientAccess || {});
+    const passwordHash = await bcrypt.hash(rawPassword, 12);
+    const r = await query(
+      'insert into local_users (username,"passwordHash","displayName",role,"companyId","clientAccess","isActive","mustChangePassword") values ($1,$2,$3,$4,$5,$6::jsonb,true,false) returning id, username, "displayName", role, "companyId", "isActive", "mustChangePassword", "lastSignedIn", "clientAccess"',
+      [username, passwordHash, String(body.displayName || username), role, body.companyId ? Number(body.companyId) : null, JSON.stringify(clientAccess)]
+    );
+    return json(res, 200, { status: 'ok', user: publicUser(r.rows[0]) });
+  }
+  if (req.method === 'PATCH') {
+    const id = Number(body.id);
+    const role = USER_ROLES.has(body.role) ? body.role : 'user';
+    const clientAccess = normalizeClientAccess(body.clientAccess || {});
+    const baseParams: any[] = [String(body.displayName || ''), role, body.companyId ? Number(body.companyId) : null, body.isActive !== false, JSON.stringify(clientAccess)];
+    let sql = 'update local_users set "displayName"=$1, role=$2, "companyId"=$3, "isActive"=$4, "clientAccess"=$5::jsonb, "updatedAt"=now()';
+    if (body.password) {
+      baseParams.push(await bcrypt.hash(String(body.password), 12));
+      sql += `, "passwordHash"=$${baseParams.length}, "mustChangePassword"=false`;
+    }
+    baseParams.push(id);
+    sql += ` where id=$${baseParams.length} returning id, username, "displayName", role, "companyId", "isActive", "mustChangePassword", "lastSignedIn", "clientAccess"`;
+    const r = await query(sql, baseParams);
+    return json(res, 200, { status: 'ok', user: publicUser(r.rows[0]) });
+  }
   if (req.method === 'DELETE') { const url = new URL(req.url || '/', 'https://local.test'); const id = Number(url.searchParams.get('id')); if (id === user.id) return json(res, 400, { status: 'error', message: 'You cannot delete your own account' }); await query('delete from local_users where id=$1', [id]); return json(res, 200, { status: 'ok', success: true }); }
   return json(res, 405, { status: 'error', message: 'Method not allowed' });
 }
