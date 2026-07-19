@@ -1,29 +1,34 @@
-# Phase 12A-131 — Data Sync Timeout Fix
+# Phase 12A-133 — Dynamic Monitoring Totals
 
-Upload these files:
+Upload these files to the same paths in the `robertk-saffhire/monitoring` repository:
 
-- `api/index.ts`
+- `public/client-portal.html`
 - `public/phase6.js`
 
 ## What changed
 
-- Data Sync now runs in smaller safe batches instead of one long Vercel function call.
-- Backend caps each TazWorks sync request so it returns before the Hobby timeout.
-- TazWorks proxy fetches now have a timeout instead of hanging the function.
-- MVR/medical-date scans are limited per batch so one slow order does not take down the whole sync.
-- Monitoring page Data Sync now sends sequential safe batches from the browser.
+- Client Monitoring totals now reload from the server immediately after a Monitoring record is saved.
+- Monitoring On/Off changes update the totals automatically.
+- Terminated changes update the totals automatically.
+- Record edits reload fresh totals and table data after saving.
+- Save All Changed saves each row, then performs one fresh totals reload.
+- Monitoring Data Sync now broadcasts a completion signal to open client portal tabs.
+- Open client portal tabs refresh immediately after Data Sync completes in another tab on the same browser.
+- Dashboard, Monitoring, and Terminated pages check for new records every 30 seconds.
+- Returning to the tab or focusing the window also checks for current totals.
+- Dashboard requests use `cache: no-store` so an old browser response is not reused.
+- Automatic refresh pauses while a Monitoring row has unsaved changes, including while notes are being typed.
 
-## SQL
+## Database / Supabase
 
 No SQL migration needed.
 
-## Vercel ENV
+## Vercel environment variables
 
-No required ENV changes.
+No ENV changes needed.
 
-Optional tuning:
+## Validation
 
-- `TAZWORKS_SYNC_BUDGET_MS` default 7500
-- `TAZWORKS_FETCH_TIMEOUT_MS` default 4500
-
-For Vercel Hobby, keep these under about 8500ms and 8000ms.
+- `public/phase6.js` passed `node --check`.
+- The JavaScript extracted from `public/client-portal.html` passed `node --check`.
+- The starting files match the current GitHub `main` versions used for Phase 12A-132 and Phase 12A-131.
