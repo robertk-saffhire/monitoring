@@ -850,8 +850,10 @@ async function clientDashboard(req: any, res: any, user: any) {
   let users: any[] = [];
   if (canManageClientUsers(user)) {
     const clientUsers = await query(
-      `select id, username, "displayName", role, "companyId", "isActive", "mustChangePassword", "lastSignedIn"
-       from local_users where "companyId"=$1 order by id asc`, [companyId]);
+      `select id, username, "displayName", role, "companyId", "isActive", "mustChangePassword", "lastSignedIn", "clientAccess"
+       from local_users
+       where "companyId"=$1 and coalesce("createdInClientPortal",false)=true
+       order by id asc`, [companyId]);
     users = clientUsers.rows.map(publicUser);
   }
 
@@ -875,13 +877,17 @@ async function clientDashboard(req: any, res: any, user: any) {
   });
 }
 
+// PHASE12A134_CLIENT_CREATED_USER_SCOPE: client portal only lists and manages users created inside the client portal.
 async function clientUsers(req: any, res: any, user: any) {
   if (!canManageClientUsers(user)) return json(res, 403, { status: 'error', message: 'Client admin access required' });
   if (!requireCompanyScope(user, res)) return;
   const companyId = requestedCompanyId(req, user);
 
   if (req.method === 'GET') {
-    const r = await query(`select id, username, "displayName", role, "companyId", "isActive", "mustChangePassword", "lastSignedIn", "clientAccess" from local_users where "companyId"=$1 order by id asc`, [companyId]);
+    const r = await query(`select id, username, "displayName", role, "companyId", "isActive", "mustChangePassword", "lastSignedIn", "clientAccess"
+      from local_users
+      where "companyId"=$1 and coalesce("createdInClientPortal",false)=true
+      order by id asc`, [companyId]);
     return json(res, 200, { status: 'ok', users: r.rows.map(publicUser), accessOptions: CLIENT_ACCESS_KEYS });
   }
 
@@ -896,14 +902,14 @@ async function clientUsers(req: any, res: any, user: any) {
     if (!allowed.has(role)) role = 'client_user';
     const access = normalizeClientAccess(body.clientAccess || {});
     const hash = await bcrypt.hash(password, 12);
-    const r = await query(`insert into local_users (username,"passwordHash","displayName",role,"companyId","clientAccess","isActive","mustChangePassword") values ($1,$2,$3,$4,$5,$6::jsonb,true,true) returning id, username, "displayName", role, "companyId", "isActive", "mustChangePassword", "lastSignedIn", "clientAccess"`, [username, hash, String(body.displayName || username), role, companyId, JSON.stringify(access)]);
+    const r = await query(`insert into local_users (username,"passwordHash","displayName",role,"companyId","clientAccess","createdInClientPortal","isActive","mustChangePassword") values ($1,$2,$3,$4,$5,$6::jsonb,true,true,true) returning id, username, "displayName", role, "companyId", "isActive", "mustChangePassword", "lastSignedIn", "clientAccess"`, [username, hash, String(body.displayName || username), role, companyId, JSON.stringify(access)]);
     return json(res, 200, { status: 'ok', user: publicUser(r.rows[0]) });
   }
 
   if (req.method === 'PATCH') {
     const id = Number(body.id);
     if (!id) return json(res, 400, { status: 'error', message: 'User id is required' });
-    const current = await query('select id, role, "clientAccess" from local_users where id=$1 and "companyId"=$2 limit 1', [id, companyId]);
+    const current = await query('select id, role, "clientAccess" from local_users where id=$1 and "companyId"=$2 and coalesce("createdInClientPortal",false)=true limit 1', [id, companyId]);
     if (!current.rows[0]) return json(res, 404, { status: 'error', message: 'User not found for this client' });
     let role = String(body.role || current.rows[0].role || 'client_user');
     const allowed = isAdmin(user) ? new Set(['client_admin','client_user','viewer','user']) : new Set(['client_user','viewer']);
@@ -923,7 +929,7 @@ async function clientUsers(req: any, res: any, user: any) {
       sql += `, "passwordHash"=$${params.length}, "mustChangePassword"=true`;
     }
     params.push(id, companyId);
-    sql += ` where id=$${params.length-1} and "companyId"=$${params.length} returning id, username, "displayName", role, "companyId", "isActive", "mustChangePassword", "lastSignedIn", "clientAccess"`;
+    sql += ` where id=$${params.length-1} and "companyId"=$${params.length} and coalesce("createdInClientPortal",false)=true returning id, username, "displayName", role, "companyId", "isActive", "mustChangePassword", "lastSignedIn", "clientAccess"`;
     const r = await query(sql, params);
     return json(res, 200, { status: 'ok', user: publicUser(r.rows[0]) });
   }
@@ -933,7 +939,8 @@ async function clientUsers(req: any, res: any, user: any) {
     const id = Number(url.searchParams.get('id'));
     if (!id) return json(res, 400, { status: 'error', message: 'User id is required' });
     if (id === user.id) return json(res, 400, { status: 'error', message: 'You cannot delete your own account' });
-    await query('delete from local_users where id=$1 and "companyId"=$2', [id, companyId]);
+    const deleted = await query('delete from local_users where id=$1 and "companyId"=$2 and coalesce("createdInClientPortal",false)=true returning id', [id, companyId]);
+    if (!deleted.rows[0]) return json(res, 404, { status: 'error', message: 'Client-created user not found' });
     return json(res, 200, { status: 'ok', success: true });
   }
 
