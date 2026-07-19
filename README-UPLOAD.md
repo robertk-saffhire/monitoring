@@ -1,40 +1,20 @@
-# Phase 12A-125 — Monitoring On/Off Email Notifications
+# Phase 12A-126 — Monitoring Email Diagnostics + Resend Fallback Fix
 
-Upload this file:
+Upload these files:
 
-- `api/index.ts`
+- api/index.ts
+- public/client-portal.html
+
+No SQL migration is required.
+
+Vercel ENV:
+- Uses the existing Resend API key if `RESEND_API_KEY` is already set.
+- Also checks `MONITORING_RESEND_API_KEY`, `SAFETY_RESEND_API_KEY`, `FAX_RESEND_API_KEY`, and `EFAX_RESEND_API_KEY`.
+- Requires a valid from email from one of: `MONITORING_FROM_EMAIL`, `SAFETY_FROM_EMAIL`, `EMAIL_FROM`, `SMTP_FROM`, `SMTP_USER`, `FAX_FROM`, `FAX_SMTP_USER`.
 
 What changed:
-
-- When a Monitoring record changes from Off to On, or On to Off, the server now sends an email notification.
-- Recipients come from active rows in Settings > Notification Emails.
-- Also supports optional comma/semicolon separated ENV fallback: `MONITORING_NOTIFY_EMAILS`.
-- The notification includes company, applicant, file number, previous/new monitoring status, MVR status, med cert date, changed by, and timestamp.
-- The status change still succeeds even if email sending fails; the failure is logged into the monitoring on/off export row raw details.
-
-Email provider:
-
-Use either Resend:
-
-- `RESEND_API_KEY`
-- `EMAIL_FROM` or `SAFETY_FROM_EMAIL`
-
-Or SMTP:
-
-- `SMTP_HOST`
-- `SMTP_PORT`
-- `SMTP_USER`
-- `SMTP_PASS`
-- `SMTP_FROM`
-
-Optional SMTP overrides:
-
-- `MONITORING_SMTP_HOST`
-- `MONITORING_SMTP_PORT`
-- `MONITORING_SMTP_USER`
-- `MONITORING_SMTP_PASS`
-- `MONITORING_SMTP_SECURE`
-- `MONITORING_FROM_EMAIL`
-- `MONITORING_REPLY_TO_EMAIL`
-
-No SQL migration required.
+- Client Monitoring On/Off saves now return the email notification result.
+- The client portal toast now says whether the notification email sent or failed.
+- Monitoring emails now support display-name from addresses like `SaffHire <name@domain.com>`.
+- Monitoring emails can reuse the same Resend key/env family used by eFax.
+- Client Monitoring update now includes MVR status and Med Cert expiration in the notification body.
