@@ -22,6 +22,13 @@ const DOT_FIELDS = [
   ['dotOtherViolations', 'Other DOT violations'],
 ];
 
+function isClientPortalAccount(user) {
+  const role = String(user?.role || '');
+  if (role === 'client_admin' || role === 'client_user') return true;
+  if (role === 'viewer' && user?.companyId && user?.clientAccess && Object.values(user.clientAccess).some((value) => value === false)) return true;
+  return false;
+}
+
 async function api(url, options = {}) {
   const response = await fetch(url, {
     credentials: 'include',
@@ -1282,6 +1289,12 @@ function App() {
 
   useEffect(() => { api('/api/auth/me').then((d) => setUser(d.user)).finally(() => setChecking(false)); }, []);
 
+  useEffect(() => {
+    if (isClientPortalAccount(user)) {
+      window.location.replace('/client-portal.html');
+    }
+  }, [user]);
+
   async function loadData() {
     const c = await api('/api/companies');
     setCompanies(c.companies || []);
@@ -1290,7 +1303,7 @@ function App() {
     setApplicants(a.applicants || []);
     setReports(s.reports || []);
   }
-  useEffect(() => { if (user) loadData().catch((err) => alert(err.message)); }, [user, companyId]);
+  useEffect(() => { if (user && !isClientPortalAccount(user)) loadData().catch((err) => alert(err.message)); }, [user, companyId]);
 
   async function logout() { await api('/api/auth/logout', { method: 'POST' }); setUser(null); }
 
@@ -1305,6 +1318,7 @@ function App() {
 
   if (checking) return <div className="center-screen"><div className="spinner" /></div>;
   if (!user) return <Login onAuth={setUser} />;
+  if (isClientPortalAccount(user)) return <div className="center-screen"><div className="login-card"><h1>Opening Client Portal...</h1><p>Please wait.</p></div></div>;
 
   return <Layout user={user} page={page} setPage={(nextPage) => { setPage(nextPage); if (nextPage === 'dashboard') clearDashboardFilter(); }} onLogout={logout}>{companies.length > 1 ? <div className="company-switcher"><span>Active company</span><select value={companyId} onChange={(e) => setCompanyId(Number(e.target.value))}>{companies.map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}</select></div> : null}{page === 'dashboard' && <Dashboard company={company} applicants={applicants} reports={reports} refresh={loadData} openCard={openDashboardCard} />}{page === 'monitoring' && <Monitoring company={company} applicants={applicants} setApplicants={setApplicants} refresh={loadData} dashboardFilter={dashboardFilter} clearDashboardFilter={clearDashboardFilter} />}{page === 'safety' && <Safety company={company} reports={reports} setReports={setReports} refresh={loadData} companyId={companyId} dashboardFilter={dashboardFilter} clearDashboardFilter={clearDashboardFilter} />}{page === 'settings' && <SettingsManager user={user} company={company} companies={companies} setCompanies={setCompanies} companyId={companyId} refresh={loadData} setApplicants={setApplicants} />}</Layout>;
 }
