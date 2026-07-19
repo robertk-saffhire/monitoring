@@ -4,7 +4,7 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width,initial-scale=1.0" />
   <title>SaffHire Client Portal</title>
-  <!-- Phase 12A-132: Client Monitoring totals restored; Terminated banner removed -->
+  <!-- Phase 12A-133: Dynamic Monitoring totals after edits, syncs, and new records -->
   <style>
     :root{--g:#1fff00;--ink:#0f172a;--muted:#64748b;--line:#dbe3ef;--bg:#f8fafc;--good:#166534;--bad:#991b1b;--warn:#92400e}
     *{box-sizing:border-box}body{margin:0;font-family:system-ui,-apple-system,Segoe UI,sans-serif;background:var(--bg);color:var(--ink)}
@@ -29,7 +29,7 @@
   </div>
 <script>
 (() => {
-  const state = { page: 'dashboard', data: null, user: null, filters: { monitoringSearch: '', monitoringStatus: 'active', terminatedSearch: '', safetySearch: '', safetyStatus: 'all' } };
+  const state = { page: 'dashboard', data: null, user: null, refreshPromise: null, lastRefreshAt: 0, autoRefreshTimer: null, monitoringChannel: null, filters: { monitoringSearch: '', monitoringStatus: 'active', terminatedSearch: '', safetySearch: '', safetyStatus: 'all' } };
   const app = document.getElementById('app');
   const clientName = document.getElementById('client-name');
   const userName = document.getElementById('user-name');
@@ -48,7 +48,7 @@
   }
   async function api(path, options = {}) {
     const headers = Object.assign({'Content-Type':'application/json'}, options.headers || {});
-    const response = await fetch(endpoint(path), Object.assign({credentials:'include'}, options, {headers}));
+    const response = await fetch(endpoint(path), Object.assign({credentials:'include', cache:'no-store'}, options, {headers}));
     const raw = await response.text();
     let data = {};
     try { data = raw ? JSON.parse(raw) : {}; } catch {}
@@ -150,8 +150,14 @@
   function monitoringPill(value) {
     return String(value || '') === 'On' ? '<span class="pill good">On</span>' : '<span class="pill bad">Off</span>';
   }
+  function hasDirtyMonitoringRows() {
+    return Boolean(app.querySelector('tr.dirty[data-id]'));
+  }
   function bindHeaderButtons() {
-    document.getElementById('refresh-btn')?.addEventListener('click', load);
+    document.getElementById('refresh-btn')?.addEventListener('click', async () => {
+      if (hasDirtyMonitoringRows() && !confirm('Refresh and discard the unsaved Monitoring changes on this page?')) return;
+      await refreshPortalData({ showLoading: false, force: true, showToast: true });
+    });
     document.getElementById('logout-btn')?.addEventListener('click', logout);
   }
 
@@ -164,22 +170,53 @@
       location.href = '/client-login.html';
     }
   }
-  async function load() {
-    app.className = 'card';
-    app.textContent = 'Loading...';
-    try {
-      state.data = await api('client-dashboard');
-      state.user = state.data.user || state.user;
-      clientName.textContent = state.data.company?.name || 'Client Portal';
-      userName.textContent = state.user ? `${state.user.displayName || state.user.username} · ${roleLabel(state.user.role)}` : '';
-      updateNavVisibility();
-      state.page = allowedPage(state.page);
-      render();
-    } catch (error) {
-      app.className = 'card';
-      app.innerHTML = `<h2>Could not load client portal</h2><p>${esc(error.message)}</p><p><button class="btn" id="retry-btn">Try Again</button></p>`;
-      document.getElementById('retry-btn')?.addEventListener('click', load);
+  function applyDashboardData(data) {
+    state.data = data;
+    state.user = state.data.user || state.user;
+    state.lastRefreshAt = Date.now();
+    clientName.textContent = state.data.company?.name || 'Client Portal';
+    userName.textContent = state.user ? `${state.user.displayName || state.user.username} · ${roleLabel(state.user.role)}` : '';
+    updateNavVisibility();
+    state.page = allowedPage(state.page);
+  }
+  async function refreshPortalData({ showLoading = false, force = false, showToast = false } = {}) {
+    if (state.refreshPromise) {
+      const activeRefresh = state.refreshPromise;
+      const result = await activeRefresh;
+      if (force) return refreshPortalData({ showLoading: false, force: false, showToast });
+      return result;
     }
+    if (!force && hasDirtyMonitoringRows()) return false;
+
+    state.refreshPromise = (async () => {
+      if (showLoading) {
+        app.className = 'card';
+        app.textContent = 'Loading...';
+      }
+      try {
+        const data = await api('client-dashboard');
+        applyDashboardData(data);
+        render();
+        if (showToast) toast('Totals and records refreshed.');
+        return true;
+      } catch (error) {
+        if (showLoading || !state.data) {
+          app.className = 'card';
+          app.innerHTML = `<h2>Could not load client portal</h2><p>${esc(error.message)}</p><p><button class="btn" id="retry-btn">Try Again</button></p>`;
+          document.getElementById('retry-btn')?.addEventListener('click', load);
+        } else if (showToast) {
+          toast(error.message || 'Could not refresh totals and records.', true);
+        }
+        return false;
+      } finally {
+        state.refreshPromise = null;
+      }
+    })();
+
+    return state.refreshPromise;
+  }
+  async function load() {
+    return refreshPortalData({ showLoading: true, force: true });
   }
   async function logout() {
     await api('client-auth/logout', {method:'POST', body:'{}'}).catch(() => {});
@@ -303,7 +340,10 @@
     document.getElementById('monitoring-filter')?.addEventListener('change', event => { state.filters.monitoringStatus = event.target.value; renderMonitoring(); });
     document.getElementById('save-all-monitoring')?.addEventListener('click', saveAllMonitoring);
     app.querySelectorAll('tr[data-id]').forEach(row => {
-      row.querySelectorAll('select, textarea, input[type="checkbox"]').forEach(el => el.addEventListener('change', () => row.classList.add('dirty')));
+      row.querySelectorAll('select, textarea, input[type="checkbox"]').forEach(el => {
+        el.addEventListener('input', () => row.classList.add('dirty'));
+        el.addEventListener('change', () => row.classList.add('dirty'));
+      });
       row.querySelector('[data-action="save-monitoring"]')?.addEventListener('click', () => saveMonitoringRow(row));
     });
   }
@@ -325,12 +365,24 @@
     bindHeaderButtons();
     document.getElementById('terminated-search')?.addEventListener('input', event => { state.filters.terminatedSearch = event.target.value; renderTerminated(); });
     app.querySelectorAll('tr[data-id]').forEach(row => {
-      row.querySelectorAll('select, textarea, input[type="checkbox"]').forEach(el => el.addEventListener('change', () => row.classList.add('dirty')));
+      row.querySelectorAll('select, textarea, input[type="checkbox"]').forEach(el => {
+        el.addEventListener('input', () => row.classList.add('dirty'));
+        el.addEventListener('change', () => row.classList.add('dirty'));
+      });
       row.querySelector('[data-action="save-monitoring"]')?.addEventListener('click', () => saveMonitoringRow(row));
     });
   }
 
-  async function saveMonitoringRow(row) {
+  function signalMonitoringDataChanged(reason, details = {}) {
+    const payload = { reason, details, at: Date.now() };
+    try { localStorage.setItem('saffhire-monitoring-data-changed', JSON.stringify(payload)); } catch {}
+    try {
+      const channel = new BroadcastChannel('saffhire-monitoring-updates');
+      channel.postMessage(payload);
+      channel.close();
+    } catch {}
+  }
+  async function saveMonitoringRow(row, { refreshAfterSave = true, signalAfterSave = true } = {}) {
     const button = row.querySelector('[data-action="save-monitoring"]');
     const old = button?.textContent || 'Save';
     if (button) { button.disabled = true; button.textContent = 'Saving...'; }
@@ -345,6 +397,7 @@
       const index = recentApplicants().findIndex(item => Number(item.id) === Number(payload.id));
       if (index >= 0 && result.applicant) state.data.recentApplicants[index] = result.applicant;
       row.classList.remove('dirty');
+      if (signalAfterSave) signalMonitoringDataChanged('client-monitoring-edit', { applicantId: payload.id });
       const notification = result.monitoringNotification || {};
       if (notification.attempted && Number(notification.sent || 0) > 0) {
         toast(`Monitoring record saved. Notification email sent to ${notification.sent} recipient${Number(notification.sent) === 1 ? '' : 's'}.`);
@@ -355,18 +408,26 @@
       } else {
         toast('Monitoring record saved.');
       }
-      renderMonitoring();
+      if (refreshAfterSave) await refreshPortalData({ force: true });
+      return true;
     } catch (error) {
       toast(error.message || 'Could not save monitoring record.', true);
+      return false;
     } finally {
-      if (button) { button.disabled = false; button.textContent = old; }
+      if (button && button.isConnected) { button.disabled = false; button.textContent = old; }
     }
   }
   async function saveAllMonitoring() {
     const dirtyRows = Array.from(app.querySelectorAll('tr.dirty[data-id]'));
     if (!dirtyRows.length) return toast('No changes to save.');
-    for (const row of dirtyRows) await saveMonitoringRow(row);
-    await load();
+    let saved = 0;
+    for (const row of dirtyRows) {
+      if (await saveMonitoringRow(row, { refreshAfterSave: false, signalAfterSave: false })) saved += 1;
+    }
+    if (saved > 0) {
+      signalMonitoringDataChanged('client-monitoring-bulk-edit', { saved });
+      await refreshPortalData({ force: true });
+    }
   }
 
   function safetyRowsFiltered() {
@@ -486,12 +547,38 @@
     });
   }
 
+  function shouldAutoRefreshMonitoringData() {
+    return document.visibilityState === 'visible' && ['dashboard', 'monitoring', 'terminated'].includes(state.page) && !hasDirtyMonitoringRows();
+  }
+  function queueAutomaticRefresh(forceFresh = false) {
+    if (!state.data || !shouldAutoRefreshMonitoringData()) return;
+    if (!forceFresh && Date.now() - state.lastRefreshAt < 5000) return;
+    refreshPortalData({ force: false }).catch(() => {});
+  }
+  function startAutomaticRefresh() {
+    if (!state.autoRefreshTimer) state.autoRefreshTimer = setInterval(() => queueAutomaticRefresh(false), 30000);
+    document.addEventListener('visibilitychange', () => {
+      if (document.visibilityState === 'visible') queueAutomaticRefresh(false);
+    });
+    window.addEventListener('focus', () => queueAutomaticRefresh(false));
+    window.addEventListener('storage', event => {
+      if (event.key === 'saffhire-monitoring-data-changed') queueAutomaticRefresh(true);
+    });
+    window.addEventListener('saffhire:monitoring-data-changed', () => queueAutomaticRefresh(true));
+    try {
+      state.monitoringChannel = new BroadcastChannel('saffhire-monitoring-updates');
+      state.monitoringChannel.addEventListener('message', () => queueAutomaticRefresh(true));
+    } catch {}
+  }
+
   document.querySelectorAll('nav button[data-page]').forEach(button => {
     button.addEventListener('click', () => {
       state.page = allowedPage(button.dataset.page);
       render();
+      queueAutomaticRefresh();
     });
   });
+  startAutomaticRefresh();
   boot();
 })();
 </script>

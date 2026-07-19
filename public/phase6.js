@@ -2263,6 +2263,16 @@
     return document.querySelector('.page-header .header-actions') || document.querySelector('.page-header') || null;
   }
 
+  function signalMonitoringDataChanged(reason, details) {
+    const payload = { reason: reason || 'monitoring-data-changed', details: details || {}, at: Date.now() };
+    try { localStorage.setItem('saffhire-monitoring-data-changed', JSON.stringify(payload)); } catch (error) {}
+    try {
+      const channel = new BroadcastChannel('saffhire-monitoring-updates');
+      channel.postMessage(payload);
+      channel.close();
+    } catch (error) {}
+  }
+
   async function runMonitoringDataSync(button) {
     const oldLabel = button ? button.textContent : '';
     if (button) {
@@ -2304,6 +2314,7 @@
       }
 
       const details = `Monitoring Data Sync complete. Pulled ${totals.ordersPulled} order(s). Updated/created ${totals.applicantsUpserted} monitoring record(s). Med dates updated: ${totals.medExpireUpdated}. Errors: ${totals.errorsCount}.`;
+      signalMonitoringDataChanged('monitoring-data-sync-complete', totals);
       toast(details, totals.errorsCount > 0);
       setTimeout(() => window.location.reload(), 1600);
     } catch (error) {
