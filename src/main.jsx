@@ -29,6 +29,30 @@ function isClientPortalAccount(user) {
   return false;
 }
 
+const DEFAULT_INTERNAL_ACCESS = { monitoring: true, safetyReports: true };
+function normalizedInternalAccess(user) {
+  const source = user?.internalAccess && typeof user.internalAccess === 'object' ? user.internalAccess : {};
+  return {
+    monitoring: Object.prototype.hasOwnProperty.call(source, 'monitoring') ? source.monitoring === true : true,
+    safetyReports: Object.prototype.hasOwnProperty.call(source, 'safetyReports') ? source.safetyReports === true : true,
+  };
+}
+function canAccessMonitoringAdmin(user) {
+  if (user?.role === 'admin' || user?.role === 'viewer') return true;
+  return user?.role === 'user' && normalizedInternalAccess(user).monitoring;
+}
+function canAccessSafetyAdmin(user) {
+  if (user?.role === 'admin' || user?.role === 'viewer') return true;
+  return user?.role === 'user' && normalizedInternalAccess(user).safetyReports;
+}
+function allowedInternalPages(user) {
+  const pages = ['dashboard'];
+  if (canAccessMonitoringAdmin(user)) pages.push('monitoring');
+  if (canAccessSafetyAdmin(user)) pages.push('safety');
+  if (user?.role === 'admin') pages.push('settings');
+  return pages;
+}
+
 async function api(url, options = {}) {
   const response = await fetch(url, {
     credentials: 'include',
@@ -343,11 +367,11 @@ function Login({ onAuth }) {
 
 function Layout({ user, children, page, setPage, onLogout }) {
   const nav = [
-    ['dashboard', 'Dashboard', Activity],
-    ['monitoring', 'Monitoring', ClipboardCheck],
-    ['safety', 'Safety Performance', Truck],
-    ['settings', 'Settings', Settings],
-  ];
+    ['dashboard', 'Dashboard', Activity, true],
+    ['monitoring', 'Monitoring', ClipboardCheck, canAccessMonitoringAdmin(user)],
+    ['safety', 'Safety Performance', Truck, canAccessSafetyAdmin(user)],
+    ['settings', 'Settings', Settings, user?.role === 'admin'],
+  ].filter(([, , , allowed]) => allowed);
   return (
     <div className="app-shell">
       <aside className="sidebar">
@@ -488,7 +512,7 @@ function MonitoringAlerts({ applicants, activeFilter, onFilterChange }) {
   );
 }
 
-function Dashboard({ company, applicants, reports, refresh, openCard }) {
+function Dashboard({ company, applicants, reports, refresh, openCard, showMonitoring, showSafety }) {
   const onCount = applicants.filter((a) => a.monitorStatus === 'On').length;
   const offCount = applicants.length - onCount;
   const medExpiring = applicants.filter((a) => monitoringIsOn(a) && medExpiresWithin30(a.medExpire)).length;
@@ -500,21 +524,22 @@ function Dashboard({ company, applicants, reports, refresh, openCard }) {
   return (
     <>
       <Header title="Dashboard" subtitle={company?.name || 'Driver Pipeline'} action={refresh} />
-      <section className="dashboard-section-title">Monitoring</section>
+      {showMonitoring ? <><section className="dashboard-section-title">Monitoring</section>
       <div className="grid cards dashboard-card-grid">
         <Metric title="Total Applicants" value={applicants.length} icon={Database} onClick={() => openCard({ page: 'monitoring', filter: 'all', label: 'Total Applicants' })} />
         <Metric title="On Monitor" value={onCount} icon={ClipboardCheck} subtitle={applicants.length ? `${Math.round((onCount / applicants.length) * 100)}% of total` : ''} onClick={() => openCard({ page: 'monitoring', filter: 'on', label: 'On Monitor' })} />
         <Metric title="Off Monitor" value={offCount} icon={Activity} onClick={() => openCard({ page: 'monitoring', filter: 'off', label: 'Off Monitor' })} />
         <Metric title="Med Certs Expiring" value={medExpiring} icon={Activity} subtitle="within 30 days" onClick={() => openCard({ page: 'monitoring', filter: 'med-expiring', label: 'Med Certs Expiring' })} />
-      </div>
-      <section className="dashboard-section-title">Safety Performance Reports</section>
+      </div></> : null}
+      {showSafety ? <><section className="dashboard-section-title">Safety Performance Reports</section>
       <div className="grid cards dashboard-card-grid safety-dashboard-grid">
         <Metric title="Total Reports" value={reports.length} icon={Truck} onClick={() => openCard({ page: 'safety', filter: 'all', label: 'Total Reports' })} />
         <Metric title="Consent Needed" value={consentNeeded} icon={ShieldCheck} onClick={() => openCard({ page: 'safety', filter: 'consent-needed', label: 'Consent Needed' })} />
         <Metric title="Consent Given" value={consentGiven} icon={ClipboardCheck} onClick={() => openCard({ page: 'safety', filter: 'consent-given', label: 'Consent Given' })} />
         <Metric title="Orders Open" value={ordersOpen} icon={Activity} subtitle="not completed" onClick={() => openCard({ page: 'safety', filter: 'orders-open', label: 'Orders Open' })} />
         <Metric title="Completed" value={completedReports} icon={Database} onClick={() => openCard({ page: 'safety', filter: 'completed', label: 'Completed' })} />
-      </div>
+      </div></> : null}
+      {!showMonitoring && !showSafety ? <section className="card wide-card"><h2>No report access assigned</h2><p>Ask the SaffHire administrator to assign Monitoring Reports, Safety Performance Reports, or both.</p></section> : null}
     </>
   );
 }
@@ -1295,15 +1320,25 @@ function App() {
     }
   }, [user]);
 
+  const canMonitoring = canAccessMonitoringAdmin(user);
+  const canSafety = canAccessSafetyAdmin(user);
+  const allowedPages = allowedInternalPages(user);
+
   async function loadData() {
     const c = await api('/api/companies');
     setCompanies(c.companies || []);
     const activeCompanyId = companyId || c.companies?.[0]?.id || 1;
-    const [a, s] = await Promise.all([api(`/api/applicants?companyId=${activeCompanyId}`), api(`/api/safety-reports?companyId=${activeCompanyId}`)]);
+    const [a, s] = await Promise.all([
+      canMonitoring ? api(`/api/applicants?companyId=${activeCompanyId}`) : Promise.resolve({ applicants: [] }),
+      canSafety ? api(`/api/safety-reports?companyId=${activeCompanyId}`) : Promise.resolve({ reports: [] }),
+    ]);
     setApplicants(a.applicants || []);
     setReports(s.reports || []);
   }
   useEffect(() => { if (user && !isClientPortalAccount(user)) loadData().catch((err) => alert(err.message)); }, [user, companyId]);
+  useEffect(() => {
+    if (user && !allowedPages.includes(page)) setPage(allowedPages[0] || 'dashboard');
+  }, [user, page, canMonitoring, canSafety]);
 
   async function logout() { await api('/api/auth/logout', { method: 'POST' }); setUser(null); }
 
@@ -1320,7 +1355,7 @@ function App() {
   if (!user) return <Login onAuth={setUser} />;
   if (isClientPortalAccount(user)) return <div className="center-screen"><div className="login-card"><h1>Opening Client Portal...</h1><p>Please wait.</p></div></div>;
 
-  return <Layout user={user} page={page} setPage={(nextPage) => { setPage(nextPage); if (nextPage === 'dashboard') clearDashboardFilter(); }} onLogout={logout}>{companies.length > 1 ? <div className="company-switcher"><span>Active company</span><select value={companyId} onChange={(e) => setCompanyId(Number(e.target.value))}>{companies.map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}</select></div> : null}{page === 'dashboard' && <Dashboard company={company} applicants={applicants} reports={reports} refresh={loadData} openCard={openDashboardCard} />}{page === 'monitoring' && <Monitoring company={company} applicants={applicants} setApplicants={setApplicants} refresh={loadData} dashboardFilter={dashboardFilter} clearDashboardFilter={clearDashboardFilter} />}{page === 'safety' && <Safety company={company} reports={reports} setReports={setReports} refresh={loadData} companyId={companyId} dashboardFilter={dashboardFilter} clearDashboardFilter={clearDashboardFilter} />}{page === 'settings' && <SettingsManager user={user} company={company} companies={companies} setCompanies={setCompanies} companyId={companyId} refresh={loadData} setApplicants={setApplicants} />}</Layout>;
+  return <Layout user={user} page={page} setPage={(nextPage) => { if (!allowedPages.includes(nextPage)) return; setPage(nextPage); if (nextPage === 'dashboard') clearDashboardFilter(); }} onLogout={logout}>{companies.length > 1 ? <div className="company-switcher"><span>Active company</span><select value={companyId} onChange={(e) => setCompanyId(Number(e.target.value))}>{companies.map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}</select></div> : null}{page === 'dashboard' && <Dashboard company={company} applicants={applicants} reports={reports} refresh={loadData} openCard={openDashboardCard} showMonitoring={canMonitoring} showSafety={canSafety} />}{page === 'monitoring' && canMonitoring && <Monitoring company={company} applicants={applicants} setApplicants={setApplicants} refresh={loadData} dashboardFilter={dashboardFilter} clearDashboardFilter={clearDashboardFilter} />}{page === 'safety' && canSafety && <Safety company={company} reports={reports} setReports={setReports} refresh={loadData} companyId={companyId} dashboardFilter={dashboardFilter} clearDashboardFilter={clearDashboardFilter} />}{page === 'settings' && user?.role === 'admin' && <SettingsManager user={user} company={company} companies={companies} setCompanies={setCompanies} companyId={companyId} refresh={loadData} setApplicants={setApplicants} />}</Layout>;
 }
 
 createRoot(document.getElementById('root')).render(<App />);
