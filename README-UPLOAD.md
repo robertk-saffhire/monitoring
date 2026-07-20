@@ -1,38 +1,64 @@
-# Phase 12A-138 — Clickable Client Monitoring Cards
+# Phase 12A-139 — Four Daily Automatic Syncs
 
-Upload this file to the same path in `robertk-saffhire/monitoring`:
+Upload these files to `robertk-saffhire/monitoring`:
 
-- `public/client-portal.html`
+- `api/index.ts`
+- `vercel.json`
+- `.github/workflows/monitoring-auto-sync.yml`
+- `supabase/migrations/20260720_phase12a139_auto_sync_runs.sql`
 
-## What changed
+## Schedule
 
-The total cards at the top of the client Monitoring page are now clickable detail filters:
+The GitHub Actions workflow runs at these America/Chicago times every day:
 
-- Total Monitoring — shows all records available to that client user.
-- On Monitoring — shows records with Monitoring On.
-- Off Monitoring — shows records with Monitoring Off.
-- Med Cert Expired — shows On Monitoring records with a medical certificate date before today.
-- Med Cert 30 Days — shows On Monitoring records expiring today through the next 30 days.
-- Terminated — shows terminated records when that user has Terminated Records access.
+- 8:00 AM
+- 10:00 AM
+- 2:00 PM
+- 4:00 PM
 
-Additional behavior:
+The workflow uses a timezone-aware schedule, so daylight saving time is handled automatically.
 
-- The selected card is highlighted in green.
-- Clicking a card clears the search box so the full detail count is shown.
-- The dropdown changes to the matching filter and includes the two medical-certificate filters.
-- Existing column sorting remains active.
-- Automatic data refreshes preserve the selected card/filter.
-- Card changes are blocked while a Monitoring row has unsaved edits, preventing data loss.
+## Why GitHub Actions schedules the four runs
 
-## Database / Supabase
+Vercel Hobby projects cannot deploy cron expressions that run more than once per day. The app keeps its existing once-daily Vercel database keepalive, while GitHub Actions securely calls the new auto-sync endpoint four times per day.
 
-No SQL migration is required.
+## Required setup
 
-## Vercel environment variables
+1. Run `supabase/migrations/20260720_phase12a139_auto_sync_runs.sql` in Supabase SQL Editor.
+2. Confirm Vercel has `CRON_SECRET` set to a random value of at least 16 characters.
+3. In GitHub repository Settings > Secrets and variables > Actions, create:
+   - `AUTO_SYNC_URL` = the production app base URL, such as `https://monitoring-beta-one.vercel.app`
+   - `CRON_SECRET` = exactly the same value used in Vercel
+4. Deploy the repository to Vercel.
+5. Open GitHub > Actions > SaffHire Monitoring Auto Sync and use **Run workflow** once to test it.
 
-No ENV changes are required.
+## What each scheduled run does
 
-## Validation
+- Pulls up to two safe recent-order batches into Monitoring during each scheduled run.
+- Creates or updates Monitoring records and checks recent MVR medical expiration information.
+- Scans recent TazWorks orders for missing Safety Performance reports.
+- Creates missing Safety Reports without overwriting client-completed Safety workflow data.
+- Records each scheduled slot in `auto_sync_runs`.
+- Prevents concurrent or duplicate runs for the same scheduled slot.
+- Allows up to three retries when a run is failed or partial.
 
-- Started from the current GitHub `main` Phase 12A-137 client portal file.
-- The extracted client portal JavaScript passed `node --check`.
+## Optional Vercel environment tuning
+
+- `AUTO_SYNC_COMPANY_ID=1`
+- `AUTO_SYNC_SAFETY_MIN_FILE_NUMBER=6184`
+- `AUTO_SYNC_SAFETY_MAX_PAGES=10`
+- `AUTO_SYNC_SAFETY_MAX_CANDIDATES=25`
+- `AUTO_SYNC_SAFETY_BUDGET_MS=25000`
+- `TAZWORKS_HOST` only if the proxy requires the host to be passed explicitly
+
+The existing TazWorks variables remain required:
+
+- `TAZWORKS_PROXY_BASE_URL`
+- `TAZWORKS_PROXY_SECRET`
+- `TAZWORKS_CLIENT_GUID`
+
+## Database / environment
+
+- SQL migration: Yes
+- New required Vercel ENV: No, assuming `CRON_SECRET` already exists
+- New required GitHub Actions secrets: `AUTO_SYNC_URL` and `CRON_SECRET`
