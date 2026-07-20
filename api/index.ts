@@ -18,6 +18,43 @@ const DEFAULT_CLIENT_ACCESS = {
   terminated: true,
 };
 const CLIENT_ACCESS_KEYS = Object.keys(DEFAULT_CLIENT_ACCESS);
+
+// PHASE12A140_SAFFHIRE_REPORT_ADMIN_ACCESS START
+const DEFAULT_INTERNAL_ACCESS = {
+  monitoring: true,
+  safetyReports: true,
+};
+const INTERNAL_ACCESS_KEYS = Object.keys(DEFAULT_INTERNAL_ACCESS);
+function normalizeInternalAccess(value: any) {
+  let input = value;
+  if (typeof input === 'string') {
+    try { input = JSON.parse(input); } catch { input = {}; }
+  }
+  if (!input || typeof input !== 'object' || Array.isArray(input)) input = {};
+  const out: any = { ...DEFAULT_INTERNAL_ACCESS };
+  for (const key of INTERNAL_ACCESS_KEYS) {
+    if (Object.prototype.hasOwnProperty.call(input, key)) out[key] = input[key] === true;
+  }
+  return out;
+}
+function internalAccess(user: any) { return normalizeInternalAccess(user?.internalAccess); }
+function canAdminMonitoringReports(user: any) {
+  return isAdmin(user) || (String(user?.role || '') === 'user' && internalAccess(user).monitoring === true);
+}
+function canAdminSafetyReports(user: any) {
+  return isAdmin(user) || (String(user?.role || '') === 'user' && internalAccess(user).safetyReports === true);
+}
+function requireMonitoringReportAdmin(user: any, res: any) {
+  if (canAdminMonitoringReports(user)) return true;
+  json(res, 403, { status: 'error', message: 'Monitoring report admin access is required' });
+  return false;
+}
+function requireSafetyReportAdmin(user: any, res: any) {
+  if (canAdminSafetyReports(user)) return true;
+  json(res, 403, { status: 'error', message: 'Safety Performance report admin access is required' });
+  return false;
+}
+// PHASE12A140_SAFFHIRE_REPORT_ADMIN_ACCESS END
 function normalizeClientAccess(value: any) {
   let input = value;
   if (typeof input === 'string') {
@@ -101,8 +138,8 @@ function secret() { if (!process.env.JWT_SECRET) throw new Error('JWT_SECRET is 
 function parseCookies(req: any) { const header = req.headers?.cookie || ''; const out: any = {}; for (const part of header.split(';')) { const idx = part.indexOf('='); if (idx === -1) continue; const key = part.slice(0, idx).trim(); const val = part.slice(idx + 1).trim(); if (!key) continue; try { out[key] = decodeURIComponent(val); } catch { out[key] = val; } } return out; }
 function setSessionCookie(res: any, token: string, maxAgeSeconds: number) { res.setHeader('Set-Cookie', [`${SESSION_COOKIE}=${encodeURIComponent(token)}`, 'Path=/', 'HttpOnly', 'SameSite=Lax', 'Secure', `Max-Age=${maxAgeSeconds}`].join('; ')); }
 function clearSessionCookie(res: any) { res.setHeader('Set-Cookie', `${SESSION_COOKIE}=; Path=/; HttpOnly; SameSite=Lax; Secure; Max-Age=0`); }
-function publicUser(user: any) { if (!user) return null; return { id: user.id, username: user.username, displayName: user.displayName || user.username, role: user.role, companyId: user.companyId ?? null, isActive: user.isActive, mustChangePassword: user.mustChangePassword || false, lastSignedIn: user.lastSignedIn || null, clientAccess: normalizeClientAccess(user.clientAccess) }; }
-async function getUserFromRequest(req: any) { const token = parseCookies(req)[SESSION_COOKIE]; if (!token) return null; try { const { payload } = await jwtVerify(token, secret()); const id = Number(payload.sub); const result = await query('select id, username, "displayName", role, "companyId", "isActive", "mustChangePassword", "lastSignedIn", "clientAccess" from local_users where id=$1 limit 1', [id]); const user = result.rows[0] || null; if (!user || !user.isActive) return null; return user; } catch { return null; } }
+function publicUser(user: any) { if (!user) return null; return { id: user.id, username: user.username, displayName: user.displayName || user.username, role: user.role, companyId: user.companyId ?? null, isActive: user.isActive, mustChangePassword: user.mustChangePassword || false, lastSignedIn: user.lastSignedIn || null, clientAccess: normalizeClientAccess(user.clientAccess), internalAccess: normalizeInternalAccess(user.internalAccess) }; }
+async function getUserFromRequest(req: any) { const token = parseCookies(req)[SESSION_COOKIE]; if (!token) return null; try { const { payload } = await jwtVerify(token, secret()); const id = Number(payload.sub); const result = await query('select id, username, "displayName", role, "companyId", "isActive", "mustChangePassword", "lastSignedIn", "clientAccess", "internalAccess" from local_users where id=$1 limit 1', [id]); const user = result.rows[0] || null; if (!user || !user.isActive) return null; return user; } catch { return null; } }
 async function requireUser(req: any, res: any) { const user = await getUserFromRequest(req); if (!user) { json(res, 401, { status: 'error', message: 'Login required' }); return null; } return user; }
 function requireAdmin(user: any, res: any) { if (user.role !== 'admin') { json(res, 403, { status: 'error', message: 'Admin access required' }); return false; } return true; }
 function isAdmin(user: any) { return user?.role === 'admin'; }
@@ -125,7 +162,7 @@ function requestedCompanyId(req: any, user: any) {
   return isAdmin(user) ? requested : Number(user.companyId || requested || 1);
 }
 function requireCompanyScope(user: any, res: any) {
-  if (isAdmin(user)) return true;
+  if (isSaffHireInternalUser(user)) return true;
   if (!user.companyId) {
     json(res, 403, { status: 'error', message: 'Client company access is required' });
     return false;
@@ -209,7 +246,7 @@ async function clientAuth(req: any, res: any, route: string) {
     const password = String(body.password || '');
 
     const result = await query(
-      'select id, username, "passwordHash", "displayName", role, "companyId", "isActive", "mustChangePassword", "lastSignedIn", "clientAccess" from local_users where lower(username)=lower($1) limit 1',
+      'select id, username, "passwordHash", "displayName", role, "companyId", "isActive", "mustChangePassword", "lastSignedIn", "clientAccess", "internalAccess" from local_users where lower(username)=lower($1) limit 1',
       [username]
     );
 
@@ -261,8 +298,8 @@ async function clientAuth(req: any, res: any, route: string) {
 async function auth(req: any, res: any, route: string) {
   if (route === 'debug' && req.method === 'GET') return json(res, 200, { status: 'ok', route, hasDatabaseUrl: Boolean(process.env.DATABASE_URL), hasJwtSecret: Boolean(process.env.JWT_SECRET) });
   if (route === 'auth/setup-status' && req.method === 'GET') { const result = await query("select count(*)::int as count from local_users where role='admin'"); return json(res, 200, { status: 'ok', hasAdmin: Number(result.rows[0]?.count || 0) > 0 }); }
-  if (route === 'auth/setup-admin' && req.method === 'POST') { const count = await query("select count(*)::int as count from local_users where role='admin'"); if (Number(count.rows[0]?.count || 0) > 0) return json(res, 400, { status: 'error', message: 'Admin already exists' }); const body = await readBody(req); const username = String(body.username || '').trim().toLowerCase(); const password = String(body.password || ''); if (username.length < 3 || password.length < 6) return json(res, 400, { status: 'error', message: 'Username and password are required' }); const company = await query("select id from companies where slug='driver-pipeline' limit 1"); const companyId = company.rows[0]?.id || null; const passwordHash = await bcrypt.hash(password, 12); const result = await query('insert into local_users (username, "passwordHash", "displayName", role, "companyId", "isActive") values ($1,$2,$3,$4,$5,true) returning id, username, "displayName", role, "companyId", "isActive", "mustChangePassword", "lastSignedIn", "clientAccess"', [username, passwordHash, username, 'admin', companyId]); const user = result.rows[0]; const token = await new SignJWT({ sub: String(user.id), role: user.role, name: user.displayName || user.username }).setProtectedHeader({ alg: 'HS256' }).setIssuedAt().setExpirationTime('30d').sign(secret()); setSessionCookie(res, token, 60 * 60 * 24 * 30); return json(res, 200, { status: 'ok', user: publicUser(user) }); }
-  if (route === 'auth/login' && req.method === 'POST') { const body = await readBody(req); const username = String(body.username || '').trim().toLowerCase(); const password = String(body.password || ''); const result = await query('select id, username, "passwordHash", "displayName", role, "companyId", "isActive", "mustChangePassword", "lastSignedIn", "clientAccess" from local_users where lower(username)=lower($1) limit 1', [username]); const user = result.rows[0]; if (!user || !user.isActive || !(await bcrypt.compare(password, user.passwordHash))) return json(res, 401, { status: 'error', message: 'Invalid username or password' }); await query('update local_users set "lastSignedIn"=now() where id=$1', [user.id]); const token = await new SignJWT({ sub: String(user.id), role: user.role, name: user.displayName || user.username }).setProtectedHeader({ alg: 'HS256' }).setIssuedAt().setExpirationTime(body.rememberMe ? '30d' : '1d').sign(secret()); setSessionCookie(res, token, body.rememberMe ? 60 * 60 * 24 * 30 : 60 * 60 * 24); return json(res, 200, { status: 'ok', user: publicUser(user) }); }
+  if (route === 'auth/setup-admin' && req.method === 'POST') { const count = await query("select count(*)::int as count from local_users where role='admin'"); if (Number(count.rows[0]?.count || 0) > 0) return json(res, 400, { status: 'error', message: 'Admin already exists' }); const body = await readBody(req); const username = String(body.username || '').trim().toLowerCase(); const password = String(body.password || ''); if (username.length < 3 || password.length < 6) return json(res, 400, { status: 'error', message: 'Username and password are required' }); const company = await query("select id from companies where slug='driver-pipeline' limit 1"); const companyId = company.rows[0]?.id || null; const passwordHash = await bcrypt.hash(password, 12); const result = await query('insert into local_users (username, "passwordHash", "displayName", role, "companyId", "isActive") values ($1,$2,$3,$4,$5,true) returning id, username, "displayName", role, "companyId", "isActive", "mustChangePassword", "lastSignedIn", "clientAccess", "internalAccess"', [username, passwordHash, username, 'admin', companyId]); const user = result.rows[0]; const token = await new SignJWT({ sub: String(user.id), role: user.role, name: user.displayName || user.username }).setProtectedHeader({ alg: 'HS256' }).setIssuedAt().setExpirationTime('30d').sign(secret()); setSessionCookie(res, token, 60 * 60 * 24 * 30); return json(res, 200, { status: 'ok', user: publicUser(user) }); }
+  if (route === 'auth/login' && req.method === 'POST') { const body = await readBody(req); const username = String(body.username || '').trim().toLowerCase(); const password = String(body.password || ''); const result = await query('select id, username, "passwordHash", "displayName", role, "companyId", "isActive", "mustChangePassword", "lastSignedIn", "clientAccess", "internalAccess" from local_users where lower(username)=lower($1) limit 1', [username]); const user = result.rows[0]; if (!user || !user.isActive || !(await bcrypt.compare(password, user.passwordHash))) return json(res, 401, { status: 'error', message: 'Invalid username or password' }); await query('update local_users set "lastSignedIn"=now() where id=$1', [user.id]); const token = await new SignJWT({ sub: String(user.id), role: user.role, name: user.displayName || user.username }).setProtectedHeader({ alg: 'HS256' }).setIssuedAt().setExpirationTime(body.rememberMe ? '30d' : '1d').sign(secret()); setSessionCookie(res, token, body.rememberMe ? 60 * 60 * 24 * 30 : 60 * 60 * 24); return json(res, 200, { status: 'ok', user: publicUser(user) }); }
   if (route === 'auth/me' && req.method === 'GET') { const user = await getUserFromRequest(req); return json(res, 200, { status: 'ok', user: publicUser(user) }); }
   if (route === 'auth/logout' && req.method === 'POST') { clearSessionCookie(res); return json(res, 200, { status: 'ok' }); }
   return false;
@@ -370,7 +407,7 @@ async function safetyReports(req: any, res: any, user: any) {
 }
 
 async function importSafetyReports(req: any, res: any, user: any) {
-  if (!requireAdmin(user, res)) return;
+  if (!requireSafetyReportAdmin(user, res)) return;
   if (req.method !== 'POST') return json(res, 405, { status: 'error', message: 'Method not allowed' });
   const body = await readBody(req);
   const companyId = Number(body.companyId || user.companyId || 1);
@@ -399,8 +436,8 @@ async function importSafetyReports(req: any, res: any, user: any) {
 async function users(req: any, res: any, user: any) {
   if (!requireAdmin(user, res)) return;
   if (req.method === 'GET') {
-    const r = await query('select id, username, "displayName", role, "companyId", "isActive", "mustChangePassword", "lastSignedIn", "clientAccess" from local_users order by id asc');
-    return json(res, 200, { status: 'ok', users: r.rows.map(publicUser), accessOptions: CLIENT_ACCESS_KEYS });
+    const r = await query('select id, username, "displayName", role, "companyId", "isActive", "mustChangePassword", "lastSignedIn", "clientAccess", "internalAccess" from local_users order by id asc');
+    return json(res, 200, { status: 'ok', users: r.rows.map(publicUser), clientAccessOptions: CLIENT_ACCESS_KEYS, internalAccessOptions: INTERNAL_ACCESS_KEYS });
   }
   const body = await readBody(req);
   if (req.method === 'POST') {
@@ -409,10 +446,14 @@ async function users(req: any, res: any, user: any) {
     if (username.length < 3 || rawPassword.length < 6) return json(res, 400, { status: 'error', message: 'Username and password are required' });
     const role = USER_ROLES.has(body.role) ? body.role : 'user';
     const clientAccess = normalizeClientAccess(body.clientAccess || {});
+    const internalAccessValue = normalizeInternalAccess(body.internalAccess || {});
+    if (role === 'user' && !internalAccessValue.monitoring && !internalAccessValue.safetyReports) {
+      return json(res, 400, { status: 'error', message: 'Select Monitoring Reports, Safety Performance Reports, or both for a SaffHire User' });
+    }
     const passwordHash = await bcrypt.hash(rawPassword, 12);
     const r = await query(
-      'insert into local_users (username,"passwordHash","displayName",role,"companyId","clientAccess","isActive","mustChangePassword") values ($1,$2,$3,$4,$5,$6::jsonb,true,false) returning id, username, "displayName", role, "companyId", "isActive", "mustChangePassword", "lastSignedIn", "clientAccess"',
-      [username, passwordHash, String(body.displayName || username), role, body.companyId ? Number(body.companyId) : null, JSON.stringify(clientAccess)]
+      'insert into local_users (username,"passwordHash","displayName",role,"companyId","clientAccess","internalAccess","isActive","mustChangePassword") values ($1,$2,$3,$4,$5,$6::jsonb,$7::jsonb,true,false) returning id, username, "displayName", role, "companyId", "isActive", "mustChangePassword", "lastSignedIn", "clientAccess", "internalAccess"',
+      [username, passwordHash, String(body.displayName || username), role, body.companyId ? Number(body.companyId) : null, JSON.stringify(clientAccess), JSON.stringify(role === 'admin' ? DEFAULT_INTERNAL_ACCESS : internalAccessValue)]
     );
     return json(res, 200, { status: 'ok', user: publicUser(r.rows[0]) });
   }
@@ -420,14 +461,18 @@ async function users(req: any, res: any, user: any) {
     const id = Number(body.id);
     const role = USER_ROLES.has(body.role) ? body.role : 'user';
     const clientAccess = normalizeClientAccess(body.clientAccess || {});
-    const baseParams: any[] = [String(body.displayName || ''), role, body.companyId ? Number(body.companyId) : null, body.isActive !== false, JSON.stringify(clientAccess)];
-    let sql = 'update local_users set "displayName"=$1, role=$2, "companyId"=$3, "isActive"=$4, "clientAccess"=$5::jsonb, "updatedAt"=now()';
+    const internalAccessValue = normalizeInternalAccess(body.internalAccess || {});
+    if (role === 'user' && !internalAccessValue.monitoring && !internalAccessValue.safetyReports) {
+      return json(res, 400, { status: 'error', message: 'Select Monitoring Reports, Safety Performance Reports, or both for a SaffHire User' });
+    }
+    const baseParams: any[] = [String(body.displayName || ''), role, body.companyId ? Number(body.companyId) : null, body.isActive !== false, JSON.stringify(clientAccess), JSON.stringify(role === 'admin' ? DEFAULT_INTERNAL_ACCESS : internalAccessValue)];
+    let sql = 'update local_users set "displayName"=$1, role=$2, "companyId"=$3, "isActive"=$4, "clientAccess"=$5::jsonb, "internalAccess"=$6::jsonb, "updatedAt"=now()';
     if (body.password) {
       baseParams.push(await bcrypt.hash(String(body.password), 12));
       sql += `, "passwordHash"=$${baseParams.length}, "mustChangePassword"=false`;
     }
     baseParams.push(id);
-    sql += ` where id=$${baseParams.length} returning id, username, "displayName", role, "companyId", "isActive", "mustChangePassword", "lastSignedIn", "clientAccess"`;
+    sql += ` where id=$${baseParams.length} returning id, username, "displayName", role, "companyId", "isActive", "mustChangePassword", "lastSignedIn", "clientAccess", "internalAccess"`;
     const r = await query(sql, baseParams);
     return json(res, 200, { status: 'ok', user: publicUser(r.rows[0]) });
   }
@@ -478,7 +523,7 @@ function renderTemplateText(input: any, report: any, extra: any = {}) {
 }
 
 async function emailTemplates(req: any, res: any, user: any) {
-  if (!requireAdmin(user, res)) return;
+  if (!requireSafetyReportAdmin(user, res)) return;
   const url = new URL(req.url || '/', 'https://local.test');
   const companyId = requestedCompanyId(req, user);
   const type = emailTemplateType(url.searchParams.get('type') || 'fax');
@@ -639,7 +684,7 @@ async function getClientVisibleSafetyNotes(companyId: number) {
 // PHASE12A87_SAFETY_REPORT_NOTES END
 
 async function importApplicants(req: any, res: any, user: any) {
-  if (!requireAdmin(user, res)) return;
+  if (!requireMonitoringReportAdmin(user, res)) return;
   if (req.method !== 'POST') return json(res, 405, { status: 'error', message: 'Method not allowed' });
 
   const body = await readBody(req);
@@ -2285,7 +2330,7 @@ function diagnosticDatesFromText(text: string) {
 
 async function tazworksMvrTest(req: any, res: any, user: any) {
   if (req.method !== 'GET') return json(res, 405, { status: 'error', message: 'Method not allowed' });
-  if (!requireAdmin(user, res)) return;
+  if (!requireMonitoringReportAdmin(user, res)) return;
 
   const url = new URL(req.url || '/', 'https://local.test');
   const fileNumber = String(url.searchParams.get('fileNumber') || '6328').trim();
@@ -2421,7 +2466,7 @@ async function tazworksMvrTest(req: any, res: any, user: any) {
 
 async function tazworksSyncClear(req: any, res: any, user: any) {
   if (req.method !== 'POST') return json(res, 405, { status: 'error', message: 'Method not allowed' });
-  if (!requireAdmin(user, res)) return;
+  if (!requireMonitoringReportAdmin(user, res)) return;
 
   const body = await readBody(req);
   const keepLatest = Math.max(0, Math.min(10, Number(body.keepLatest || 0)));
@@ -2457,7 +2502,7 @@ async function tazworksSyncClear(req: any, res: any, user: any) {
 
 async function tazworksSyncRuns(req: any, res: any, user: any) {
   if (req.method !== 'GET') return json(res, 405, { status: 'error', message: 'Method not allowed' });
-  if (!requireAdmin(user, res)) return;
+  if (!requireMonitoringReportAdmin(user, res)) return;
   const result = await query('select * from tazworks_sync_runs order by started_at desc limit 1000');
   return json(res, 200, { status: 'ok', runs: result.rows });
 }
@@ -2476,7 +2521,7 @@ function tazworksSyncBudgetMs(body: any) {
 
 async function tazworksSyncRun(req: any, res: any, user: any) {
   if (req.method !== 'POST') return json(res, 405, { status: 'error', message: 'Method not allowed' });
-  if (!requireAdmin(user, res)) return;
+  if (!requireMonitoringReportAdmin(user, res)) return;
 
   const body = await readBody(req);
   const companyId = Number(body.companyId || user.companyId || 1);
@@ -3263,7 +3308,7 @@ async function logMonitoringOnOffChange(companyId: number, currentRow: any, newM
 }
 
 async function monitoringOnOffExports(req: any, res: any, user: any) {
-  if (!requireAdmin(user, res)) return;
+  if (!requireMonitoringReportAdmin(user, res)) return;
   const companyId = requestedCompanyId(req, user);
 
   if (req.method === 'GET') {
@@ -3287,7 +3332,7 @@ async function monitoringOnOffExports(req: any, res: any, user: any) {
 }
 
 async function monitoringOnOffExportsClear(req: any, res: any, user: any) {
-  if (!requireAdmin(user, res)) return;
+  if (!requireMonitoringReportAdmin(user, res)) return;
   if (req.method !== 'POST') return json(res, 405, { status: 'error', message: 'Method not allowed' });
 
   const companyId = requestedCompanyId(req, user);
@@ -3310,7 +3355,7 @@ async function monitoringOnOffExportsClear(req: any, res: any, user: any) {
 }
 
 async function monitoringOnOffExportsRepair(req: any, res: any, user: any) {
-  if (!requireAdmin(user, res)) return;
+  if (!requireMonitoringReportAdmin(user, res)) return;
   if (req.method !== 'POST') return json(res, 405, { status: 'error', message: 'Method not allowed' });
 
   const companyId = requestedCompanyId(req, user);
@@ -3358,7 +3403,7 @@ async function monitoringOnOffExportsRepair(req: any, res: any, user: any) {
 
 
 async function monitoringOnOffExportsUpdate(req: any, res: any, user: any) {
-  if (!requireAdmin(user, res)) return;
+  if (!requireMonitoringReportAdmin(user, res)) return;
   if (req.method !== 'PATCH' && req.method !== 'POST') {
     return json(res, 405, { status: 'error', message: 'Method not allowed' });
   }
@@ -4100,7 +4145,7 @@ async function safetyAllSearchResults(orderGuid: string, clientGuid: string, hos
 }
 
 async function safetyReportsLivePull(req: any, res: any, user: any) {
-  if (!requireAdmin(user, res)) return;
+  if (!requireSafetyReportAdmin(user, res)) return;
   if (req.method !== 'POST') return json(res, 405, { status: 'error', message: 'Method not allowed' });
 
   const body = await readBody(req);
@@ -4387,7 +4432,7 @@ async function safetyCacheTazOrder(companyId: number, order: any) {
 }
 
 async function safetyReportsLiveDiscover(req: any, res: any, user: any) {
-  if (!requireAdmin(user, res)) return;
+  if (!requireSafetyReportAdmin(user, res)) return;
   if (req.method !== 'POST') return json(res, 405, { status: 'error', message: 'Method not allowed' });
 
   const body = await readBody(req);
@@ -4936,7 +4981,7 @@ async function safetyResponsePublic(req: any, res: any) {
 }
 
 async function safetyResponseDiagnostics(req: any, res: any, user: any) {
-  if (!requireAdmin(user, res)) return;
+  if (!requireSafetyReportAdmin(user, res)) return;
 
   const companyId = requestedCompanyId(req, user);
   const url = new URL(req.url || '/', 'https://local.test');
@@ -5251,6 +5296,22 @@ export default async function handler(req: any, res: any) {
     if (authResult !== false) return;
     const user = await requireUser(req, res);
     if (!user) return;
+
+    // SaffHire Users receive full administrative rights only inside assigned report areas.
+    if (String(user.role || '') === 'user') {
+      const monitoringRoutes = new Set([
+        'applicants', 'import-applicants', 'tazworks-sync/run', 'tazworks-sync/runs', 'tazworks-sync/clear',
+        'tazworks-mvr-test', 'monitoring-on-off', 'monitoring-on-off/clear', 'monitoring-on-off/repair', 'monitoring-on-off/update'
+      ]);
+      const safetyRoutes = new Set([
+        'safety-reports', 'safety-reports/live-pull', 'safety-reports/fax-fmcsa', 'safety-reports/live-discover',
+        'safety-response-link', 'safety-response-diagnostics', 'import-safety-reports', 'email-templates',
+        'safety-report-notes', 'client-safety-pdf'
+      ]);
+      if (monitoringRoutes.has(route) && !canAdminMonitoringReports(user)) return json(res, 403, { status: 'error', message: 'This SaffHire User does not have Monitoring Reports access' });
+      if (safetyRoutes.has(route) && !canAdminSafetyReports(user)) return json(res, 403, { status: 'error', message: 'This SaffHire User does not have Safety Performance Reports access' });
+    }
+
     if (route === 'companies') return companies(req, res, user);
     if (route === 'applicants') return applicants(req, res, user);
     if (route === 'safety-reports') return safetyReports(req, res, user);
