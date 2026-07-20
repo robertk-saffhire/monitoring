@@ -1,35 +1,39 @@
-# Phase 12A-135 — Client Order MVR
+# Phase 12A-136 — Permanent Safety Button Deduplication
 
 Upload these files to the same paths in `robertk-saffhire/monitoring`:
 
-- `api/index.ts`
-- `public/client-portal.html`
-- `supabase/migrations/20260719_phase12a135_mvr_order_requests.sql`
+- `public/phase6.js`
+- `public/phase7.js`
+- `public/phase7a-fmcsa.js`
 
-## Supabase
+## Root cause
 
-Run `supabase/migrations/20260719_phase12a135_mvr_order_requests.sql` in the Supabase SQL Editor before testing the button.
+The native React `SafetyLinks` component already renders one working set of Safety Report actions. Two older scripts were still running on timers:
+
+- `public/phase7.js` inserted another `Client Gmail` and `Mark Completed` group.
+- `public/phase7a-fmcsa.js` inserted another `FMCSA PDF` button.
+
+The older cleanup skipped the Links cell whenever it found the native React group, so legacy buttons inserted into that same cell survived.
 
 ## What changed
 
-- On the client Monitoring page, the `MVR Status` column is now labeled `Order MVR`.
-- Eligible rows show the green `Order MVR` button.
-- Clicking the button asks for confirmation, records a company-scoped request, and changes the master Monitoring MVR status to `Order Requested`.
-- The client button changes to `Requested` while the request is pending.
-- Terminated applicants cannot have an MVR ordered.
-- Read-only client users see `View only` instead of an active order button.
-- Notification emails go to active addresses in Settings > Notification Emails, using the existing Resend/SMTP setup.
-- Every request is logged in `mvr_order_requests` with company, applicant, file number, user, date, and notification result.
-- When a later TazWorks sync replaces `Order Requested` with a new MVR result, the button becomes available for a future order.
-
-## Important workflow note
-
-This button submits and logs an MVR order request for SaffHire to process. It does not invent or guess a direct TazWorks order-creation endpoint. The request is immediately visible in the master Monitoring table as `Order Requested`.
+- Retired the Phase 7 and Phase 7A row-button injectors.
+- Removed their old informational panels.
+- Made the Phase 6 cleanup treat the React `.safety-links-native` group as the only allowed content in the Links cell.
+- Removed duplicate Safety action buttons from every other cell in the same row.
+- Added a MutationObserver so a stale/cached legacy insertion is removed immediately.
+- Kept one working button for each action:
+  - Applicant Link
+  - Employer Link
+  - FMCSA PDF
+  - Fax FMCSA
+  - Client Gmail
+  - Mark Completed
 
 ## SQL migration
 
-Yes.
+No.
 
 ## Vercel environment variables
 
-No new variables. It reuses the existing Monitoring notification email configuration.
+No changes.
