@@ -4397,7 +4397,13 @@ async function safetyReportsLiveDiscover(req: any, res: any, user: any) {
   const minFileNumber = Number(body.minFileNumber || 6184);
   const pageSize = Math.max(10, Math.min(50, Number(body.pageSize || 50)));
   const maxPages = Math.max(1, Math.min(200, Number(body.maxPages || 100)));
+  const startPage = Math.max(0, Math.min(500, Number(body.startPage || 0)));
   const stopAtMinFileNumber = body.stopAtMinFileNumber !== false;
+  const onlyCreateMissing = body.onlyCreateMissing === true;
+  const maxCandidates = Math.max(1, Math.min(200, Number(body.maxCandidates || (onlyCreateMissing ? 25 : 200))));
+  const maxRunMs = Math.max(5000, Math.min(45000, Number(body.maxRunMs || (onlyCreateMissing ? 30000 : 45000))));
+  const deadlineMs = Date.now() + maxRunMs;
+  const shouldStopSoon = () => Date.now() > deadlineMs - 1200;
 
   if (!clientGuid) return json(res, 400, { status: 'error', message: 'Client GUID is required or TAZWORKS_CLIENT_GUID must be set in Vercel.' });
 
@@ -4405,6 +4411,10 @@ async function safetyReportsLiveDiscover(req: any, res: any, user: any) {
     minFileNumber,
     pageSize,
     maxPages,
+    startPage,
+    maxCandidates,
+    maxRunMs,
+    onlyCreateMissing,
     pagesChecked: 0,
     ordersPulled: 0,
     candidatesGreaterThanMin: 0,
@@ -4417,6 +4427,12 @@ async function safetyReportsLiveDiscover(req: any, res: any, user: any) {
     stoppedAtFileNumber: '',
     skippedNoOrderGuid: 0,
     skippedNoFileNumber: 0,
+    skippedExisting: 0,
+    candidatesProcessed: 0,
+    stoppedEarly: false,
+    reachedEnd: false,
+    nextStartPage: startPage,
+    hasMore: false,
     errorsCount: 0,
     samples: [],
     errors: []
@@ -4424,7 +4440,8 @@ async function safetyReportsLiveDiscover(req: any, res: any, user: any) {
 
   const seen = new Set<string>();
 
-  for (let page = 0; page < maxPages; page++) {
+  for (let page = startPage; page < startPage + maxPages; page++) {
+    if (shouldStopSoon()) { summary.stoppedEarly = true; break; }
     const payload = await proxyGet(safetyQuery('/tazworks/orders', { page, size: pageSize, clientGuid, host }));
     const list = arr(payload);
     summary.pagesChecked++;
@@ -4464,6 +4481,23 @@ async function safetyReportsLiveDiscover(req: any, res: any, user: any) {
       summary.candidatesGreaterThanMin++;
       await safetyCacheTazOrder(companyId, order);
 
+      if (onlyCreateMissing) {
+        const existingReport = await query(
+          'select id from safety_reports where "companyId"=$1 and trim("fileNumber"::text)=trim($2) limit 1',
+          [companyId, fileNumber]
+        );
+        if (existingReport.rows[0]) {
+          summary.skippedExisting++;
+          continue;
+        }
+      }
+
+      if (summary.candidatesProcessed >= maxCandidates || shouldStopSoon()) {
+        summary.stoppedEarly = true;
+        break;
+      }
+      summary.candidatesProcessed++;
+
       try {
         const pulled = await safetyAllSearchResults(orderGuid, clientGuid, host);
         const safetySearch = safetyFindPerformanceSearch(pulled.payload);
@@ -4499,12 +4533,18 @@ async function safetyReportsLiveDiscover(req: any, res: any, user: any) {
       }
     }
 
-    if (list.length < pageSize) break;
+    summary.nextStartPage = page + 1;
+    if (summary.stoppedEarly) break;
+    if (list.length < pageSize) { summary.reachedEnd = true; break; }
   }
+
+  summary.hasMore = !summary.reachedEnd && !summary.stoppedAtMinFileNumber && (summary.stoppedEarly || summary.pagesChecked >= maxPages);
 
   const stopMessage = summary.stoppedAtMinFileNumber ? ` Stopped when the remaining page was at/below file ${summary.stoppedAtFileNumber || minFileNumber}.` : '';
   const errorMessagePart = summary.errors.length ? ` First error: ${summary.errors[0]}` : '';
-  const message = `Safety refresh completed. Created ${summary.created} new report(s), updated ${summary.updated}, no Safety Performance search on ${summary.noSafetySearch}.${stopMessage}${errorMessagePart}`;
+  const earlyMessage = summary.stoppedEarly ? ` Stopped safely after ${summary.candidatesProcessed} candidate(s); another scheduled run will continue checking recent orders.` : '';
+  const existingMessage = onlyCreateMissing ? ` Existing reports skipped: ${summary.skippedExisting}.` : '';
+  const message = `Safety refresh completed. Created ${summary.created} new report(s), updated ${summary.updated}, no Safety Performance search on ${summary.noSafetySearch}.${existingMessage}${stopMessage}${earlyMessage}${errorMessagePart}`;
   return json(res, 200, { status: 'ok', message, summary });
 }
 // PHASE12A72_AUTO_CREATE_NEW_SAFETY_REPORTS END
@@ -4938,10 +4978,241 @@ async function safetyResponseDiagnostics(req: any, res: any, user: any) {
 // PHASE12A70_DUAL_APPLICANT_EMPLOYER_RESPONSE_LINKS END
 
 
+// PHASE12A139_AUTOMATIC_MONITORING_AND_SAFETY_SYNC START
+function cronSecretProvided(req: any) {
+  const authorization = String(req.headers?.authorization || '').trim();
+  if (/^Bearer\s+/i.test(authorization)) return authorization.replace(/^Bearer\s+/i, '').trim();
+  const url = new URL(req.url || '/', 'https://local.test');
+  return String(req.headers?.['x-cron-secret'] || url.searchParams.get('secret') || '').trim();
+}
+
+function cronRequestAuthorized(req: any) {
+  const expected = String(process.env.CRON_SECRET || '').trim();
+  return Boolean(expected) && cronSecretProvided(req) === expected;
+}
+
+function centralDateParts(date = new Date()) {
+  const parts = new Intl.DateTimeFormat('en-US', {
+    timeZone: 'America/Chicago',
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+    hour: '2-digit',
+    minute: '2-digit',
+    hourCycle: 'h23'
+  }).formatToParts(date);
+  const value = (type: string) => String(parts.find((part) => part.type === type)?.value || '');
+  return {
+    year: Number(value('year')),
+    month: Number(value('month')),
+    day: Number(value('day')),
+    hour: Number(value('hour')),
+    minute: Number(value('minute'))
+  };
+}
+
+function automaticSyncSlot(force = false) {
+  const now = new Date();
+  const local = centralDateParts(now);
+  if (force) {
+    return {
+      key: `manual-${now.toISOString()}`,
+      label: `Manual run ${now.toISOString()}`,
+      forced: true
+    };
+  }
+
+  const scheduledHours = [8, 10, 14, 16];
+  const currentMinutes = local.hour * 60 + local.minute;
+  const eligible = scheduledHours
+    .map((hour) => ({ hour, ageMinutes: currentMinutes - hour * 60 }))
+    .filter((slot) => slot.ageMinutes >= 0 && slot.ageMinutes <= 120)
+    .sort((a, b) => a.ageMinutes - b.ageMinutes);
+  const selected = eligible[0];
+  if (!selected) return null;
+  const dateKey = `${String(local.year).padStart(4, '0')}-${String(local.month).padStart(2, '0')}-${String(local.day).padStart(2, '0')}`;
+  const hourLabel = String(selected.hour).padStart(2, '0');
+  return {
+    key: `${dateKey}-${hourLabel}00-America-Chicago`,
+    label: `${dateKey} ${hourLabel}:00 America/Chicago`,
+    forced: false
+  };
+}
+
+function internalJsonResponse() {
+  let payload: any = null;
+  const response: any = {
+    statusCode: 200,
+    headers: {},
+    setHeader(name: string, value: any) { this.headers[String(name).toLowerCase()] = value; },
+    end(raw: any) {
+      const text = raw == null ? '' : String(raw);
+      try { payload = text ? JSON.parse(text) : {}; }
+      catch { payload = { raw: text }; }
+    }
+  };
+  return { response, getPayload: () => payload || {} };
+}
+
+async function invokeInternalJsonHandler(handler: any, body: any, user: any, url = '/api/index') {
+  const capture = internalJsonResponse();
+  const request: any = { method: 'POST', body, url, headers: {} };
+  await handler(request, capture.response, user);
+  return { statusCode: Number(capture.response.statusCode || 200), payload: capture.getPayload() };
+}
+
+async function automaticMonitoringAndSafetySync(req: any, res: any) {
+  if (!['GET', 'POST'].includes(String(req.method || 'GET').toUpperCase())) {
+    return json(res, 405, { status: 'error', message: 'Method not allowed' });
+  }
+  if (!process.env.CRON_SECRET) {
+    return json(res, 500, { status: 'error', message: 'CRON_SECRET is missing in Vercel environment variables' });
+  }
+  if (!cronRequestAuthorized(req)) {
+    return json(res, 401, { status: 'error', message: 'Unauthorized automatic sync request' });
+  }
+
+  const url = new URL(req.url || '/', 'https://local.test');
+  const force = ['1', 'true', 'yes'].includes(String(url.searchParams.get('force') || '').toLowerCase());
+  const slot = automaticSyncSlot(force);
+  if (!slot) {
+    return json(res, 200, {
+      status: 'skipped',
+      message: 'This invocation is outside the 8:00 AM, 10:00 AM, 2:00 PM, and 4:00 PM Central sync windows.'
+    });
+  }
+
+  const companyId = Math.max(1, Number(url.searchParams.get('companyId') || process.env.AUTO_SYNC_COMPANY_ID || 1));
+  const lockClient = await getPool().connect();
+  let runId: number | null = null;
+
+  try {
+    const lockResult = await lockClient.query("select pg_try_advisory_lock(hashtext('saffhire-monitoring-safety-auto-sync')) as locked");
+    if (!lockResult.rows[0]?.locked) {
+      return json(res, 200, { status: 'skipped', slot: slot.label, message: 'Another automatic sync is already running.' });
+    }
+
+    let claimed: any;
+    try {
+      claimed = await query(
+        `insert into auto_sync_runs (slot_key, scheduled_local_time, company_id, status, attempts, started_at)
+         values ($1,$2,$3,'running',1,now())
+         on conflict (slot_key) do update set
+           status='running', attempts=auto_sync_runs.attempts+1, started_at=now(), completed_at=null, error_message=''
+         where (auto_sync_runs.status in ('failed','partial') and auto_sync_runs.attempts < 3)
+            or (auto_sync_runs.status='running' and auto_sync_runs.started_at < now() - interval '20 minutes')
+         returning id, attempts`,
+        [slot.key, slot.label, companyId]
+      );
+    } catch (error: any) {
+      if (/auto_sync_runs|relation .* does not exist/i.test(errorMessage(error))) {
+        return json(res, 500, { status: 'error', message: 'Run the Phase 12A-139 Supabase SQL migration before enabling automatic sync.' });
+      }
+      throw error;
+    }
+
+    if (!claimed.rows[0]) {
+      return json(res, 200, { status: 'skipped', slot: slot.label, message: 'This scheduled sync slot has already completed or is already running.' });
+    }
+    runId = Number(claimed.rows[0].id);
+
+    const adminUser: any = {
+      id: 0,
+      username: 'scheduled-auto-sync',
+      displayName: 'Scheduled Auto Sync',
+      role: 'admin',
+      companyId,
+      isActive: true
+    };
+
+    const monitoringBatches: any[] = [];
+    let monitoringStartPage = 0;
+    for (let batch = 0; batch < 2; batch++) {
+      const result = await invokeInternalJsonHandler(tazworksSyncRun, {
+        companyId,
+        source: `scheduled-auto-sync-${slot.key}-batch-${batch + 1}`,
+        startPage: monitoringStartPage,
+        maxPages: 4,
+        pageSize: 15,
+        maxOrders: 25,
+        maxMvrChecks: 8,
+        maxRunMs: 8500
+      }, adminUser);
+      monitoringBatches.push(result);
+      if (result.statusCode < 200 || result.statusCode >= 300 || result.payload?.status === 'error' || !result.payload?.hasMore) break;
+      const nextPage = Number(result.payload?.nextStartPage || 0);
+      if (!Number.isFinite(nextPage) || nextPage <= monitoringStartPage) break;
+      monitoringStartPage = nextPage;
+    }
+    const monitoring = {
+      statusCode: monitoringBatches.every((item) => item.statusCode >= 200 && item.statusCode < 300 && item.payload?.status !== 'error') ? 200 : 500,
+      payload: {
+        status: monitoringBatches.every((item) => item.statusCode >= 200 && item.statusCode < 300 && item.payload?.status !== 'error') ? 'ok' : 'error',
+        batches: monitoringBatches.map((item) => item.payload),
+        ordersPulled: monitoringBatches.reduce((sum, item) => sum + Number(item.payload?.ordersPulled || 0), 0),
+        applicantsUpserted: monitoringBatches.reduce((sum, item) => sum + Number(item.payload?.applicantsUpserted || 0), 0),
+        medExpireUpdated: monitoringBatches.reduce((sum, item) => sum + Number(item.payload?.medExpireUpdated || 0), 0),
+        errorsCount: monitoringBatches.reduce((sum, item) => sum + Number(item.payload?.errorsCount || 0), 0),
+        message: monitoringBatches.map((item) => item.payload?.message).filter(Boolean).join(' | ')
+      }
+    };
+
+    const safety = await invokeInternalJsonHandler(safetyReportsLiveDiscover, {
+      companyId,
+      host: String(process.env.TAZWORKS_HOST || '').trim(),
+      clientGuid: String(process.env.TAZWORKS_CLIENT_GUID || '').trim(),
+      minFileNumber: Number(process.env.AUTO_SYNC_SAFETY_MIN_FILE_NUMBER || 6184),
+      startPage: 0,
+      pageSize: 50,
+      maxPages: Number(process.env.AUTO_SYNC_SAFETY_MAX_PAGES || 10),
+      stopAtMinFileNumber: true,
+      onlyCreateMissing: true,
+      maxCandidates: Number(process.env.AUTO_SYNC_SAFETY_MAX_CANDIDATES || 25),
+      maxRunMs: Number(process.env.AUTO_SYNC_SAFETY_BUDGET_MS || 25000)
+    }, adminUser, `/api/index?companyId=${encodeURIComponent(String(companyId))}`);
+
+    const monitoringOk = monitoring.statusCode >= 200 && monitoring.statusCode < 300 && monitoring.payload?.status !== 'error';
+    const safetyOk = safety.statusCode >= 200 && safety.statusCode < 300 && safety.payload?.status !== 'error';
+    const finalStatus = monitoringOk && safetyOk ? 'completed' : (monitoringOk || safetyOk ? 'partial' : 'failed');
+    const failures = [
+      monitoringOk ? '' : `Monitoring: ${monitoring.payload?.message || `HTTP ${monitoring.statusCode}`}`,
+      safetyOk ? '' : `Safety: ${safety.payload?.message || `HTTP ${safety.statusCode}`}`
+    ].filter(Boolean).join(' | ');
+
+    await query(
+      `update auto_sync_runs set status=$1, completed_at=now(), monitoring_summary=$2::jsonb, safety_summary=$3::jsonb, error_message=$4 where id=$5`,
+      [finalStatus, JSON.stringify(monitoring), JSON.stringify(safety), failures, runId]
+    );
+
+    const responsePayload = {
+      status: finalStatus,
+      slot: slot.label,
+      companyId,
+      monitoring: monitoring.payload,
+      safety: safety.payload,
+      message: finalStatus === 'completed'
+        ? 'Automatic Monitoring and Safety Report sync completed.'
+        : `Automatic sync finished with problems. ${failures}`
+    };
+    return json(res, finalStatus === 'completed' ? 200 : 500, responsePayload);
+  } catch (error: any) {
+    const message = errorMessage(error);
+    if (runId) {
+      await query(
+        `update auto_sync_runs set status='failed', completed_at=now(), error_message=$1 where id=$2`,
+        [message.slice(0, 4000), runId]
+      ).catch(() => {});
+    }
+    return json(res, 500, { status: 'error', slot: slot.label, message: `Automatic sync failed: ${message}` });
+  } finally {
+    try { await lockClient.query("select pg_advisory_unlock(hashtext('saffhire-monitoring-safety-auto-sync'))"); } catch {}
+    lockClient.release();
+  }
+}
+// PHASE12A139_AUTOMATIC_MONITORING_AND_SAFETY_SYNC END
+
 // PHASE12A65_SUPABASE_KEEPALIVE START
 async function keepalive(req: any, res: any) {
-  const url = new URL(req.url || '/', 'https://local.test');
-  const providedSecret = String(url.searchParams.get('secret') || req.headers['x-cron-secret'] || '').trim();
   const expectedSecret = String(process.env.CRON_SECRET || '').trim();
 
   if (!expectedSecret) {
@@ -4951,7 +5222,7 @@ async function keepalive(req: any, res: any) {
     });
   }
 
-  if (providedSecret !== expectedSecret) {
+  if (!cronRequestAuthorized(req)) {
     return json(res, 401, {
       status: 'error',
       message: 'Unauthorized keepalive request'
@@ -4971,6 +5242,7 @@ async function keepalive(req: any, res: any) {
 export default async function handler(req: any, res: any) {
   const route = getRoute(req);
   if (route === 'keepalive') return keepalive(req, res);
+  if (route === 'auto-sync') return automaticMonitoringAndSafetySync(req, res);
   if (route === 'safety-response') { try { return await safetyResponsePublic(req, res); } catch (error: any) { return json(res, 500, { status: 'error', message: errorMessage(error) || 'Could not load safety response form' }); } }
   try {
     const clientAuthResult = await clientAuth(req, res, route);
