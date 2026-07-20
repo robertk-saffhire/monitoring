@@ -1,1 +1,50 @@
+name: SaffHire Monitoring Auto Sync
 
+on:
+  schedule:
+    - cron: '0 8,10,14,16 * * *'
+      timezone: 'America/Chicago'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: saffhire-monitoring-auto-sync
+  cancel-in-progress: false
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Run Monitoring and Safety sync
+        env:
+          AUTO_SYNC_URL: ${{ secrets.AUTO_SYNC_URL }}
+          CRON_SECRET: ${{ secrets.CRON_SECRET }}
+          EVENT_NAME: ${{ github.event_name }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [ -z "${AUTO_SYNC_URL:-}" ]; then
+            echo "Missing GitHub Actions secret: AUTO_SYNC_URL" >&2
+            exit 1
+          fi
+          if [ -z "${CRON_SECRET:-}" ]; then
+            echo "Missing GitHub Actions secret: CRON_SECRET" >&2
+            exit 1
+          fi
+
+          EXTRA_QUERY=""
+          if [ "${EVENT_NAME}" = "workflow_dispatch" ]; then
+            EXTRA_QUERY="&force=1"
+          fi
+
+          curl --fail-with-body \
+            --retry 2 \
+            --retry-all-errors \
+            --connect-timeout 15 \
+            --max-time 120 \
+            -X POST \
+            -H "Authorization: Bearer ${CRON_SECRET}" \
+            "${AUTO_SYNC_URL%/}/api/index?path=auto-sync${EXTRA_QUERY}"
