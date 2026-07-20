@@ -1,4 +1,4 @@
-# Phase 12A-137 — Sortable Client Monitoring Headers
+# Phase 12A-138 — Clickable Client Monitoring Cards
 
 Upload this file to the same path in `robertk-saffhire/monitoring`:
 
@@ -6,34 +6,33 @@ Upload this file to the same path in `robertk-saffhire/monitoring`:
 
 ## What changed
 
-On the client portal Monitoring page, every data header is now sortable:
+The total cards at the top of the client Monitoring page are now clickable detail filters:
 
-- File #
-- Name
-- Order Date
-- Monitoring
-- Order MVR
-- Med Expire
-- Notes
-- Terminated, when the user has Terminated Records access
+- Total Monitoring — shows all records available to that client user.
+- On Monitoring — shows records with Monitoring On.
+- Off Monitoring — shows records with Monitoring Off.
+- Med Cert Expired — shows On Monitoring records with a medical certificate date before today.
+- Med Cert 30 Days — shows On Monitoring records expiring today through the next 30 days.
+- Terminated — shows terminated records when that user has Terminated Records access.
 
-The Save header remains non-sortable.
+Additional behavior:
 
-Click a header once for ascending order and again for descending order. The active header shows an up or down arrow. Inactive sortable headers show a neutral two-way arrow.
+- The selected card is highlighted in green.
+- Clicking a card clears the search box so the full detail count is shown.
+- The dropdown changes to the matching filter and includes the two medical-certificate filters.
+- Existing column sorting remains active.
+- Automatic data refreshes preserve the selected card/filter.
+- Card changes are blocked while a Monitoring row has unsaved edits, preventing data loss.
 
-The dedicated Terminated page uses the same sortable table behavior.
+## Database / Supabase
 
-Sorting is performed from the client portal data and remains selected after refreshes and automatic data updates. If a row has unsaved changes, sorting is blocked with a message so typed notes or status changes are not accidentally discarded.
-
-## SQL migration
-
-No.
+No SQL migration is required.
 
 ## Vercel environment variables
 
-No changes.
+No ENV changes are required.
 
 ## Validation
 
-- The JavaScript extracted from `public/client-portal.html` passed `node --check`.
-- The build starts from the current Phase 12A-135 client portal file on GitHub main.
+- Started from the current GitHub `main` Phase 12A-137 client portal file.
+- The extracted client portal JavaScript passed `node --check`.
