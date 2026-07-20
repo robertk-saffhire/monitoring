@@ -757,6 +757,176 @@ async function clientApplicantUpdate(req: any, res: any, user: any) {
 }
 
 
+// PHASE12A135_CLIENT_ORDER_MVR: secure client-side MVR order request workflow.
+function mvrOrderRequestedStatus(value: any) {
+  return String(value || '').trim().toLowerCase() === 'order requested';
+}
+
+function mvrOrderRequestSubject(applicantName: string, fileNumber: string) {
+  const namePart = applicantName ? ` - ${applicantName}` : '';
+  const filePart = fileNumber ? ` - File #${fileNumber}` : '';
+  return `MVR Order Requested${namePart}${filePart}`.slice(0, 180);
+}
+
+function mvrOrderRequestBody(params: { companyName: string; applicantName: string; fileNumber: string; previousMvrStatus: string; user: any; }) {
+  const requestedBy = params.user?.displayName || params.user?.username || 'Unknown user';
+  const when = new Date().toLocaleString('en-US', { timeZone: 'America/Chicago' });
+  return [
+    'A client requested an MVR from the SaffHire Monitoring portal.',
+    '',
+    `Company: ${params.companyName || 'Unknown'}`,
+    `Applicant: ${params.applicantName || 'Unknown'}`,
+    `File #: ${params.fileNumber || 'N/A'}`,
+    `Previous MVR Status: ${params.previousMvrStatus || 'N/A'}`,
+    `Requested By: ${requestedBy}`,
+    `Requested At: ${when} Central`,
+    '',
+    'The Monitoring record now shows MVR Status: Order Requested in the SaffHire master admin.',
+    'This is an automatic SaffHire Monitoring notification.'
+  ].join('\n');
+}
+
+async function sendMvrOrderRequestNotifications(companyId: number, applicant: any, user: any) {
+  const recipients = await monitoringNotificationRecipients();
+  if (!recipients.length) {
+    return { attempted: false, sent: 0, failed: 0, message: 'No active notification emails are configured.' };
+  }
+
+  const company = await query('select name from companies where id=$1 limit 1', [companyId]).catch(() => ({ rows: [] } as any));
+  const companyName = String(company.rows?.[0]?.name || '').trim();
+  const applicantName = String(applicant?.applicantName || applicant?.name || '').trim();
+  const fileNumber = String(applicant?.fileNumber || '').trim();
+  const previousMvrStatus = String(applicant?.previousMvrStatus || applicant?.mvrStatus || '').trim();
+  const subject = mvrOrderRequestSubject(applicantName, fileNumber);
+  const body = mvrOrderRequestBody({ companyName, applicantName, fileNumber, previousMvrStatus, user });
+
+  let sent = 0;
+  let failed = 0;
+  const errors: string[] = [];
+  for (const recipient of recipients) {
+    try {
+      await sendMonitoringNotificationEmail(recipient, subject, body);
+      sent += 1;
+    } catch (error: any) {
+      failed += 1;
+      errors.push(`${recipient}: ${errorMessage(error)}`);
+      console.error('MVR order request notification failed', recipient, error);
+    }
+  }
+  return { attempted: true, sent, failed, message: errors.slice(0, 3).join(' | ') };
+}
+
+async function clientOrderMvr(req: any, res: any, user: any) {
+  if (req.method !== 'POST') return json(res, 405, { status: 'error', message: 'Method not allowed' });
+  if (!canViewClientMonitoring(user)) return json(res, 403, { status: 'error', message: 'This client account does not have Monitoring access' });
+  if (!canEditClientMonitoring(user)) return json(res, 403, { status: 'error', message: 'This client account does not have permission to order an MVR' });
+  if (!requireCompanyScope(user, res)) return;
+
+  const companyId = requestedCompanyId(req, user);
+  const body = await readBody(req);
+  const applicantId = Number(body.applicantId || body.id || 0);
+  if (!applicantId) return json(res, 400, { status: 'error', message: 'Applicant id is required' });
+
+  const db = await getPool().connect();
+  let applicant: any = null;
+  let requestRow: any = null;
+  let alreadyRequested = false;
+  try {
+    await db.query('begin');
+    const current = await db.query(
+      'select id, "companyId", "fileNumber", "applicantName", "mvrStatus", "terminated" from applicants where id=$1 and "companyId"=$2 for update',
+      [applicantId, companyId]
+    );
+    applicant = current.rows[0] || null;
+    if (!applicant) {
+      await db.query('rollback');
+      return json(res, 404, { status: 'error', message: 'Monitoring record not found for this client' });
+    }
+    if (Boolean(applicant.terminated)) {
+      await db.query('rollback');
+      return json(res, 400, { status: 'error', message: 'An MVR cannot be ordered for a terminated applicant' });
+    }
+
+    if (mvrOrderRequestedStatus(applicant.mvrStatus)) {
+      alreadyRequested = true;
+      await db.query('commit');
+    } else {
+      // If an older request was fulfilled by a later TazWorks sync, close it before logging a new request.
+      await db.query(
+        `update mvr_order_requests
+         set status='completed', "completedAt"=coalesce("completedAt",now()), "updatedAt"=now()
+         where "companyId"=$1 and "applicantId"=$2 and status in ('requested','processing')`,
+        [companyId, applicantId]
+      );
+
+      const inserted = await db.query(
+        `insert into mvr_order_requests (
+          "companyId", "applicantId", "fileNumber", "applicantName", "previousMvrStatus",
+          status, "requestedByUserId", "requestedBy"
+        ) values ($1,$2,$3,$4,$5,'requested',$6,$7)
+        returning id, "companyId", "applicantId", "fileNumber", "applicantName", status, "requestedBy", "requestedAt"`,
+        [
+          companyId,
+          applicantId,
+          String(applicant.fileNumber || '').trim(),
+          String(applicant.applicantName || '').trim(),
+          String(applicant.mvrStatus || '').trim(),
+          Number(user.id || 0) || null,
+          String(user.displayName || user.username || '').trim()
+        ]
+      );
+      requestRow = inserted.rows[0] || null;
+
+      const updated = await db.query(
+        `update applicants
+         set "mvrStatus"='Order Requested', "updatedAt"=now()
+         where id=$1 and "companyId"=$2
+         returning id, "fileNumber", "applicantName" as name, "orderDate", "monitorStatus", "mvrStatus", "medExpire", "terminated", notes`,
+        [applicantId, companyId]
+      );
+      applicant = { ...applicant, ...(updated.rows[0] || {}), previousMvrStatus: String(applicant.mvrStatus || '').trim() };
+      await db.query('commit');
+    }
+  } catch (error: any) {
+    await db.query('rollback').catch(() => {});
+    const message = errorMessage(error);
+    if (/mvr_order_requests|relation .* does not exist|column .* does not exist/i.test(message)) {
+      return json(res, 500, { status: 'error', message: 'Run the Phase 12A-135 Supabase SQL migration, then try Order MVR again.' });
+    }
+    throw error;
+  } finally {
+    db.release();
+  }
+
+  if (alreadyRequested) {
+    return json(res, 200, {
+      status: 'ok',
+      alreadyRequested: true,
+      applicant: { ...applicant, name: applicant?.name || applicant?.applicantName || '' },
+      notification: { attempted: false, sent: 0, failed: 0, message: 'MVR order is already pending.' }
+    });
+  }
+
+  const notification = await sendMvrOrderRequestNotifications(companyId, applicant, user)
+    .catch((error) => ({ attempted: true, sent: 0, failed: 1, message: errorMessage(error) }));
+
+  if (requestRow?.id) {
+    await query(
+      `update mvr_order_requests
+       set "notificationStatus"=$1, "notificationMessage"=$2, "updatedAt"=now()
+       where id=$3 and "companyId"=$4`,
+      [
+        notification.attempted ? (Number(notification.failed || 0) > 0 ? 'failed' : 'sent') : 'skipped',
+        String(notification.message || '').slice(0, 2000),
+        requestRow.id,
+        companyId
+      ]
+    ).catch((error) => console.error('Could not update MVR request notification status', error));
+  }
+
+  return json(res, 200, { status: 'ok', alreadyRequested: false, request: requestRow, applicant, notification });
+}
+
 // PHASE12A39_CLIENT_MONITORING_LIMIT: client dashboard returns up to 1000 monitoring records to match admin scale.
 async function clientDashboard(req: any, res: any, user: any) {
   if (req.method !== 'GET') return json(res, 405, { status: 'error', message: 'Method not allowed' });
@@ -4829,6 +4999,7 @@ export default async function handler(req: any, res: any) {
     if (route === 'tazworks-sync/clear') return tazworksSyncClear(req, res, user);
     if (route === 'tazworks-mvr-test') return tazworksMvrTest(req, res, user);
     if (route === 'client-applicant') return clientApplicantUpdate(req, res, user);
+    if (route === 'client-order-mvr') return clientOrderMvr(req, res, user);
     if (route === 'client-dashboard') return clientDashboard(req, res, user);
     if (route === 'client-users') return clientUsers(req, res, user);
     if (route === 'client-safety-pdf') return clientSafetyPdf(req, res, user);
