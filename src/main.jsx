@@ -45,10 +45,14 @@ function canAccessSafetyAdmin(user) {
   if (user?.role === 'admin' || user?.role === 'viewer') return true;
   return user?.role === 'user' && normalizedInternalAccess(user).safetyReports;
 }
+function canManageEmailSettings(user) {
+  return user?.role === 'admin' || (user?.role === 'user' && normalizedInternalAccess(user).safetyReports);
+}
 function allowedInternalPages(user) {
   const pages = ['dashboard'];
   if (canAccessMonitoringAdmin(user)) pages.push('monitoring');
   if (canAccessSafetyAdmin(user)) pages.push('safety');
+  if (canManageEmailSettings(user)) pages.push('email-settings');
   if (user?.role === 'admin') pages.push('settings');
   return pages;
 }
@@ -370,6 +374,7 @@ function Layout({ user, children, page, setPage, onLogout }) {
     ['dashboard', 'Dashboard', Activity, true],
     ['monitoring', 'Monitoring', ClipboardCheck, canAccessMonitoringAdmin(user)],
     ['safety', 'Safety Performance', Truck, canAccessSafetyAdmin(user)],
+    ['email-settings', 'Email Settings', Mail, canManageEmailSettings(user)],
     ['settings', 'Settings', Settings, user?.role === 'admin'],
   ].filter(([, , , allowed]) => allowed);
   return (
@@ -377,7 +382,7 @@ function Layout({ user, children, page, setPage, onLogout }) {
       <aside className="sidebar">
         <img src={LOGO} alt="SaffHire" className="side-logo" />
         <div className="side-title">Monitoring</div>
-        <nav>{nav.map(([key, label, Icon]) => <button key={key} className={page === key ? 'nav-btn active' : 'nav-btn'} onClick={() => setPage(key)}><Icon size={18} /> {label}</button>)}</nav>
+        <nav>{nav.map(([key, label, Icon]) => <button key={key} data-native-page={key} className={page === key ? 'nav-btn active' : 'nav-btn'} onClick={() => setPage(key)}><Icon size={18} /> {label}</button>)}</nav>
         <div className="side-footer"><div className="user-pill"><UserCog size={16} /> {user?.displayName || user?.username}</div><button className="nav-btn" onClick={onLogout}><LogOut size={18} /> Logout</button></div>
       </aside>
       <main className="main-panel">{children}</main>
@@ -1301,6 +1306,141 @@ function Field({ label, children }) {
   return <label className="field"><span>{label}</span>{children}</label>;
 }
 
+
+function EmailSettingsPage({ company, companyId }) {
+  const emptyTemplate = { name: '', subject: '', body: '', isActive: true };
+  const [templates, setTemplates] = useState([]);
+  const [draft, setDraft] = useState(emptyTemplate);
+  const [loading, setLoading] = useState(true);
+  const [saving, setSaving] = useState(false);
+  const [message, setMessage] = useState('');
+  const [error, setError] = useState('');
+
+  function endpoint() {
+    return `/api/email-templates?type=fax&companyId=${encodeURIComponent(companyId || 1)}`;
+  }
+
+  function notify(text, isError = false) {
+    if (isError) {
+      setError(text);
+      setMessage('');
+    } else {
+      setMessage(text);
+      setError('');
+    }
+    window.setTimeout(() => {
+      setMessage('');
+      setError('');
+    }, 5000);
+  }
+
+  async function loadTemplates() {
+    setLoading(true);
+    try {
+      const data = await api(endpoint());
+      setTemplates(data.templates || []);
+      setError('');
+    } catch (err) {
+      setError(err.message || 'Could not load email templates.');
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  useEffect(() => {
+    loadTemplates();
+  }, [companyId]);
+
+  async function createTemplate(event) {
+    event.preventDefault();
+    if (!draft.name.trim() || !draft.subject.trim() || !draft.body.trim()) {
+      notify('Template name, subject, and body are required.', true);
+      return;
+    }
+    setSaving(true);
+    try {
+      const data = await api(endpoint(), {
+        method: 'POST',
+        body: JSON.stringify({ ...draft, type: 'fax' }),
+      });
+      setTemplates((rows) => [...rows, data.template].sort((a, b) => String(a.name || '').localeCompare(String(b.name || ''))));
+      setDraft(emptyTemplate);
+      notify('Email template created.');
+    } catch (err) {
+      notify(err.message || 'Could not create email template.', true);
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  function updateLocalTemplate(id, patch) {
+    setTemplates((rows) => rows.map((row) => Number(row.id) === Number(id) ? { ...row, ...patch } : row));
+  }
+
+  async function saveTemplate(template) {
+    if (!String(template.name || '').trim() || !String(template.subject || '').trim() || !String(template.body || '').trim()) {
+      notify('Template name, subject, and body are required.', true);
+      return;
+    }
+    try {
+      const data = await api(endpoint(), {
+        method: 'PATCH',
+        body: JSON.stringify({ ...template, type: 'fax' }),
+      });
+      updateLocalTemplate(template.id, data.template || template);
+      notify('Email template saved.');
+    } catch (err) {
+      notify(err.message || 'Could not save email template.', true);
+    }
+  }
+
+  async function deleteTemplate(template) {
+    if (!window.confirm(`Delete email template "${template.name || 'Untitled'}"?`)) return;
+    try {
+      await api(`${endpoint()}&id=${encodeURIComponent(template.id)}`, { method: 'DELETE' });
+      setTemplates((rows) => rows.filter((row) => Number(row.id) !== Number(template.id)));
+      notify('Email template deleted.');
+    } catch (err) {
+      notify(err.message || 'Could not delete email template.', true);
+    }
+  }
+
+  return (
+    <>
+      <Header title="Email Settings" subtitle={`${company?.name || 'Active company'} · Safety Performance email and fax templates`} action={loadTemplates} />
+      {message ? <div className="success-box">{message}</div> : null}
+      {error ? <div className="error-box">{error}</div> : null}
+      <section className="card wide-card settings-card">
+        <h2><Mail size={19} /> Create Email Template</h2>
+        <p className="muted">Templates can use: <b>{'{{applicantName}}'}</b>, <b>{'{{fileNumber}}'}</b>, <b>{'{{previousEmployer}}'}</b>, <b>{'{{recipientName}}'}</b>, <b>{'{{faxNumber}}'}</b>, and <b>{'{{today}}'}</b>.</p>
+        <form onSubmit={createTemplate}>
+          <div className="form-grid two">
+            <Field label="Template Name"><input value={draft.name} onChange={(event) => setDraft({ ...draft, name: event.target.value })} placeholder="Example: FMCSA Fax Cover" /></Field>
+            <Field label="Subject"><input value={draft.subject} onChange={(event) => setDraft({ ...draft, subject: event.target.value })} placeholder="FMCSA report - {{applicantName}}" /></Field>
+          </div>
+          <Field label="Email Body"><textarea rows={7} value={draft.body} onChange={(event) => setDraft({ ...draft, body: event.target.value })} placeholder="Please see the attached FMCSA report for {{applicantName}}." /></Field>
+          <label className="check-row"><input type="checkbox" checked={draft.isActive !== false} onChange={(event) => setDraft({ ...draft, isActive: event.target.checked })} /> Active template</label>
+          <button className="primary-inline" disabled={saving}><Plus size={16} /> {saving ? 'Creating...' : 'Create Template'}</button>
+        </form>
+      </section>
+      <section className="card wide-card settings-card">
+        <h2><Mail size={19} /> Saved Email Templates</h2>
+        {loading ? <p className="muted">Loading templates...</p> : null}
+        {!loading && !templates.length ? <p className="muted">No email templates have been created for this company.</p> : null}
+        {!loading && templates.length ? <div className="table-card mini-table"><table><thead><tr><th>Name</th><th>Subject</th><th>Body</th><th>Active</th><th>Actions</th></tr></thead><tbody>{templates.map((template) => (
+          <tr key={template.id}>
+            <td><input value={template.name || ''} onChange={(event) => updateLocalTemplate(template.id, { name: event.target.value })} /></td>
+            <td><input value={template.subject || ''} onChange={(event) => updateLocalTemplate(template.id, { subject: event.target.value })} /></td>
+            <td><textarea rows={5} value={template.body || ''} onChange={(event) => updateLocalTemplate(template.id, { body: event.target.value })} /></td>
+            <td><select value={template.isActive === false ? 'false' : 'true'} onChange={(event) => updateLocalTemplate(template.id, { isActive: event.target.value === 'true' })}><option value="true">Active</option><option value="false">Inactive</option></select></td>
+            <td><div className="row-actions"><button type="button" className="icon-btn" title="Save template" onClick={() => saveTemplate(template)}><Save size={15} /></button><button type="button" className="icon-btn danger" title="Delete template" onClick={() => deleteTemplate(template)}><Trash2 size={15} /></button></div></td>
+          </tr>
+        ))}</tbody></table></div> : null}
+      </section>
+    </>
+  );
+}
+
 function App() {
   const [user, setUser] = useState(null);
   const [checking, setChecking] = useState(true);
@@ -1355,7 +1495,7 @@ function App() {
   if (!user) return <Login onAuth={setUser} />;
   if (isClientPortalAccount(user)) return <div className="center-screen"><div className="login-card"><h1>Opening Client Portal...</h1><p>Please wait.</p></div></div>;
 
-  return <Layout user={user} page={page} setPage={(nextPage) => { if (!allowedPages.includes(nextPage)) return; setPage(nextPage); if (nextPage === 'dashboard') clearDashboardFilter(); }} onLogout={logout}>{companies.length > 1 ? <div className="company-switcher"><span>Active company</span><select value={companyId} onChange={(e) => setCompanyId(Number(e.target.value))}>{companies.map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}</select></div> : null}{page === 'dashboard' && <Dashboard company={company} applicants={applicants} reports={reports} refresh={loadData} openCard={openDashboardCard} showMonitoring={canMonitoring} showSafety={canSafety} />}{page === 'monitoring' && canMonitoring && <Monitoring company={company} applicants={applicants} setApplicants={setApplicants} refresh={loadData} dashboardFilter={dashboardFilter} clearDashboardFilter={clearDashboardFilter} />}{page === 'safety' && canSafety && <Safety company={company} reports={reports} setReports={setReports} refresh={loadData} companyId={companyId} dashboardFilter={dashboardFilter} clearDashboardFilter={clearDashboardFilter} />}{page === 'settings' && user?.role === 'admin' && <SettingsManager user={user} company={company} companies={companies} setCompanies={setCompanies} companyId={companyId} refresh={loadData} setApplicants={setApplicants} />}</Layout>;
+  return <Layout user={user} page={page} setPage={(nextPage) => { if (!allowedPages.includes(nextPage)) return; setPage(nextPage); if (nextPage === 'dashboard') clearDashboardFilter(); }} onLogout={logout}>{companies.length > 1 ? <div className="company-switcher"><span>Active company</span><select value={companyId} onChange={(e) => setCompanyId(Number(e.target.value))}>{companies.map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}</select></div> : null}{page === 'dashboard' && <Dashboard company={company} applicants={applicants} reports={reports} refresh={loadData} openCard={openDashboardCard} showMonitoring={canMonitoring} showSafety={canSafety} />}{page === 'monitoring' && canMonitoring && <Monitoring company={company} applicants={applicants} setApplicants={setApplicants} refresh={loadData} dashboardFilter={dashboardFilter} clearDashboardFilter={clearDashboardFilter} />}{page === 'safety' && canSafety && <Safety company={company} reports={reports} setReports={setReports} refresh={loadData} companyId={companyId} dashboardFilter={dashboardFilter} clearDashboardFilter={clearDashboardFilter} />}{page === 'email-settings' && canManageEmailSettings(user) && <EmailSettingsPage company={company} companyId={companyId} />}{page === 'settings' && user?.role === 'admin' && <SettingsManager user={user} company={company} companies={companies} setCompanies={setCompanies} companyId={companyId} refresh={loadData} setApplicants={setApplicants} />}</Layout>;
 }
 
 createRoot(document.getElementById('root')).render(<App />);
