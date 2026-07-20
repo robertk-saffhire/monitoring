@@ -1,32 +1,23 @@
-# Phase 12A-140 — SaffHire User Report Admin Rights
+# Phase 12A-141 — Remove Client Controls from SaffHire User Sidebar
 
-Upload these files to `robertk-saffhire/monitoring`:
+Upload:
 
-- `api/index.ts`
-- `src/main.jsx`
-- `src/SettingsPage.jsx`
-- `public/phase9.js`
 - `public/phase9b-role-sync.js`
-- `supabase/migrations/20260720_phase12a140_saffhire_report_admin_access.sql`
 
-Run the SQL migration before deploying the application files.
+## What changed
 
-## Result
-
-When an Admin creates or edits a role **SaffHire User**, the Admin selects:
-
-- Monitoring Reports
-- Safety Performance Reports
-- or both
-
-The SaffHire User receives full administrative rights inside every assigned report area, including create, edit, delete, sync, PDF, email, notes, status, and workflow actions. Unassigned report pages are removed from the sidebar and blocked by the API.
-
-The main Admin account always retains full system access. Client permissions remain separate and unchanged. Existing SaffHire Users retain access to both report areas until the Admin edits their access.
+- SaffHire Users no longer see the legacy CLIENT section.
+- Removes Client View and Client Admin for all non-admin internal accounts.
+- Removes Invoices for all non-admin internal accounts.
+- Safety-only SaffHire Users no longer see Terminated or Monitoring On/Off.
+- A SaffHire User assigned Monitoring keeps the Monitoring administrative tools.
+- Main SaffHire Admin retains the existing client-management controls.
+- A MutationObserver removes controls immediately if an older script attempts to recreate them.
 
 ## SQL
 
-Required: Yes.
+No migration required.
 
-## Vercel environment variables
+## Vercel ENV
 
-No changes.
+No changes required.
