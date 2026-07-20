@@ -1,23 +1,28 @@
-# Phase 12A-141 — Remove Client Controls from SaffHire User Sidebar
+# Phase 12A-142 — Native Email Settings Navigation Fix
 
-Upload:
+Upload these files to the same paths in `robertk-saffhire/monitoring`:
 
-- `public/phase9b-role-sync.js`
+- `src/main.jsx`
+- `index.html`
+- `public/phase12a142-native-email-settings.js`
 
 ## What changed
 
-- SaffHire Users no longer see the legacy CLIENT section.
-- Removes Client View and Client Admin for all non-admin internal accounts.
-- Removes Invoices for all non-admin internal accounts.
-- Safety-only SaffHire Users no longer see Terminated or Monitoring On/Off.
-- A SaffHire User assigned Monitoring keeps the Monitoring administrative tools.
-- Main SaffHire Admin retains the existing client-management controls.
-- A MutationObserver removes controls immediately if an older script attempts to recreate them.
+- Rebuilt Email Settings as a native React page.
+- Added Email Settings directly to the React sidebar for the main Admin and SaffHire Users assigned Safety Performance Reports.
+- Dashboard, Safety Performance, and Email Settings now change through the same React page state.
+- Added a guard that removes the older Phase 12A-80 Email Settings button before it can replace the React main panel.
+- If a cached legacy button is clicked before removal, the click is redirected to the native Email Settings page.
+- Existing email templates, template fields, active/inactive setting, save, create, and delete actions remain available.
 
-## SQL
+## Expected result
 
-No migration required.
+A Safety Admin can open Email Settings, then click Dashboard or Safety Performance without a white screen or page refresh.
 
-## Vercel ENV
+## SQL migration
 
-No changes required.
+No.
+
+## Vercel environment variables
+
+No changes.
