@@ -1113,12 +1113,12 @@
     const automatic = opts.automatic === true;
     const savedHost = localStorage.getItem('phase12a71-taz-host') || '';
     const savedClientGuid = localStorage.getItem('phase12a71-client-guid') || '';
-    let host = savedHost;
-    let clientGuid = savedClientGuid;
+    let host = automatic ? '' : savedHost;
+    let clientGuid = automatic ? '' : savedClientGuid;
     let minFileNumber = Number(opts.minFileNumber || 6184) || 6184;
     let maxPages = Number(opts.maxPages || 100) || 100;
 
-    if (!host) {
+    if (!host && !automatic) {
       const enteredHost = window.prompt('TazWorks host is needed for the live Safety Performance refresh. Paste only the host from Postman, or paste the full URL and I will clean it up.', savedHost);
       if (enteredHost === null) return;
       host = normalizeHostInput(enteredHost);
@@ -1152,14 +1152,14 @@
       maxPages = Number(maxPagesRaw || maxPages) || maxPages;
     }
 
-    toast(`Refreshing live Safety Performance reports from TazWorks. Looking for file numbers greater than ${minFileNumber}...`);
+    toast(`Refreshing Safety Performance reports from the secure server connection. Looking for file numbers greater than ${minFileNumber}...`);
 
     const result = await apiWithFallback('safety-reports/live-discover', {
       method: 'POST',
       body: JSON.stringify({
         companyId: getCompanyId(),
-        host: String(host || '').trim(),
-        clientGuid: String(clientGuid || '').trim(),
+        host: automatic ? '' : String(host || '').trim(),
+        clientGuid: automatic ? '' : String(clientGuid || '').trim(),
         minFileNumber,
         pageSize: 50,
         maxPages,
