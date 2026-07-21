@@ -4026,6 +4026,29 @@ function safetyExtractLivePayload(search: any) {
   return extracted;
 }
 
+function safetyExtractPendingPayload(search: any, order: any) {
+  const orderSearchGuid = safetyCleanText(searchGuidFrom(search, order?.orderGuid || '') || '');
+  const applicantName = safetyCleanText(order?.applicantName || search?.subject?.fullName || search?.subjectName || '');
+  const previousEmployer = safetyCleanText(search?.displayValue || search?.value || search?.employerName || '');
+  return {
+    applicantName,
+    prevEmployerName: previousEmployer,
+    prevEmployerEmail: '',
+    prevEmployerStreet: '',
+    prevEmployerPhone: '',
+    prevEmployerCityStateZip: '',
+    jobTitle: '',
+    fromDate: '',
+    orderSearchGuid,
+    searchDisplayName: safetyCleanText(search?.displayName || search?.searchName || search?.name || 'Safety Performance and DOT Verification'),
+    searchDisplayValue: previousEmployer,
+    verificationResponse: 'Results pending',
+    employerType: '',
+    supervisor: '',
+    pendingResults: true
+  };
+}
+
 function safetyNormalizeHost(value: any) {
   return safetyCleanText(value)
     .replace(/^https?:\/\//i, '')
@@ -4065,7 +4088,7 @@ async function safetyPullSearchResultPayload(orderGuid: string, searchGuid: stri
   const encodedSearch = encodeURIComponent(searchGuid);
   const encodedClient = encodeURIComponent(clientGuid);
   const normalizedHost = safetyNormalizeHost(host);
-  const resultTypes: Array<string | null> = quick ? ['EDITOR', null] : ['EDITOR', null, 'CLIENT', 'HTML', 'RAW', 'JSON', 'FULL'];
+  const resultTypes: Array<string | null> = ['EDITOR', null, 'CLIENT', 'HTML', 'RAW', 'JSON', 'FULL'];
   const basePaths = [
     `/tazworks/clients/${encodedClient}/orders/${encodedOrder}/searches/${encodedSearch}/results`,
     `/tazworks/v1/clients/${encodedClient}/orders/${encodedOrder}/searches/${encodedSearch}/results`,
@@ -4152,7 +4175,7 @@ async function safetyReportsLivePull(req: any, res: any, user: any) {
   const companyId = requestedCompanyId(req, user);
   const reportId = Number(body.reportId || body.id || 0);
   const fileNumber = safetyCleanText(body.fileNumber || body.referenceId || '');
-  const host = safetyCleanText(body.host || body.tazworksHost || '');
+  const host = safetyNormalizeHost(body.host || body.tazworksHost || process.env.TAZWORKS_HOST || '');
   const clientGuid = safetyCleanText(body.clientGuid || body.tazworksClientGuid || process.env.TAZWORKS_CLIENT_GUID || '');
   let orderGuid = safetyCleanText(body.orderGuid || body.tazworksOrderGuid || '');
 
@@ -4249,12 +4272,12 @@ async function safetyReportsLivePull(req: any, res: any, user: any) {
          "tazworksOrderGuid"=$11,
          "tazworksOrderSearchGuid"=$12,
          "lastLiveSafetySyncAt"=now(),
-         "lastLiveSafetySyncStatus"='updated',
+         "lastLiveSafetySyncStatus"=case when $15 then 'pending_results' else 'updated' end,
          "lastLiveSafetySyncMessage"=$13,
          "liveSafetyRaw"=$14::jsonb,
          notes=case when position($13 in coalesce(notes,'')) > 0 then notes else trim(both E'\n' from concat(coalesce(notes,''), E'\n', $13::text)) end,
          "updatedAt"=now()
-     where id=$15 and "companyId"=$16
+     where id=$16 and "companyId"=$17
      returning *`,
     [
       extracted.applicantName,
@@ -4295,6 +4318,14 @@ function safetyNumericFileNumber(value: any) {
 }
 
 function safetyBuildLiveMessage(extracted: any) {
+  if (extracted?.pendingResults) {
+    const pendingParts = [
+      extracted.searchDisplayName || 'Safety Performance and DOT Verification',
+      extracted.searchDisplayValue ? `Previous Employer: ${extracted.searchDisplayValue}` : '',
+      'Results pending from TazWorks'
+    ].filter(Boolean);
+    return `Safety Performance Order: ${pendingParts.join(' | ')}`;
+  }
   const liveNoteParts = [
     extracted.searchDisplayName || 'Safety Performance and DOT Verification',
     extracted.verificationResponse ? `Verification Response: ${extracted.verificationResponse}` : '',
@@ -4332,12 +4363,12 @@ async function safetyUpdateExistingReportFromLive(reportId: number, companyId: n
          "tazworksOrderGuid"=$11,
          "tazworksOrderSearchGuid"=$12,
          "lastLiveSafetySyncAt"=now(),
-         "lastLiveSafetySyncStatus"='updated',
+         "lastLiveSafetySyncStatus"=case when $15 then 'pending_results' else 'updated' end,
          "lastLiveSafetySyncMessage"=$13,
          "liveSafetyRaw"=$14::jsonb,
          notes=case when position($13 in coalesce(notes,'')) > 0 then notes else trim(both E'\n' from concat(coalesce(notes,''), E'\n', $13::text)) end,
          "updatedAt"=now()
-     where id=$15 and "companyId"=$16
+     where id=$16 and "companyId"=$17
      returning *`,
     [
       extracted.applicantName,
@@ -4354,6 +4385,7 @@ async function safetyUpdateExistingReportFromLive(reportId: number, companyId: n
       extracted.orderSearchGuid,
       liveMessage,
       JSON.stringify(safetySearch || {}),
+      Boolean(extracted?.pendingResults),
       reportId,
       companyId
     ]
@@ -4437,7 +4469,7 @@ async function safetyReportsLiveDiscover(req: any, res: any, user: any) {
 
   const body = await readBody(req);
   const companyId = requestedCompanyId(req, user);
-  const host = safetyNormalizeHost(body.host || body.tazworksHost || '');
+  const host = safetyNormalizeHost(body.host || body.tazworksHost || process.env.TAZWORKS_HOST || '');
   const clientGuid = safetyCleanText(body.clientGuid || body.tazworksClientGuid || process.env.TAZWORKS_CLIENT_GUID || '');
   const minFileNumber = Number(body.minFileNumber || 6184);
   const pageSize = Math.max(10, Math.min(50, Number(body.pageSize || 50)));
@@ -4445,6 +4477,8 @@ async function safetyReportsLiveDiscover(req: any, res: any, user: any) {
   const startPage = Math.max(0, Math.min(500, Number(body.startPage || 0)));
   const stopAtMinFileNumber = body.stopAtMinFileNumber !== false;
   const onlyCreateMissing = body.onlyCreateMissing === true;
+  const updateExisting = body.updateExisting === true || !onlyCreateMissing;
+  const maxExistingUpdates = Math.max(0, Math.min(100, Number(body.maxExistingUpdates ?? (updateExisting ? 20 : 0))));
   const maxCandidates = Math.max(1, Math.min(200, Number(body.maxCandidates || (onlyCreateMissing ? 25 : 200))));
   const maxRunMs = Math.max(5000, Math.min(45000, Number(body.maxRunMs || (onlyCreateMissing ? 30000 : 45000))));
   const deadlineMs = Date.now() + maxRunMs;
@@ -4460,6 +4494,8 @@ async function safetyReportsLiveDiscover(req: any, res: any, user: any) {
     maxCandidates,
     maxRunMs,
     onlyCreateMissing,
+    updateExisting,
+    maxExistingUpdates,
     pagesChecked: 0,
     ordersPulled: 0,
     candidatesGreaterThanMin: 0,
@@ -4473,6 +4509,8 @@ async function safetyReportsLiveDiscover(req: any, res: any, user: any) {
     skippedNoOrderGuid: 0,
     skippedNoFileNumber: 0,
     skippedExisting: 0,
+    existingProcessed: 0,
+    pendingResults: 0,
     candidatesProcessed: 0,
     stoppedEarly: false,
     reachedEnd: false,
@@ -4526,15 +4564,14 @@ async function safetyReportsLiveDiscover(req: any, res: any, user: any) {
       summary.candidatesGreaterThanMin++;
       await safetyCacheTazOrder(companyId, order);
 
-      if (onlyCreateMissing) {
-        const existingReport = await query(
-          'select id from safety_reports where "companyId"=$1 and trim("fileNumber"::text)=trim($2) limit 1',
-          [companyId, fileNumber]
-        );
-        if (existingReport.rows[0]) {
-          summary.skippedExisting++;
-          continue;
-        }
+      const existingReport = await query(
+        'select id from safety_reports where "companyId"=$1 and trim("fileNumber"::text)=trim($2) limit 1',
+        [companyId, fileNumber]
+      );
+      const reportExists = Boolean(existingReport.rows[0]);
+      if (reportExists && (!updateExisting || summary.existingProcessed >= maxExistingUpdates)) {
+        summary.skippedExisting++;
+        continue;
       }
 
       if (summary.candidatesProcessed >= maxCandidates || shouldStopSoon()) {
@@ -4542,6 +4579,7 @@ async function safetyReportsLiveDiscover(req: any, res: any, user: any) {
         break;
       }
       summary.candidatesProcessed++;
+      if (reportExists) summary.existingProcessed++;
 
       try {
         const pulled = await safetyAllSearchResults(orderGuid, clientGuid, host);
@@ -4551,10 +4589,11 @@ async function safetyReportsLiveDiscover(req: any, res: any, user: any) {
           continue;
         }
 
-        const extracted = safetyExtractLivePayload(safetySearch);
+        let extracted = safetyExtractLivePayload(safetySearch);
         if (!extracted) {
           summary.noRecords++;
-          continue;
+          summary.pendingResults++;
+          extracted = safetyExtractPendingPayload(safetySearch, order);
         }
 
         const result = await safetyCreateOrUpdateReportFromLive(companyId, host, clientGuid, orderGuid, order, safetySearch, extracted);
@@ -4588,8 +4627,9 @@ async function safetyReportsLiveDiscover(req: any, res: any, user: any) {
   const stopMessage = summary.stoppedAtMinFileNumber ? ` Stopped when the remaining page was at/below file ${summary.stoppedAtFileNumber || minFileNumber}.` : '';
   const errorMessagePart = summary.errors.length ? ` First error: ${summary.errors[0]}` : '';
   const earlyMessage = summary.stoppedEarly ? ` Stopped safely after ${summary.candidatesProcessed} candidate(s); another scheduled run will continue checking recent orders.` : '';
-  const existingMessage = onlyCreateMissing ? ` Existing reports skipped: ${summary.skippedExisting}.` : '';
-  const message = `Safety refresh completed. Created ${summary.created} new report(s), updated ${summary.updated}, no Safety Performance search on ${summary.noSafetySearch}.${existingMessage}${stopMessage}${earlyMessage}${errorMessagePart}`;
+  const existingMessage = ` Existing reports refreshed: ${summary.updated}; skipped by limit: ${summary.skippedExisting}.`;
+  const pendingMessage = summary.pendingResults ? ` Reports created/updated while TazWorks results are pending: ${summary.pendingResults}.` : '';
+  const message = `Safety refresh completed. Created ${summary.created} new report(s), updated ${summary.updated}, no Safety Performance search on ${summary.noSafetySearch}.${pendingMessage}${existingMessage}${stopMessage}${earlyMessage}${errorMessagePart}`;
   return json(res, 200, { status: 'ok', message, summary });
 }
 // PHASE12A72_AUTO_CREATE_NEW_SAFETY_REPORTS END
@@ -5212,8 +5252,10 @@ async function automaticMonitoringAndSafetySync(req: any, res: any) {
       maxPages: Number(process.env.AUTO_SYNC_SAFETY_MAX_PAGES || 10),
       stopAtMinFileNumber: true,
       onlyCreateMissing: true,
-      maxCandidates: Number(process.env.AUTO_SYNC_SAFETY_MAX_CANDIDATES || 25),
-      maxRunMs: Number(process.env.AUTO_SYNC_SAFETY_BUDGET_MS || 25000)
+      updateExisting: true,
+      maxExistingUpdates: Number(process.env.AUTO_SYNC_SAFETY_MAX_EXISTING_UPDATES || 8),
+      maxCandidates: Number(process.env.AUTO_SYNC_SAFETY_MAX_CANDIDATES || 40),
+      maxRunMs: Number(process.env.AUTO_SYNC_SAFETY_BUDGET_MS || 30000)
     }, adminUser, `/api/index?companyId=${encodeURIComponent(String(companyId))}`);
 
     const monitoringOk = monitoring.statusCode >= 200 && monitoring.statusCode < 300 && monitoring.payload?.status !== 'error';
