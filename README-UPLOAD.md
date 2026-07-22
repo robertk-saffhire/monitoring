@@ -1,17 +1,10 @@
-# Phase 12A-143 — Safety Performance Sync Stabilization
+# Phase 12A-144 — Clickable Client Dashboard Cards
 
 Upload only:
 
-- `api/index.ts`
-- `public/phase6.js`
+- `public/client-portal.html`
 
 No SQL migration is required.
-No new Vercel environment variables are required.
+No Vercel environment-variable changes are required.
 
-The deployment must retain the existing TazWorks variables:
-
-- `TAZWORKS_PROXY_BASE_URL`
-- `TAZWORKS_PROXY_SECRET`
-- `TAZWORKS_CLIENT_GUID`
-
-`TAZWORKS_HOST` is optional. When present it is used server-side; the browser no longer asks users to enter it.
+After deployment, hard refresh the client portal once.
