@@ -4,7 +4,7 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width,initial-scale=1.0" />
   <title>SaffHire Client Portal</title>
-  <!-- Phase 12A-144: Clickable client Dashboard cards with Monitoring and Safety filters -->
+  <!-- Phase 12A-145: Permanent Recent Safety PDF download handlers -->
   <style>
     :root{--g:#1fff00;--ink:#0f172a;--muted:#64748b;--line:#dbe3ef;--bg:#f8fafc;--good:#166534;--bad:#991b1b;--warn:#92400e}
     *{box-sizing:border-box}body{margin:0;font-family:system-ui,-apple-system,Segoe UI,sans-serif;background:var(--bg);color:var(--ink)}
@@ -661,11 +661,25 @@
     bindHeaderButtons();
     document.getElementById('safety-search')?.addEventListener('input', event => { state.filters.safetySearch = event.target.value; renderSafety(); });
     document.getElementById('safety-filter')?.addEventListener('change', event => { state.filters.safetyStatus = event.target.value; renderSafety(); });
-    app.querySelectorAll('[data-action="download-pdf"]').forEach(button => button.addEventListener('click', () => downloadSafetyPdf(button.dataset.id)));
   }
   function downloadSafetyPdf(id) {
     if (!id) return toast('Safety report id is missing.', true);
-    window.open(endpoint('client-safety-pdf?id=' + encodeURIComponent(id)), '_blank', 'noopener');
+    const url = endpoint('client-safety-pdf?id=' + encodeURIComponent(id));
+    const opened = window.open(url, '_blank');
+    if (opened) opened.opener = null;
+    else toast('Your browser blocked the PDF window. Allow pop-ups for this site and try again.', true);
+  }
+
+  function bindPermanentSafetyPdfDownloads() {
+    if (app.dataset.safetyPdfDelegation === '1') return;
+    app.dataset.safetyPdfDelegation = '1';
+    app.addEventListener('click', event => {
+      const button = event.target?.closest?.('[data-action="download-pdf"]');
+      if (!button || !app.contains(button)) return;
+      event.preventDefault();
+      event.stopPropagation();
+      downloadSafetyPdf(button.dataset.id);
+    });
   }
 
   async function renderUsers() {
@@ -774,6 +788,8 @@
       state.monitoringChannel.addEventListener('message', () => queueAutomaticRefresh(true));
     } catch {}
   }
+
+  bindPermanentSafetyPdfDownloads();
 
   document.querySelectorAll('nav button[data-page]').forEach(button => {
     button.addEventListener('click', () => {
